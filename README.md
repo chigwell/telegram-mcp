@@ -116,6 +116,16 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **unarchive_chat(chat_id)**: Unarchive a chat
 - **get_recent_actions(chat_id)**: Get recent admin actions
 
+### Input Validation
+
+To improve robustness, all functions accepting `chat_id` or `user_id` parameters now include input validation. You can use any of the following formats for these IDs:
+
+-   **Integer ID**: The direct integer ID for a user, chat, or channel (e.g., `123456789` or `-1001234567890`).
+-   **String ID**: The integer ID provided as a string (e.g., `"123456789"`).
+-   **Username**: The public username for a user or channel (e.g., `"@username"` or `"username"`).
+
+The server will automatically validate the input and convert it to the correct format before making a request to Telegram. If the input is invalid, a clear error message will be returned.
+
 ## Removed Functionality
 
 Please note that tools requiring direct file path access on the server (`send_file`, `download_media`, `set_profile_photo`, `edit_chat_photo`, `send_voice`, `send_sticker`, `upload_file`) have been removed from `main.py`. This is due to limitations in the current MCP environment regarding handling file attachments and local file system paths.
