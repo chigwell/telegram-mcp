@@ -14,6 +14,7 @@ from typing import List, Dict, Optional, Union, Any
 import nest_asyncio
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from pythonjsonlogger import jsonlogger
 from telethon import TelegramClient, functions, utils
 from telethon.sessions import StringSession
 from telethon.tl.types import (
@@ -78,12 +79,19 @@ try:
     file_handler = logging.FileHandler(log_file_path, mode="a")  # Append mode
     file_handler.setLevel(logging.ERROR)
 
-    # Create formatter and add to handlers
-    formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s - %(message)s - %(filename)s:%(lineno)d"
+    # Create formatters
+    # Console formatter remains in the old format
+    console_formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
     )
-    console_handler.setFormatter(formatter)
-    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(console_formatter)
+
+    # File formatter is now JSON
+    json_formatter = jsonlogger.JsonFormatter(
+        "%(asctime)s %(name)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
+    )
+    file_handler.setFormatter(json_formatter)
 
     # Add handlers to logger
     logger.addHandler(console_handler)
@@ -140,17 +148,23 @@ def log_and_format_error(
                 break
 
     prefix_str = prefix.value if prefix else "GEN"
-
     error_code = f"{prefix_str}-ERR-{abs(hash(function_name)) % 1000:03d}"
 
-    # Format the additional context parameters
-    context = ", ".join(f"{k}={v}" for k, v in kwargs.items())
-
-    # Log the full technical error
-    logger.exception(f"{function_name} failed ({context}): {error}")
+    # Log the structured error
+    log_context = {
+        "function_name": function_name,
+        "error_code": error_code,
+        "error_message": str(error),
+        "parameters": kwargs,
+    }
+    logger.error(
+        f"Error in {function_name}",
+        extra=log_context,
+        exc_info=(type(error), error, error.__traceback__),
+    )
 
     # Return a user-friendly message
-    return f"An error occurred (code: {error_code}). " f"Check mcp_errors.log for details."
+    return f"An error occurred (code: {error_code}). Check mcp_errors.log for details."
 
 
 def format_entity(entity) -> Dict[str, Any]:
