@@ -56,6 +56,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **export_chat_invite(chat_id)**: Export invite link
 - **import_chat_invite(hash)**: Join chat by invite hash
 - **join_chat_by_link(link)**: Join chat by invite link
+- **subscribe_public_channel(channel)**: Subscribe to a public channel or supergroup by username or ID
 
 ### Messaging
 - **get_messages(chat_id, page, page_size)**: Paginated messages
@@ -74,6 +75,8 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **get_pinned_messages(chat_id)**: List pinned messages
 - **get_last_interaction(contact_id)**: Most recent message with a contact
 - **create_poll(chat_id, question, options, multiple_choice, quiz_mode, public_votes, close_date)**: Create a poll
+- **list_inline_buttons(chat_id, message_id, limit)**: Inspect inline keyboards to discover button text/index
+- **press_inline_button(chat_id, message_id, button_text, button_index)**: Trigger inline keyboard callbacks by label or index
 
 ### Contact Management
 - **list_contacts()**: List all contacts
@@ -312,6 +315,76 @@ Example output:
 ```
 Message sent successfully.
 ```
+
+### Listing Inline Buttons
+
+```python
+@mcp.tool()
+async def list_inline_buttons(
+    chat_id: Union[int, str],
+    message_id: Optional[int] = None,
+    limit: int = 20,
+) -> str:
+    """
+    Discover inline keyboard layout, including button indices, callback availability, and URLs.
+    """
+```
+
+Example usage:
+```
+list_inline_buttons(chat_id="@sample_tasks_bot")
+```
+
+This returns something like:
+```
+Buttons for message 42 (date 2025-01-01 12:00:00+00:00):
+[0] text='📋 View tasks', callback=yes
+[1] text='ℹ️ Help', callback=yes
+[2] text='🌐 Visit site', callback=no, url=https://example.org
+```
+
+### Pressing Inline Buttons
+
+```python
+@mcp.tool()
+async def press_inline_button(
+    chat_id: Union[int, str],
+    message_id: Optional[int] = None,
+    button_text: Optional[str] = None,
+    button_index: Optional[int] = None,
+) -> str:
+    """
+    Press an inline keyboard button by label or zero-based index.
+    If message_id is omitted, the server searches recent messages for the latest inline keyboard.
+    """
+```
+
+Example usage:
+```
+press_inline_button(chat_id="@sample_tasks_bot", button_text="📋 View tasks")
+```
+
+Use `list_inline_buttons` first if you need to inspect available buttons—pass a bogus `button_text`
+to quickly list options or call `list_inline_buttons` directly. Once you know the text or index,
+`press_inline_button` sends the callback, just like tapping the button in a native Telegram client.
+
+### Subscribing to Public Channels
+
+```python
+@mcp.tool()
+async def subscribe_public_channel(channel: Union[int, str]) -> str:
+    """
+    Join a public channel or supergroup by username (e.g., "@examplechannel") or ID.
+    """
+```
+
+Example usage:
+```
+subscribe_public_channel(channel="@daily_updates_feed")
+```
+
+If the account is already a participant, the tool reports that instead of failing, making it safe to
+run repeatedly in workflows that need idempotent joins.
 
 ### Getting Chat Invite Links
 

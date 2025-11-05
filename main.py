@@ -392,6 +392,205 @@ async def send_message(chat_id: Union[int, str], message: str) -> str:
 
 
 @mcp.tool()
+@validate_id("channel")
+async def subscribe_public_channel(channel: Union[int, str]) -> str:
+    """
+    Subscribe (join) to a public channel or supergroup by username or ID.
+    """
+    try:
+        entity = await client.get_entity(channel)
+        await client(functions.channels.JoinChannelRequest(channel=entity))
+        title = getattr(entity, "title", getattr(entity, "username", "Unknown channel"))
+        return f"Subscribed to {title}."
+    except telethon.errors.rpcerrorlist.UserAlreadyParticipantError:
+        title = getattr(entity, "title", getattr(entity, "username", "this channel"))
+        return f"Already subscribed to {title}."
+    except telethon.errors.rpcerrorlist.ChannelPrivateError:
+        return "Cannot subscribe: this channel is private or requires an invite link."
+    except Exception as e:
+        return log_and_format_error("subscribe_public_channel", e, channel=channel)
+
+
+@mcp.tool()
+@validate_id("chat_id")
+async def list_inline_buttons(
+    chat_id: Union[int, str], message_id: Optional[Union[int, str]] = None, limit: int = 20
+) -> str:
+    """
+    Inspect inline buttons on a recent message to discover their indices/text/URLs.
+    """
+    try:
+        if isinstance(message_id, str):
+            if message_id.isdigit():
+                message_id = int(message_id)
+            else:
+                return "message_id must be an integer."
+
+        entity = await client.get_entity(chat_id)
+        target_message = None
+
+        if message_id is not None:
+            target_message = await client.get_messages(entity, ids=message_id)
+            if isinstance(target_message, list):
+                target_message = target_message[0] if target_message else None
+        else:
+            recent_messages = await client.get_messages(entity, limit=limit)
+            target_message = next(
+                (msg for msg in recent_messages if getattr(msg, "buttons", None)), None
+            )
+
+        if not target_message:
+            return "No message with inline buttons found."
+
+        buttons_attr = getattr(target_message, "buttons", None)
+        if not buttons_attr:
+            return f"Message {target_message.id} does not contain inline buttons."
+
+        buttons = [btn for row in buttons_attr for btn in row]
+        if not buttons:
+            return f"Message {target_message.id} does not contain inline buttons."
+
+        lines = [
+            f"Buttons for message {target_message.id} (date {target_message.date}):",
+        ]
+        for idx, btn in enumerate(buttons):
+            raw_button = getattr(btn, "button", None)
+            text = getattr(btn, "text", "") or "<no text>"
+            url = getattr(raw_button, "url", None) if raw_button else None
+            has_callback = bool(getattr(btn, "data", None))
+            parts = [f"[{idx}] text='{text}'"]
+            parts.append("callback=yes" if has_callback else "callback=no")
+            if url:
+                parts.append(f"url={url}")
+            lines.append(", ".join(parts))
+
+        return "\n".join(lines)
+    except Exception as e:
+        return log_and_format_error(
+            "list_inline_buttons",
+            e,
+            chat_id=chat_id,
+            message_id=message_id,
+            limit=limit,
+        )
+
+
+@mcp.tool()
+@validate_id("chat_id")
+async def press_inline_button(
+    chat_id: Union[int, str],
+    message_id: Optional[Union[int, str]] = None,
+    button_text: Optional[str] = None,
+    button_index: Optional[int] = None,
+) -> str:
+    """
+    Press an inline button (callback) in a chat message.
+
+    Args:
+        chat_id: Chat or bot where the inline keyboard exists.
+        message_id: Specific message ID to inspect. If omitted, searches recent messages for one containing buttons.
+        button_text: Exact text of the button to press (case-insensitive).
+        button_index: Zero-based index among all buttons if you prefer positional access.
+    """
+    try:
+        if button_text is None and button_index is None:
+            return "Provide button_text or button_index to choose a button."
+
+        # Normalize message_id if provided as a string
+        if isinstance(message_id, str):
+            if message_id.isdigit():
+                message_id = int(message_id)
+            else:
+                return "message_id must be an integer."
+
+        if isinstance(button_index, str):
+            if button_index.isdigit():
+                button_index = int(button_index)
+            else:
+                return "button_index must be an integer."
+
+        entity = await client.get_entity(chat_id)
+
+        target_message = None
+        if message_id is not None:
+            target_message = await client.get_messages(entity, ids=message_id)
+            if isinstance(target_message, list):
+                target_message = target_message[0] if target_message else None
+        else:
+            recent_messages = await client.get_messages(entity, limit=20)
+            target_message = next(
+                (msg for msg in recent_messages if getattr(msg, "buttons", None)), None
+            )
+
+        if not target_message:
+            return "No message with inline buttons found. Specify message_id to target a specific message."
+
+        buttons_attr = getattr(target_message, "buttons", None)
+        if not buttons_attr:
+            return f"Message {target_message.id} does not contain inline buttons."
+
+        buttons = [btn for row in buttons_attr for btn in row]
+        if not buttons:
+            return f"Message {target_message.id} does not contain inline buttons."
+
+        target_button = None
+        if button_text:
+            normalized = button_text.strip().lower()
+            target_button = next(
+                (
+                    btn
+                    for btn in buttons
+                    if (getattr(btn, "text", "") or "").strip().lower() == normalized
+                ),
+                None,
+            )
+
+        if target_button is None and button_index is not None:
+            if button_index < 0 or button_index >= len(buttons):
+                return f"button_index out of range. Valid indices: 0-{len(buttons) - 1}."
+            target_button = buttons[button_index]
+
+        if not target_button:
+            available = ", ".join(
+                f"[{idx}] {getattr(btn, 'text', '') or '<no text>'}"
+                for idx, btn in enumerate(buttons)
+            )
+            return f"Button not found. Available buttons: {available}"
+
+        if not getattr(target_button, "data", None):
+            raw_button = getattr(target_button, "button", None)
+            url = getattr(raw_button, "url", None) if raw_button else None
+            if url:
+                return f"Selected button opens a URL instead of sending a callback: {url}"
+            return "Selected button does not provide callback data to press."
+
+        callback_result = await client(
+            functions.messages.GetBotCallbackAnswerRequest(
+                peer=entity, msg_id=target_message.id, data=target_button.data
+            )
+        )
+
+        response_parts = []
+        if getattr(callback_result, "message", None):
+            response_parts.append(callback_result.message)
+        if getattr(callback_result, "alert", None):
+            response_parts.append("Telegram displayed an alert to the user.")
+        if not response_parts:
+            response_parts.append("Button pressed successfully.")
+
+        return " ".join(response_parts)
+    except Exception as e:
+        return log_and_format_error(
+            "press_inline_button",
+            e,
+            chat_id=chat_id,
+            message_id=message_id,
+            button_text=button_text,
+            button_index=button_index,
+        )
+
+
+@mcp.tool()
 async def list_contacts() -> str:
     """
     List all contacts in your Telegram account.
