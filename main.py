@@ -523,9 +523,7 @@ async def press_inline_button(
             )
 
         if not target_message:
-            return (
-                "No message with inline buttons found. Specify message_id to target a specific message."
-            )
+            return "No message with inline buttons found. Specify message_id to target a specific message."
 
         buttons_attr = getattr(target_message, "buttons", None)
         if not buttons_attr:
