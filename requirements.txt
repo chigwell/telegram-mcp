@@ -3,4 +3,5 @@ httpx>=0.28.1
 mcp[cli]>=1.4.1
 nest-asyncio>=1.6.0
 python-dotenv>=1.1.0
+python-json-logger>=3.3.0
 telethon>=1.39.0 

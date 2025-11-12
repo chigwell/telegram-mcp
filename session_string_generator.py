@@ -12,6 +12,11 @@ Usage:
 Requirements:
     - telethon
     - python-dotenv
+
+Note on ID Formats:
+When using the MCP server, please be aware that all `chat_id` and `user_id`
+parameters support integer IDs, string representations of IDs (e.g., "123456"),
+and usernames (e.g., "@mychannel").
 """
 
 import os

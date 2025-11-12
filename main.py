@@ -14,6 +14,7 @@ from typing import List, Dict, Optional, Union, Any
 import nest_asyncio
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from pythonjsonlogger import jsonlogger
 from telethon import TelegramClient, functions, utils
 from telethon.sessions import StringSession
 from telethon.tl.types import (
@@ -31,7 +32,15 @@ from telethon.tl.types import (
     InputPeerChat,
     InputPeerChannel,
 )
+import re
+from functools import wraps
 import telethon.errors.rpcerrorlist
+
+
+class ValidationError(Exception):
+    """Custom exception for validation errors."""
+
+    pass
 
 
 def json_serializer(obj):
@@ -78,17 +87,21 @@ try:
     file_handler = logging.FileHandler(log_file_path, mode="a")  # Append mode
     file_handler.setLevel(logging.ERROR)
 
-    # Create formatter and add to handlers
-    formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s - %(message)s - %(filename)s:%(lineno)d"
+    # Create formatters
+    # Console formatter remains in the old format
+    console_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+    console_handler.setFormatter(console_formatter)
+
+    # File formatter is now JSON
+    json_formatter = jsonlogger.JsonFormatter(
+        "%(asctime)s %(name)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
-    console_handler.setFormatter(formatter)
-    file_handler.setFormatter(formatter)
+    file_handler.setFormatter(json_formatter)
 
     # Add handlers to logger
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
-
     logger.info(f"Logging initialized to {log_file_path}")
 except Exception as log_error:
     print(f"WARNING: Error setting up log file: {log_error}")
@@ -96,9 +109,8 @@ except Exception as log_error:
     logger.addHandler(console_handler)
     logger.error(f"Failed to set up log file handler: {log_error}")
 
+
 # Error code prefix mapping for better error tracing
-
-
 class ErrorCategory(str, Enum):
     CHAT = "CHAT"
     MSG = "MSG"
@@ -113,7 +125,8 @@ class ErrorCategory(str, Enum):
 def log_and_format_error(
     function_name: str,
     error: Exception,
-    prefix: Optional[ErrorCategory] = None,
+    prefix: Optional[Union[ErrorCategory, str]] = None,
+    user_message: str = None,
     **kwargs,
 ) -> str:
     """
@@ -124,33 +137,124 @@ def log_and_format_error(
     Args:
         function_name: Name of the function where the error occurred.
         error: The exception that was raised.
-        prefix: Error code prefix (e.g., "CHAT", "MSG").
+        prefix: Error code prefix (e.g., ErrorCategory.CHAT, "VALIDATION-001").
             If None, it will be derived from the function_name.
+        user_message: A custom user-facing message to return. If None, a generic one is created.
         **kwargs: Additional context parameters to include in the log.
 
     Returns:
         A user-friendly error message with an error code.
     """
     # Generate a consistent error code
-    if prefix is None:
-        # Try to derive prefix from function name
-        for category in ErrorCategory:
-            if category.name.lower() in function_name.lower():
-                prefix = category
-                break
+    if isinstance(prefix, str) and prefix == "VALIDATION-001":
+        # Special case for validation errors
+        error_code = prefix
+    else:
+        if prefix is None:
+            # Try to derive prefix from function name
+            for category in ErrorCategory:
+                if category.name.lower() in function_name.lower():
+                    prefix = category
+                    break
 
-    prefix_str = prefix.value if prefix else "GEN"
-
-    error_code = f"{prefix_str}-ERR-{abs(hash(function_name)) % 1000:03d}"
+        prefix_str = prefix.value if isinstance(prefix, ErrorCategory) else (prefix or "GEN")
+        error_code = f"{prefix_str}-ERR-{abs(hash(function_name)) % 1000:03d}"
 
     # Format the additional context parameters
     context = ", ".join(f"{k}={v}" for k, v in kwargs.items())
 
     # Log the full technical error
-    logger.exception(f"{function_name} failed ({context}): {error}")
+    logger.error(f"Error in {function_name} ({context}) - Code: {error_code}", exc_info=True)
 
     # Return a user-friendly message
-    return f"An error occurred (code: {error_code}). " f"Check mcp_errors.log for details."
+    if user_message:
+        return user_message
+
+    return f"An error occurred (code: {error_code}). Check mcp_errors.log for details."
+
+
+def validate_id(*param_names_to_validate):
+    """
+    Decorator to validate chat_id and user_id parameters, including lists of IDs.
+    It checks for valid integer ranges, string representations of integers,
+    and username formats.
+    """
+
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            for param_name in param_names_to_validate:
+                if param_name not in kwargs or kwargs[param_name] is None:
+                    continue
+
+                param_value = kwargs[param_name]
+
+                def validate_single_id(value, p_name):
+                    # Handle integer IDs
+                    if isinstance(value, int):
+                        if not (-(2**63) <= value <= 2**63 - 1):
+                            return (
+                                None,
+                                f"Invalid {p_name}: {value}. ID is out of the valid integer range.",
+                            )
+                        return value, None
+
+                    # Handle string IDs
+                    if isinstance(value, str):
+                        try:
+                            int_value = int(value)
+                            if not (-(2**63) <= int_value <= 2**63 - 1):
+                                return (
+                                    None,
+                                    f"Invalid {p_name}: {value}. ID is out of the valid integer range.",
+                                )
+                            return int_value, None
+                        except ValueError:
+                            if re.match(r"^@?[a-zA-Z0-9_]{5,}$", value):
+                                return value, None
+                            else:
+                                return (
+                                    None,
+                                    f"Invalid {p_name}: '{value}'. Must be a valid integer ID, or a username string.",
+                                )
+
+                    # Handle other invalid types
+                    return (
+                        None,
+                        f"Invalid {p_name}: {value}. Type must be an integer or a string.",
+                    )
+
+                if isinstance(param_value, list):
+                    validated_list = []
+                    for item in param_value:
+                        validated_item, error_msg = validate_single_id(item, param_name)
+                        if error_msg:
+                            return log_and_format_error(
+                                func.__name__,
+                                ValidationError(error_msg),
+                                prefix="VALIDATION-001",
+                                user_message=error_msg,
+                                **{param_name: param_value},
+                            )
+                        validated_list.append(validated_item)
+                    kwargs[param_name] = validated_list
+                else:
+                    validated_value, error_msg = validate_single_id(param_value, param_name)
+                    if error_msg:
+                        return log_and_format_error(
+                            func.__name__,
+                            ValidationError(error_msg),
+                            prefix="VALIDATION-001",
+                            user_message=error_msg,
+                            **{param_name: param_value},
+                        )
+                    kwargs[param_name] = validated_value
+
+            return await func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def format_entity(entity) -> Dict[str, Any]:
@@ -239,11 +343,12 @@ async def get_chats(page: int = 1, page_size: int = 20) -> str:
 
 
 @mcp.tool()
-async def get_messages(chat_id: int, page: int = 1, page_size: int = 20) -> str:
+@validate_id("chat_id")
+async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int = 20) -> str:
     """
     Get paginated messages from a specific chat.
     Args:
-        chat_id: The ID of the chat.
+        chat_id: The ID or username of the chat.
         page: Page number (1-indexed).
         page_size: Number of messages per page.
     """
@@ -270,11 +375,12 @@ async def get_messages(chat_id: int, page: int = 1, page_size: int = 20) -> str:
 
 
 @mcp.tool()
-async def send_message(chat_id: int, message: str) -> str:
+@validate_id("chat_id")
+async def send_message(chat_id: Union[int, str], message: str) -> str:
     """
     Send a message to a specific chat.
     Args:
-        chat_id: The ID of the chat.
+        chat_id: The ID or username of the chat.
         message: The message content to send.
     """
     try:
@@ -283,6 +389,205 @@ async def send_message(chat_id: int, message: str) -> str:
         return "Message sent successfully."
     except Exception as e:
         return log_and_format_error("send_message", e, chat_id=chat_id)
+
+
+@mcp.tool()
+@validate_id("channel")
+async def subscribe_public_channel(channel: Union[int, str]) -> str:
+    """
+    Subscribe (join) to a public channel or supergroup by username or ID.
+    """
+    try:
+        entity = await client.get_entity(channel)
+        await client(functions.channels.JoinChannelRequest(channel=entity))
+        title = getattr(entity, "title", getattr(entity, "username", "Unknown channel"))
+        return f"Subscribed to {title}."
+    except telethon.errors.rpcerrorlist.UserAlreadyParticipantError:
+        title = getattr(entity, "title", getattr(entity, "username", "this channel"))
+        return f"Already subscribed to {title}."
+    except telethon.errors.rpcerrorlist.ChannelPrivateError:
+        return "Cannot subscribe: this channel is private or requires an invite link."
+    except Exception as e:
+        return log_and_format_error("subscribe_public_channel", e, channel=channel)
+
+
+@mcp.tool()
+@validate_id("chat_id")
+async def list_inline_buttons(
+    chat_id: Union[int, str], message_id: Optional[Union[int, str]] = None, limit: int = 20
+) -> str:
+    """
+    Inspect inline buttons on a recent message to discover their indices/text/URLs.
+    """
+    try:
+        if isinstance(message_id, str):
+            if message_id.isdigit():
+                message_id = int(message_id)
+            else:
+                return "message_id must be an integer."
+
+        entity = await client.get_entity(chat_id)
+        target_message = None
+
+        if message_id is not None:
+            target_message = await client.get_messages(entity, ids=message_id)
+            if isinstance(target_message, list):
+                target_message = target_message[0] if target_message else None
+        else:
+            recent_messages = await client.get_messages(entity, limit=limit)
+            target_message = next(
+                (msg for msg in recent_messages if getattr(msg, "buttons", None)), None
+            )
+
+        if not target_message:
+            return "No message with inline buttons found."
+
+        buttons_attr = getattr(target_message, "buttons", None)
+        if not buttons_attr:
+            return f"Message {target_message.id} does not contain inline buttons."
+
+        buttons = [btn for row in buttons_attr for btn in row]
+        if not buttons:
+            return f"Message {target_message.id} does not contain inline buttons."
+
+        lines = [
+            f"Buttons for message {target_message.id} (date {target_message.date}):",
+        ]
+        for idx, btn in enumerate(buttons):
+            raw_button = getattr(btn, "button", None)
+            text = getattr(btn, "text", "") or "<no text>"
+            url = getattr(raw_button, "url", None) if raw_button else None
+            has_callback = bool(getattr(btn, "data", None))
+            parts = [f"[{idx}] text='{text}'"]
+            parts.append("callback=yes" if has_callback else "callback=no")
+            if url:
+                parts.append(f"url={url}")
+            lines.append(", ".join(parts))
+
+        return "\n".join(lines)
+    except Exception as e:
+        return log_and_format_error(
+            "list_inline_buttons",
+            e,
+            chat_id=chat_id,
+            message_id=message_id,
+            limit=limit,
+        )
+
+
+@mcp.tool()
+@validate_id("chat_id")
+async def press_inline_button(
+    chat_id: Union[int, str],
+    message_id: Optional[Union[int, str]] = None,
+    button_text: Optional[str] = None,
+    button_index: Optional[int] = None,
+) -> str:
+    """
+    Press an inline button (callback) in a chat message.
+
+    Args:
+        chat_id: Chat or bot where the inline keyboard exists.
+        message_id: Specific message ID to inspect. If omitted, searches recent messages for one containing buttons.
+        button_text: Exact text of the button to press (case-insensitive).
+        button_index: Zero-based index among all buttons if you prefer positional access.
+    """
+    try:
+        if button_text is None and button_index is None:
+            return "Provide button_text or button_index to choose a button."
+
+        # Normalize message_id if provided as a string
+        if isinstance(message_id, str):
+            if message_id.isdigit():
+                message_id = int(message_id)
+            else:
+                return "message_id must be an integer."
+
+        if isinstance(button_index, str):
+            if button_index.isdigit():
+                button_index = int(button_index)
+            else:
+                return "button_index must be an integer."
+
+        entity = await client.get_entity(chat_id)
+
+        target_message = None
+        if message_id is not None:
+            target_message = await client.get_messages(entity, ids=message_id)
+            if isinstance(target_message, list):
+                target_message = target_message[0] if target_message else None
+        else:
+            recent_messages = await client.get_messages(entity, limit=20)
+            target_message = next(
+                (msg for msg in recent_messages if getattr(msg, "buttons", None)), None
+            )
+
+        if not target_message:
+            return "No message with inline buttons found. Specify message_id to target a specific message."
+
+        buttons_attr = getattr(target_message, "buttons", None)
+        if not buttons_attr:
+            return f"Message {target_message.id} does not contain inline buttons."
+
+        buttons = [btn for row in buttons_attr for btn in row]
+        if not buttons:
+            return f"Message {target_message.id} does not contain inline buttons."
+
+        target_button = None
+        if button_text:
+            normalized = button_text.strip().lower()
+            target_button = next(
+                (
+                    btn
+                    for btn in buttons
+                    if (getattr(btn, "text", "") or "").strip().lower() == normalized
+                ),
+                None,
+            )
+
+        if target_button is None and button_index is not None:
+            if button_index < 0 or button_index >= len(buttons):
+                return f"button_index out of range. Valid indices: 0-{len(buttons) - 1}."
+            target_button = buttons[button_index]
+
+        if not target_button:
+            available = ", ".join(
+                f"[{idx}] {getattr(btn, 'text', '') or '<no text>'}"
+                for idx, btn in enumerate(buttons)
+            )
+            return f"Button not found. Available buttons: {available}"
+
+        if not getattr(target_button, "data", None):
+            raw_button = getattr(target_button, "button", None)
+            url = getattr(raw_button, "url", None) if raw_button else None
+            if url:
+                return f"Selected button opens a URL instead of sending a callback: {url}"
+            return "Selected button does not provide callback data to press."
+
+        callback_result = await client(
+            functions.messages.GetBotCallbackAnswerRequest(
+                peer=entity, msg_id=target_message.id, data=target_button.data
+            )
+        )
+
+        response_parts = []
+        if getattr(callback_result, "message", None):
+            response_parts.append(callback_result.message)
+        if getattr(callback_result, "alert", None):
+            response_parts.append("Telegram displayed an alert to the user.")
+        if not response_parts:
+            response_parts.append("Button pressed successfully.")
+
+        return " ".join(response_parts)
+    except Exception as e:
+        return log_and_format_error(
+            "press_inline_button",
+            e,
+            chat_id=chat_id,
+            message_id=message_id,
+            button_text=button_text,
+            button_index=button_index,
+        )
 
 
 @mcp.tool()
@@ -354,8 +659,9 @@ async def get_contact_ids() -> str:
 
 
 @mcp.tool()
+@validate_id("chat_id")
 async def list_messages(
-    chat_id: int,
+    chat_id: Union[int, str],
     limit: int = 20,
     search_query: str = None,
     from_date: str = None,
@@ -365,7 +671,7 @@ async def list_messages(
     Retrieve messages with optional filters.
 
     Args:
-        chat_id: The ID of the chat to get messages from.
+        chat_id: The ID or username of the chat to get messages from.
         limit: Maximum number of messages to retrieve.
         search_query: Filter messages containing this text.
         from_date: Filter messages starting from this date (format: YYYY-MM-DD).
@@ -476,6 +782,93 @@ async def list_messages(
 
 
 @mcp.tool()
+async def list_topics(
+    chat_id: int,
+    limit: int = 200,
+    offset_topic: int = 0,
+    search_query: str = None,
+) -> str:
+    """
+    Retrieve forum topics from a supergroup with the forum feature enabled.
+
+    Note for LLM: You can send a message to a selected topic via reply_to_message tool
+    by using Topic ID as the message_id parameter.
+
+    Args:
+        chat_id: The ID of the forum-enabled chat (supergroup).
+        limit: Maximum number of topics to retrieve.
+        offset_topic: Topic ID offset for pagination.
+        search_query: Optional query to filter topics by title.
+    """
+    try:
+        entity = await client.get_entity(chat_id)
+
+        if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
+            return "The specified chat is not a supergroup."
+
+        if not getattr(entity, "forum", False):
+            return "The specified supergroup does not have forum topics enabled."
+
+        result = await client(
+            functions.channels.GetForumTopicsRequest(
+                channel=entity,
+                offset_date=0,
+                offset_id=0,
+                offset_topic=offset_topic,
+                limit=limit,
+                q=search_query or None,
+            )
+        )
+
+        topics = getattr(result, "topics", None) or []
+        if not topics:
+            return "No topics found for this chat."
+
+        messages_map = {}
+        if getattr(result, "messages", None):
+            messages_map = {message.id: message for message in result.messages}
+
+        lines = []
+        for topic in topics:
+            line_parts = [f"Topic ID: {topic.id}"]
+
+            title = getattr(topic, "title", None) or "(no title)"
+            line_parts.append(f"Title: {title}")
+
+            total_messages = getattr(topic, "total_messages", None)
+            if total_messages is not None:
+                line_parts.append(f"Messages: {total_messages}")
+
+            unread_count = getattr(topic, "unread_count", None)
+            if unread_count:
+                line_parts.append(f"Unread: {unread_count}")
+
+            if getattr(topic, "closed", False):
+                line_parts.append("Closed: Yes")
+
+            if getattr(topic, "hidden", False):
+                line_parts.append("Hidden: Yes")
+
+            top_message_id = getattr(topic, "top_message", None)
+            top_message = messages_map.get(top_message_id)
+            if top_message and getattr(top_message, "date", None):
+                line_parts.append(f"Last Activity: {top_message.date.isoformat()}")
+
+            lines.append(" | ".join(line_parts))
+
+        return "\n".join(lines)
+    except Exception as e:
+        return log_and_format_error(
+            "list_topics",
+            e,
+            chat_id=chat_id,
+            limit=limit,
+            offset_topic=offset_topic,
+            search_query=search_query,
+        )
+
+
+@mcp.tool()
 async def list_chats(chat_type: str = None, limit: int = 20) -> str:
     """
     List available chats with metadata.
@@ -537,12 +930,13 @@ async def list_chats(chat_type: str = None, limit: int = 20) -> str:
 
 
 @mcp.tool()
-async def get_chat(chat_id: int) -> str:
+@validate_id("chat_id")
+async def get_chat(chat_id: Union[int, str]) -> str:
     """
     Get detailed information about a specific chat.
 
     Args:
-        chat_id: The ID of the chat.
+        chat_id: The ID or username of the chat.
     """
     try:
         entity = await client.get_entity(chat_id)
@@ -672,12 +1066,13 @@ async def get_direct_chat_by_contact(contact_query: str) -> str:
 
 
 @mcp.tool()
-async def get_contact_chats(contact_id: int) -> str:
+@validate_id("contact_id")
+async def get_contact_chats(contact_id: Union[int, str]) -> str:
     """
     List all chats involving a specific contact.
 
     Args:
-        contact_id: The ID of the contact.
+        contact_id: The ID or username of the contact.
     """
     try:
         # Get contact info
@@ -724,12 +1119,13 @@ async def get_contact_chats(contact_id: int) -> str:
 
 
 @mcp.tool()
-async def get_last_interaction(contact_id: int) -> str:
+@validate_id("contact_id")
+async def get_last_interaction(contact_id: Union[int, str]) -> str:
     """
     Get the most recent message with a contact.
 
     Args:
-        contact_id: The ID of the contact.
+        contact_id: The ID or username of the contact.
     """
     try:
         # Get contact info
@@ -760,12 +1156,15 @@ async def get_last_interaction(contact_id: int) -> str:
 
 
 @mcp.tool()
-async def get_message_context(chat_id: int, message_id: int, context_size: int = 3) -> str:
+@validate_id("chat_id")
+async def get_message_context(
+    chat_id: Union[int, str], message_id: int, context_size: int = 3
+) -> str:
     """
     Retrieve context around a specific message.
 
     Args:
-        chat_id: The ID of the chat.
+        chat_id: The ID or username of the chat.
         message_id: The ID of the central message.
         context_size: Number of messages before and after to include.
     """
@@ -840,7 +1239,10 @@ async def add_contact(phone: str, first_name: str, last_name: str = "") -> str:
             functions.contacts.ImportContactsRequest(
                 contacts=[
                     InputPhoneContact(
-                        client_id=0, phone=phone, first_name=first_name, last_name=last_name
+                        client_id=0,
+                        phone=phone,
+                        first_name=first_name,
+                        last_name=last_name,
                     )
                 ]
             )
@@ -877,11 +1279,12 @@ async def add_contact(phone: str, first_name: str, last_name: str = "") -> str:
 
 
 @mcp.tool()
-async def delete_contact(user_id: int) -> str:
+@validate_id("user_id")
+async def delete_contact(user_id: Union[int, str]) -> str:
     """
     Delete a contact by user ID.
     Args:
-        user_id: The Telegram user ID of the contact to delete.
+        user_id: The Telegram user ID or username of the contact to delete.
     """
     try:
         user = await client.get_entity(user_id)
@@ -892,11 +1295,12 @@ async def delete_contact(user_id: int) -> str:
 
 
 @mcp.tool()
-async def block_user(user_id: int) -> str:
+@validate_id("user_id")
+async def block_user(user_id: Union[int, str]) -> str:
     """
     Block a user by user ID.
     Args:
-        user_id: The Telegram user ID to block.
+        user_id: The Telegram user ID or username to block.
     """
     try:
         user = await client.get_entity(user_id)
@@ -907,11 +1311,12 @@ async def block_user(user_id: int) -> str:
 
 
 @mcp.tool()
-async def unblock_user(user_id: int) -> str:
+@validate_id("user_id")
+async def unblock_user(user_id: Union[int, str]) -> str:
     """
     Unblock a user by user ID.
     Args:
-        user_id: The Telegram user ID to unblock.
+        user_id: The Telegram user ID or username to unblock.
     """
     try:
         user = await client.get_entity(user_id)
@@ -934,13 +1339,14 @@ async def get_me() -> str:
 
 
 @mcp.tool()
-async def create_group(title: str, user_ids: list) -> str:
+@validate_id("user_ids")
+async def create_group(title: str, user_ids: List[Union[int, str]]) -> str:
     """
     Create a new group or supergroup and add users.
 
     Args:
         title: Title for the new group
-        user_ids: List of user IDs to add to the group
+        user_ids: List of user IDs or usernames to add to the group
     """
     try:
         # Convert user IDs to entities
@@ -992,13 +1398,14 @@ async def create_group(title: str, user_ids: list) -> str:
 
 
 @mcp.tool()
-async def invite_to_group(group_id: int, user_ids: list) -> str:
+@validate_id("group_id", "user_ids")
+async def invite_to_group(group_id: Union[int, str], user_ids: List[Union[int, str]]) -> str:
     """
     Invite users to a group or channel.
 
     Args:
-        group_id: The ID of the group/channel.
-        user_ids: List of user IDs to invite.
+        group_id: The ID or username of the group/channel.
+        user_ids: List of user IDs or usernames to invite.
     """
     try:
         entity = await client.get_entity(group_id)
@@ -1041,12 +1448,13 @@ async def invite_to_group(group_id: int, user_ids: list) -> str:
 
 
 @mcp.tool()
-async def leave_chat(chat_id: int) -> str:
+@validate_id("chat_id")
+async def leave_chat(chat_id: Union[int, str]) -> str:
     """
     Leave a group or channel by chat ID.
 
     Args:
-        chat_id: The chat ID to leave.
+        chat_id: The chat ID or username to leave.
     """
     try:
         entity = await client.get_entity(chat_id)
@@ -1068,7 +1476,8 @@ async def leave_chat(chat_id: int) -> str:
                 me = await client.get_me(input_peer=True)
                 await client(
                     functions.messages.DeleteChatUserRequest(
-                        chat_id=entity.id, user_id=me  # Use the entity ID directly
+                        chat_id=entity.id,
+                        user_id=me,  # Use the entity ID directly
                     )
                 )
                 chat_name = getattr(entity, "title", str(chat_id))
@@ -1120,11 +1529,12 @@ async def leave_chat(chat_id: int) -> str:
 
 
 @mcp.tool()
-async def get_participants(chat_id: int) -> str:
+@validate_id("chat_id")
+async def get_participants(chat_id: Union[int, str]) -> str:
     """
     List all participants in a group or channel.
     Args:
-        chat_id: The group or channel ID.
+        chat_id: The group or channel ID or username.
     """
     try:
         participants = await client.get_participants(chat_id)
@@ -1138,11 +1548,12 @@ async def get_participants(chat_id: int) -> str:
 
 
 @mcp.tool()
-async def send_file(chat_id: int, file_path: str, caption: str = None) -> str:
+@validate_id("chat_id")
+async def send_file(chat_id: Union[int, str], file_path: str, caption: str = None) -> str:
     """
     Send a file to a chat.
     Args:
-        chat_id: The chat ID.
+        chat_id: The chat ID or username.
         file_path: Absolute path to the file to send (must exist and be readable).
         caption: Optional caption for the file.
     """
@@ -1161,11 +1572,12 @@ async def send_file(chat_id: int, file_path: str, caption: str = None) -> str:
 
 
 @mcp.tool()
-async def download_media(chat_id: int, message_id: int, file_path: str) -> str:
+@validate_id("chat_id")
+async def download_media(chat_id: Union[int, str], message_id: int, file_path: str) -> str:
     """
     Download media from a message in a chat.
     Args:
-        chat_id: The chat ID.
+        chat_id: The chat ID or username.
         message_id: The message ID containing the media.
         file_path: Absolute path to save the downloaded file (must be writable).
     """
@@ -1184,7 +1596,11 @@ async def download_media(chat_id: int, message_id: int, file_path: str) -> str:
         return f"Media downloaded to {file_path}."
     except Exception as e:
         return log_and_format_error(
-            "download_media", e, chat_id=chat_id, message_id=message_id, file_path=file_path
+            "download_media",
+            e,
+            chat_id=chat_id,
+            message_id=message_id,
+            file_path=file_path,
         )
 
 
@@ -1262,16 +1678,19 @@ async def get_privacy_settings() -> str:
 
 
 @mcp.tool()
+@validate_id("allow_users", "disallow_users")
 async def set_privacy_settings(
-    key: str, allow_users: list = None, disallow_users: list = None
+    key: str,
+    allow_users: Optional[List[Union[int, str]]] = None,
+    disallow_users: Optional[List[Union[int, str]]] = None,
 ) -> str:
     """
     Set privacy settings (e.g., last seen, phone, etc.).
 
     Args:
         key: The privacy setting to modify ('status' for last seen, 'phone', 'profile_photo', etc.)
-        allow_users: List of user IDs to allow
-        disallow_users: List of user IDs to disallow
+        allow_users: List of user IDs or usernames to allow
+        disallow_users: List of user IDs or usernames to disallow
     """
     try:
         # Import needed types
@@ -1418,7 +1837,8 @@ async def create_channel(title: str, about: str = "", megagroup: bool = False) -
 
 
 @mcp.tool()
-async def edit_chat_title(chat_id: int, title: str) -> str:
+@validate_id("chat_id")
+async def edit_chat_title(chat_id: Union[int, str], title: str) -> str:
     """
     Edit the title of a chat, group, or channel.
     """
@@ -1437,7 +1857,8 @@ async def edit_chat_title(chat_id: int, title: str) -> str:
 
 
 @mcp.tool()
-async def edit_chat_photo(chat_id: int, file_path: str) -> str:
+@validate_id("chat_id")
+async def edit_chat_photo(chat_id: Union[int, str], file_path: str) -> str:
     """
     Edit the photo of a chat, group, or channel. Requires a file path to an image.
     """
@@ -1470,7 +1891,8 @@ async def edit_chat_photo(chat_id: int, file_path: str) -> str:
 
 
 @mcp.tool()
-async def delete_chat_photo(chat_id: int) -> str:
+@validate_id("chat_id")
+async def delete_chat_photo(chat_id: Union[int, str]) -> str:
     """
     Delete the photo of a chat, group, or channel.
     """
@@ -1498,13 +1920,16 @@ async def delete_chat_photo(chat_id: int) -> str:
 
 
 @mcp.tool()
-async def promote_admin(group_id: int, user_id: int, rights: dict = None) -> str:
+@validate_id("group_id", "user_id")
+async def promote_admin(
+    group_id: Union[int, str], user_id: Union[int, str], rights: dict = None
+) -> str:
     """
     Promote a user to admin in a group/channel.
 
     Args:
-        group_id: ID of the group/channel
-        user_id: User ID to promote
+        group_id: ID or username of the group/channel
+        user_id: User ID or username to promote
         rights: Admin rights to give (optional)
     """
     try:
@@ -1562,13 +1987,14 @@ async def promote_admin(group_id: int, user_id: int, rights: dict = None) -> str
 
 
 @mcp.tool()
-async def demote_admin(group_id: int, user_id: int) -> str:
+@validate_id("group_id", "user_id")
+async def demote_admin(group_id: Union[int, str], user_id: Union[int, str]) -> str:
     """
     Demote a user from admin in a group/channel.
 
     Args:
-        group_id: ID of the group/channel
-        user_id: User ID to demote
+        group_id: ID or username of the group/channel
+        user_id: User ID or username to demote
     """
     try:
         chat = await client.get_entity(group_id)
@@ -1610,13 +2036,14 @@ async def demote_admin(group_id: int, user_id: int) -> str:
 
 
 @mcp.tool()
-async def ban_user(chat_id: int, user_id: int) -> str:
+@validate_id("chat_id", "user_id")
+async def ban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
     """
     Ban a user from a group or channel.
 
     Args:
-        chat_id: ID of the group/channel
-        user_id: User ID to ban
+        chat_id: ID or username of the group/channel
+        user_id: User ID or username to ban
     """
     try:
         chat = await client.get_entity(chat_id)
@@ -1656,13 +2083,14 @@ async def ban_user(chat_id: int, user_id: int) -> str:
 
 
 @mcp.tool()
-async def unban_user(chat_id: int, user_id: int) -> str:
+@validate_id("chat_id", "user_id")
+async def unban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
     """
     Unban a user from a group or channel.
 
     Args:
-        chat_id: ID of the group/channel
-        user_id: User ID to unban
+        chat_id: ID or username of the group/channel
+        user_id: User ID or username to unban
     """
     try:
         chat = await client.get_entity(chat_id)
@@ -1702,7 +2130,8 @@ async def unban_user(chat_id: int, user_id: int) -> str:
 
 
 @mcp.tool()
-async def get_admins(chat_id: int) -> str:
+@validate_id("chat_id")
+async def get_admins(chat_id: Union[int, str]) -> str:
     """
     Get all admins in a group or channel.
     """
@@ -1720,7 +2149,8 @@ async def get_admins(chat_id: int) -> str:
 
 
 @mcp.tool()
-async def get_banned_users(chat_id: int) -> str:
+@validate_id("chat_id")
+async def get_banned_users(chat_id: Union[int, str]) -> str:
     """
     Get all banned users in a group or channel.
     """
@@ -1740,7 +2170,8 @@ async def get_banned_users(chat_id: int) -> str:
 
 
 @mcp.tool()
-async def get_invite_link(chat_id: int) -> str:
+@validate_id("chat_id")
+async def get_invite_link(chat_id: Union[int, str]) -> str:
     """
     Get the invite link for a group or channel.
     """
@@ -1798,52 +2229,37 @@ async def join_chat_by_link(link: str) -> str:
 
         # Try checking the invite before joining
         try:
-            from telethon.errors import (
-                InviteHashExpiredError,
-                InviteHashInvalidError,
-                UserAlreadyParticipantError,
-                ChatAdminRequiredError,
-                UsersTooMuchError,
-            )
-
             # Try to check invite info first (will often fail if not a member)
             invite_info = await client(functions.messages.CheckChatInviteRequest(hash=hash_part))
             if hasattr(invite_info, "chat") and invite_info.chat:
                 # If we got chat info, we're already a member
                 chat_title = getattr(invite_info.chat, "title", "Unknown Chat")
                 return f"You are already a member of this chat: {chat_title}"
-        except Exception as check_err:
+        except Exception:
             # This often fails if not a member - just continue
             pass
 
         # Join the chat using the hash
-        try:
-            result = await client(functions.messages.ImportChatInviteRequest(hash=hash_part))
-            if result and hasattr(result, "chats") and result.chats:
-                chat_title = getattr(result.chats[0], "title", "Unknown Chat")
-                return f"Successfully joined chat: {chat_title}"
-            return f"Joined chat via invite hash."
-        except Exception as join_err:
-            err_str = str(join_err).lower()
-            if "expired" in err_str:
-                return "The invite hash has expired and is no longer valid."
-            elif "invalid" in err_str:
-                return "The invite hash is invalid or malformed."
-            elif "already" in err_str and "participant" in err_str:
-                return "You are already a member of this chat."
-            elif "admin" in err_str:
-                return "Cannot join this chat - requires admin approval."
-            elif "too much" in err_str or "too many" in err_str:
-                return "Cannot join this chat - it has reached maximum number of participants."
-            else:
-                raise  # Re-raise to be caught by the outer exception handler
+        result = await client(functions.messages.ImportChatInviteRequest(hash=hash_part))
+        if result and hasattr(result, "chats") and result.chats:
+            chat_title = getattr(result.chats[0], "title", "Unknown Chat")
+            return f"Successfully joined chat: {chat_title}"
+        return f"Joined chat via invite hash."
     except Exception as e:
+        err_str = str(e).lower()
+        if "expired" in err_str:
+            return "The invite hash has expired and is no longer valid."
+        elif "invalid" in err_str:
+            return "The invite hash is invalid or malformed."
+        elif "already" in err_str and "participant" in err_str:
+            return "You are already a member of this chat."
         logger.exception(f"join_chat_by_link failed (link={link})")
-        return log_and_format_error("join_chat_by_link", e, link=link)
+        return f"Error joining chat: {e}"
 
 
 @mcp.tool()
-async def export_chat_invite(chat_id: int) -> str:
+@validate_id("chat_id")
+async def export_chat_invite(chat_id: Union[int, str]) -> str:
     """
     Export a chat invite link.
     """
@@ -1870,6 +2286,7 @@ async def export_chat_invite(chat_id: int) -> str:
         except Exception as e2:
             logger.warning(f"export_chat_invite_link failed: {e2}")
             return log_and_format_error("export_chat_invite", e2, chat_id=chat_id)
+
     except Exception as e:
         logger.exception(f"export_chat_invite failed (chat_id={chat_id})")
         return log_and_format_error("export_chat_invite", e, chat_id=chat_id)
@@ -1926,17 +2343,20 @@ async def import_chat_invite(hash: str) -> str:
                 return "Cannot join this chat - it has reached maximum number of participants."
             else:
                 raise  # Re-raise to be caught by the outer exception handler
+
     except Exception as e:
         logger.exception(f"import_chat_invite failed (hash={hash})")
         return log_and_format_error("import_chat_invite", e, hash=hash)
 
 
 @mcp.tool()
-async def send_voice(chat_id: int, file_path: str) -> str:
+@validate_id("chat_id")
+async def send_voice(chat_id: Union[int, str], file_path: str) -> str:
     """
     Send a voice message to a chat. File must be an OGG/OPUS voice note.
+
     Args:
-        chat_id: The chat ID.
+        chat_id: The chat ID or username.
         file_path: Absolute path to the OGG/OPUS file.
     """
     try:
@@ -1944,6 +2364,7 @@ async def send_voice(chat_id: int, file_path: str) -> str:
             return f"File not found: {file_path}"
         if not os.access(file_path, os.R_OK):
             return f"File is not readable: {file_path}"
+
         mime, _ = mimetypes.guess_type(file_path)
         if not (
             mime
@@ -1954,6 +2375,7 @@ async def send_voice(chat_id: int, file_path: str) -> str:
             )
         ):
             return "Voice file must be .ogg or .opus format."
+
         entity = await client.get_entity(chat_id)
         await client.send_file(entity, file_path, voice_note=True)
         return f"Voice message sent to chat {chat_id}."
@@ -1962,7 +2384,10 @@ async def send_voice(chat_id: int, file_path: str) -> str:
 
 
 @mcp.tool()
-async def forward_message(from_chat_id: int, message_id: int, to_chat_id: int) -> str:
+@validate_id("from_chat_id", "to_chat_id")
+async def forward_message(
+    from_chat_id: Union[int, str], message_id: int, to_chat_id: Union[int, str]
+) -> str:
     """
     Forward a message from one chat to another.
     """
@@ -1982,7 +2407,8 @@ async def forward_message(from_chat_id: int, message_id: int, to_chat_id: int) -
 
 
 @mcp.tool()
-async def edit_message(chat_id: int, message_id: int, new_text: str) -> str:
+@validate_id("chat_id")
+async def edit_message(chat_id: Union[int, str], message_id: int, new_text: str) -> str:
     """
     Edit a message you sent.
     """
@@ -1997,7 +2423,8 @@ async def edit_message(chat_id: int, message_id: int, new_text: str) -> str:
 
 
 @mcp.tool()
-async def delete_message(chat_id: int, message_id: int) -> str:
+@validate_id("chat_id")
+async def delete_message(chat_id: Union[int, str], message_id: int) -> str:
     """
     Delete a message by ID.
     """
@@ -2010,7 +2437,8 @@ async def delete_message(chat_id: int, message_id: int) -> str:
 
 
 @mcp.tool()
-async def pin_message(chat_id: int, message_id: int) -> str:
+@validate_id("chat_id")
+async def pin_message(chat_id: Union[int, str], message_id: int) -> str:
     """
     Pin a message in a chat.
     """
@@ -2023,7 +2451,8 @@ async def pin_message(chat_id: int, message_id: int) -> str:
 
 
 @mcp.tool()
-async def unpin_message(chat_id: int, message_id: int) -> str:
+@validate_id("chat_id")
+async def unpin_message(chat_id: Union[int, str], message_id: int) -> str:
     """
     Unpin a message in a chat.
     """
@@ -2036,7 +2465,8 @@ async def unpin_message(chat_id: int, message_id: int) -> str:
 
 
 @mcp.tool()
-async def mark_as_read(chat_id: int) -> str:
+@validate_id("chat_id")
+async def mark_as_read(chat_id: Union[int, str]) -> str:
     """
     Mark all messages as read in a chat.
     """
@@ -2049,7 +2479,8 @@ async def mark_as_read(chat_id: int) -> str:
 
 
 @mcp.tool()
-async def reply_to_message(chat_id: int, message_id: int, text: str) -> str:
+@validate_id("chat_id")
+async def reply_to_message(chat_id: Union[int, str], message_id: int, text: str) -> str:
     """
     Reply to a specific message in a chat.
     """
@@ -2064,18 +2495,22 @@ async def reply_to_message(chat_id: int, message_id: int, text: str) -> str:
 
 
 @mcp.tool()
-async def get_media_info(chat_id: int, message_id: int) -> str:
+@validate_id("chat_id")
+async def get_media_info(chat_id: Union[int, str], message_id: int) -> str:
     """
     Get info about media in a message.
+
     Args:
-        chat_id: The chat ID.
+        chat_id: The chat ID or username.
         message_id: The message ID.
     """
     try:
         entity = await client.get_entity(chat_id)
         msg = await client.get_messages(entity, ids=message_id)
+
         if not msg or not msg.media:
             return "No media found in the specified message."
+
         return str(msg.media)
     except Exception as e:
         return log_and_format_error("get_media_info", e, chat_id=chat_id, message_id=message_id)
@@ -2094,13 +2529,15 @@ async def search_public_chats(query: str) -> str:
 
 
 @mcp.tool()
-async def search_messages(chat_id: int, query: str, limit: int = 20) -> str:
+@validate_id("chat_id")
+async def search_messages(chat_id: Union[int, str], query: str, limit: int = 20) -> str:
     """
     Search for messages in a chat by text.
     """
     try:
         entity = await client.get_entity(chat_id)
         messages = await client.get_messages(entity, limit=limit, search=query)
+
         lines = []
         for msg in messages:
             sender_name = get_sender_name(msg)
@@ -2130,7 +2567,8 @@ async def resolve_username(username: str) -> str:
 
 
 @mcp.tool()
-async def mute_chat(chat_id: int) -> str:
+@validate_id("chat_id")
+async def mute_chat(chat_id: Union[int, str]) -> str:
     """
     Mute notifications for a chat.
     """
@@ -2168,7 +2606,8 @@ async def mute_chat(chat_id: int) -> str:
 
 
 @mcp.tool()
-async def unmute_chat(chat_id: int) -> str:
+@validate_id("chat_id")
+async def unmute_chat(chat_id: Union[int, str]) -> str:
     """
     Unmute notifications for a chat.
     """
@@ -2206,7 +2645,8 @@ async def unmute_chat(chat_id: int) -> str:
 
 
 @mcp.tool()
-async def archive_chat(chat_id: int) -> str:
+@validate_id("chat_id")
+async def archive_chat(chat_id: Union[int, str]) -> str:
     """
     Archive a chat.
     """
@@ -2222,7 +2662,8 @@ async def archive_chat(chat_id: int) -> str:
 
 
 @mcp.tool()
-async def unarchive_chat(chat_id: int) -> str:
+@validate_id("chat_id")
+async def unarchive_chat(chat_id: Union[int, str]) -> str:
     """
     Unarchive a chat.
     """
@@ -2250,11 +2691,13 @@ async def get_sticker_sets() -> str:
 
 
 @mcp.tool()
-async def send_sticker(chat_id: int, file_path: str) -> str:
+@validate_id("chat_id")
+async def send_sticker(chat_id: Union[int, str], file_path: str) -> str:
     """
     Send a sticker to a chat. File must be a valid .webp sticker file.
+
     Args:
-        chat_id: The chat ID.
+        chat_id: The chat ID or username.
         file_path: Absolute path to the .webp sticker file.
     """
     try:
@@ -2264,6 +2707,7 @@ async def send_sticker(chat_id: int, file_path: str) -> str:
             return f"Sticker file is not readable: {file_path}"
         if not file_path.lower().endswith(".webp"):
             return "Sticker file must be a .webp file."
+
         entity = await client.get_entity(chat_id)
         await client.send_file(entity, file_path, force_document=False)
         return f"Sticker sent to chat {chat_id}."
@@ -2275,6 +2719,7 @@ async def send_sticker(chat_id: int, file_path: str) -> str:
 async def get_gif_search(query: str, limit: int = 10) -> str:
     """
     Search for GIFs by query. Returns a list of Telegram document IDs (not file paths).
+
     Args:
         query: Search term for GIFs.
         limit: Max number of GIFs to return.
@@ -2327,11 +2772,13 @@ async def get_gif_search(query: str, limit: int = 10) -> str:
 
 
 @mcp.tool()
-async def send_gif(chat_id: int, gif_id: int) -> str:
+@validate_id("chat_id")
+async def send_gif(chat_id: Union[int, str], gif_id: int) -> str:
     """
     Send a GIF to a chat by Telegram GIF document ID (not a file path).
+
     Args:
-        chat_id: The chat ID.
+        chat_id: The chat ID or username.
         gif_id: Telegram document ID for the GIF (from get_gif_search).
     """
     try:
@@ -2374,7 +2821,6 @@ async def get_bot_info(bot_username: str) -> str:
             }
             if hasattr(result, "full_user") and hasattr(result.full_user, "about"):
                 info["bot_info"]["about"] = result.full_user.about
-
             return json.dumps(info, indent=2)
     except Exception as e:
         logger.exception(f"get_bot_info failed (bot_username={bot_username})")
@@ -2429,13 +2875,15 @@ async def set_bot_commands(bot_username: str, commands: list) -> str:
 
 
 @mcp.tool()
-async def get_history(chat_id: int, limit: int = 100) -> str:
+@validate_id("chat_id")
+async def get_history(chat_id: Union[int, str], limit: int = 100) -> str:
     """
     Get full chat history (up to limit).
     """
     try:
         entity = await client.get_entity(chat_id)
         messages = await client.get_messages(entity, limit=limit)
+
         lines = []
         for msg in messages:
             sender_name = get_sender_name(msg)
@@ -2451,7 +2899,8 @@ async def get_history(chat_id: int, limit: int = 100) -> str:
 
 
 @mcp.tool()
-async def get_user_photos(user_id: int, limit: int = 10) -> str:
+@validate_id("user_id")
+async def get_user_photos(user_id: Union[int, str], limit: int = 10) -> str:
     """
     Get profile photos of a user.
     """
@@ -2466,7 +2915,8 @@ async def get_user_photos(user_id: int, limit: int = 10) -> str:
 
 
 @mcp.tool()
-async def get_user_status(user_id: int) -> str:
+@validate_id("user_id")
+async def get_user_status(user_id: Union[int, str]) -> str:
     """
     Get the online status of a user.
     """
@@ -2478,14 +2928,21 @@ async def get_user_status(user_id: int) -> str:
 
 
 @mcp.tool()
-async def get_recent_actions(chat_id: int) -> str:
+@validate_id("chat_id")
+async def get_recent_actions(chat_id: Union[int, str]) -> str:
     """
     Get recent admin actions (admin log) in a group or channel.
     """
     try:
         result = await client(
             functions.channels.GetAdminLogRequest(
-                channel=chat_id, q="", events_filter=None, admins=[], max_id=0, min_id=0, limit=20
+                channel=chat_id,
+                q="",
+                events_filter=None,
+                admins=[],
+                max_id=0,
+                min_id=0,
+                limit=20,
             )
         )
 
@@ -2500,12 +2957,14 @@ async def get_recent_actions(chat_id: int) -> str:
 
 
 @mcp.tool()
-async def get_pinned_messages(chat_id: int) -> str:
+@validate_id("chat_id")
+async def get_pinned_messages(chat_id: Union[int, str]) -> str:
     """
     Get all pinned messages in a chat.
     """
     try:
         entity = await client.get_entity(chat_id)
+
         # Use correct filter based on Telethon version
         try:
             # Try newer Telethon approach
@@ -2534,6 +2993,79 @@ async def get_pinned_messages(chat_id: int) -> str:
     except Exception as e:
         logger.exception(f"get_pinned_messages failed (chat_id={chat_id})")
         return log_and_format_error("get_pinned_messages", e, chat_id=chat_id)
+
+
+@mcp.tool()
+async def create_poll(
+    chat_id: int,
+    question: str,
+    options: list,
+    multiple_choice: bool = False,
+    quiz_mode: bool = False,
+    public_votes: bool = True,
+    close_date: str = None,
+) -> str:
+    """
+    Create a poll in a chat using Telegram's native poll feature.
+
+    Args:
+        chat_id: The ID of the chat to send the poll to
+        question: The poll question
+        options: List of answer options (2-10 options)
+        multiple_choice: Whether users can select multiple answers
+        quiz_mode: Whether this is a quiz (has correct answer)
+        public_votes: Whether votes are public
+        close_date: Optional close date in ISO format (YYYY-MM-DD HH:MM:SS)
+    """
+    try:
+        entity = await client.get_entity(chat_id)
+
+        # Validate options
+        if len(options) < 2:
+            return "Error: Poll must have at least 2 options."
+        if len(options) > 10:
+            return "Error: Poll can have at most 10 options."
+
+        # Parse close date if provided
+        close_date_obj = None
+        if close_date:
+            try:
+                close_date_obj = datetime.fromisoformat(close_date.replace("Z", "+00:00"))
+            except ValueError:
+                return f"Invalid close_date format. Use YYYY-MM-DD HH:MM:SS format."
+
+        # Create the poll using InputMediaPoll with SendMediaRequest
+        from telethon.tl.types import InputMediaPoll, Poll, PollAnswer, TextWithEntities
+        import random
+
+        poll = Poll(
+            id=random.randint(0, 2**63 - 1),
+            question=TextWithEntities(text=question, entities=[]),
+            answers=[
+                PollAnswer(text=TextWithEntities(text=option, entities=[]), option=bytes([i]))
+                for i, option in enumerate(options)
+            ],
+            multiple_choice=multiple_choice,
+            quiz=quiz_mode,
+            public_voters=public_votes,
+            close_date=close_date_obj,
+        )
+
+        result = await client(
+            functions.messages.SendMediaRequest(
+                peer=entity,
+                media=InputMediaPoll(poll=poll),
+                message="",
+                random_id=random.randint(0, 2**63 - 1),
+            )
+        )
+
+        return f"Poll created successfully in chat {chat_id}."
+    except Exception as e:
+        logger.exception(f"create_poll failed (chat_id={chat_id}, question='{question}')")
+        return log_and_format_error(
+            "create_poll", e, chat_id=chat_id, question=question, options=options
+        )
 
 
 if __name__ == "__main__":
