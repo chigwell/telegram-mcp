@@ -1,7 +1,6 @@
 [build-system]
 requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
-package-mode = false
 
 [project]
 name = "telegram-mcp"
@@ -26,7 +25,7 @@ requires-python = ">=3.10"
 dependencies = [
     "dotenv>=0.9.9",
     "httpx>=0.28.1",
-    "mcp[cli]>=1.4.1",
+    "mcp[cli]>=1.8.0",
     "nest-asyncio>=1.6.0",
     "python-dotenv>=1.1.0",
     "python-json-logger>=3.3.0",
@@ -36,6 +35,13 @@ dependencies = [
 [project.urls]
 "Homepage" = "https://github.com/chigwell/telegram-mcp"
 "Bug Tracker" = "https://github.com/chigwell/telegram-mcp/issues"
+
+[tool.setuptools]
+py-modules = ["main", "session_string_generator"]
+
+[project.scripts]
+telegram-mcp = "main:main"
+telegram-mcp-generate-session = "session_string_generator:main"
 
 [tool.black]
 line-length = 99
