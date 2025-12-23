@@ -3274,6 +3274,152 @@ async def create_poll(
         )
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Send Reaction", openWorldHint=True, destructiveHint=False, idempotentHint=True
+    )
+)
+@validate_id("chat_id")
+async def send_reaction(
+    chat_id: Union[int, str],
+    message_id: int,
+    emoji: str,
+    big: bool = False,
+) -> str:
+    """
+    Send a reaction to a message.
+
+    Args:
+        chat_id: The chat ID or username
+        message_id: The message ID to react to
+        emoji: The emoji to react with (e.g., "👍", "❤️", "🔥", "😂", "😮", "😢", "🎉", "💩", "👎")
+        big: Whether to show a big animation for the reaction (default: False)
+    """
+    try:
+        from telethon.tl.types import ReactionEmoji
+
+        peer = await client.get_input_entity(chat_id)
+        await client(
+            functions.messages.SendReactionRequest(
+                peer=peer,
+                msg_id=message_id,
+                big=big,
+                reaction=[ReactionEmoji(emoticon=emoji)],
+            )
+        )
+        return f"Reaction '{emoji}' sent to message {message_id} in chat {chat_id}."
+    except Exception as e:
+        logger.exception(
+            f"send_reaction failed (chat_id={chat_id}, message_id={message_id}, emoji={emoji})"
+        )
+        return log_and_format_error(
+            "send_reaction", e, chat_id=chat_id, message_id=message_id, emoji=emoji
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Remove Reaction", openWorldHint=True, destructiveHint=True, idempotentHint=True
+    )
+)
+@validate_id("chat_id")
+async def remove_reaction(
+    chat_id: Union[int, str],
+    message_id: int,
+) -> str:
+    """
+    Remove your reaction from a message.
+
+    Args:
+        chat_id: The chat ID or username
+        message_id: The message ID to remove reaction from
+    """
+    try:
+        peer = await client.get_input_entity(chat_id)
+        await client(
+            functions.messages.SendReactionRequest(
+                peer=peer,
+                msg_id=message_id,
+                reaction=[],  # Empty list removes reaction
+            )
+        )
+        return f"Reaction removed from message {message_id} in chat {chat_id}."
+    except Exception as e:
+        logger.exception(f"remove_reaction failed (chat_id={chat_id}, message_id={message_id})")
+        return log_and_format_error("remove_reaction", e, chat_id=chat_id, message_id=message_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Message Reactions", openWorldHint=True, readOnlyHint=True, idempotentHint=True
+    )
+)
+@validate_id("chat_id")
+async def get_message_reactions(
+    chat_id: Union[int, str],
+    message_id: int,
+    limit: int = 50,
+) -> str:
+    """
+    Get the list of reactions on a message.
+
+    Args:
+        chat_id: The chat ID or username
+        message_id: The message ID to get reactions from
+        limit: Maximum number of users to return per reaction (default: 50)
+    """
+    try:
+        from telethon.tl.types import ReactionEmoji, ReactionCustomEmoji
+
+        peer = await client.get_input_entity(chat_id)
+
+        result = await client(
+            functions.messages.GetMessageReactionsListRequest(
+                peer=peer,
+                id=message_id,
+                limit=limit,
+            )
+        )
+
+        if not result.reactions:
+            return f"No reactions on message {message_id} in chat {chat_id}."
+
+        reactions_data = []
+        for reaction in result.reactions:
+            user_id = reaction.peer_id.user_id if hasattr(reaction.peer_id, "user_id") else None
+            emoji = None
+            if isinstance(reaction.reaction, ReactionEmoji):
+                emoji = reaction.reaction.emoticon
+            elif isinstance(reaction.reaction, ReactionCustomEmoji):
+                emoji = f"custom:{reaction.reaction.document_id}"
+
+            reactions_data.append(
+                {
+                    "user_id": user_id,
+                    "emoji": emoji,
+                    "date": reaction.date.isoformat() if reaction.date else None,
+                }
+            )
+
+        return json.dumps(
+            {
+                "message_id": message_id,
+                "chat_id": str(chat_id),
+                "reactions": reactions_data,
+                "count": len(reactions_data),
+            },
+            indent=2,
+            default=json_serializer,
+        )
+    except Exception as e:
+        logger.exception(
+            f"get_message_reactions failed (chat_id={chat_id}, message_id={message_id})"
+        )
+        return log_and_format_error(
+            "get_message_reactions", e, chat_id=chat_id, message_id=message_id
+        )
+
+
 async def _main() -> None:
     try:
         # Start the Telethon client non-interactively
