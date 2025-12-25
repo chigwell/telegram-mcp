@@ -41,6 +41,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **list_chats(chat_type, limit)**: List chats with metadata and filtering
 - **get_chat(chat_id)**: Detailed info about a chat
 - **create_group(title, user_ids)**: Create a new group
+- **invite_to_group(group_id, user_ids)**: Invite users to a group or channel
 - **create_channel(title, about, megagroup)**: Create a channel or supergroup
 - **edit_chat_title(chat_id, title)**: Change chat/group/channel title
 - **delete_chat_photo(chat_id)**: Remove chat/group/channel photo
