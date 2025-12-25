@@ -77,6 +77,9 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **create_poll(chat_id, question, options, multiple_choice, quiz_mode, public_votes, close_date)**: Create a poll
 - **list_inline_buttons(chat_id, message_id, limit)**: Inspect inline keyboards to discover button text/index
 - **press_inline_button(chat_id, message_id, button_text, button_index)**: Trigger inline keyboard callbacks by label or index
+-  **send_reaction(chat_id, message_id, emoji, big=False)**: Add a reaction to a message
+-  **remove_reaction(chat_id, message_id)**: Remove a reaction from a message
+-  **get_message_reactions(chat_id, message_id, limit=50)**: Get all reactions on a message
 
 ### Contact Management
 - **list_contacts()**: List all contacts
