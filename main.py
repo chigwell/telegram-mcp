@@ -944,9 +944,7 @@ async def list_chats(chat_type: str = None, limit: int = 20) -> str:
             # Also check unread_mark (manual "mark as unread" flag)
             inner_dialog = getattr(dialog, "dialog", None)
             unread_mark = (
-                bool(getattr(inner_dialog, "unread_mark", False))
-                if inner_dialog
-                else False
+                bool(getattr(inner_dialog, "unread_mark", False)) if inner_dialog else False
             )
 
             if unread_count > 0:
@@ -955,7 +953,7 @@ async def list_chats(chat_type: str = None, limit: int = 20) -> str:
                 chat_info += ", Unread: marked"
             else:
                 chat_info += ", No unread messages"
-            
+
             results.append(chat_info)
 
         if not results:
