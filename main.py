@@ -3420,6 +3420,145 @@ async def get_message_reactions(
         )
 
 
+# ============================================================================
+# DRAFT MANAGEMENT TOOLS
+# ============================================================================
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Save Draft", openWorldHint=True, destructiveHint=False, idempotentHint=True
+    )
+)
+@validate_id("chat_id")
+async def save_draft(
+    chat_id: Union[int, str],
+    message: str,
+    reply_to_msg_id: Optional[int] = None,
+    no_webpage: bool = False,
+) -> str:
+    """
+    Save a draft message to a chat or channel. The draft will appear in the Telegram
+    app's input field when you open that chat, allowing you to review and send it manually.
+
+    Args:
+        chat_id: The chat ID or username/channel to save the draft to
+        message: The draft message text
+        reply_to_msg_id: Optional message ID to reply to
+        no_webpage: If True, disable link preview in the draft
+    """
+    try:
+        peer = await client.get_input_entity(chat_id)
+
+        # Build reply_to parameter if provided
+        reply_to = None
+        if reply_to_msg_id:
+            from telethon.tl.types import InputReplyToMessage
+
+            reply_to = InputReplyToMessage(reply_to_msg_id=reply_to_msg_id)
+
+        await client(
+            functions.messages.SaveDraftRequest(
+                peer=peer,
+                message=message,
+                no_webpage=no_webpage,
+                reply_to=reply_to,
+            )
+        )
+
+        return f"Draft saved to chat {chat_id}. Open the chat in Telegram to see and send it."
+    except Exception as e:
+        logger.exception(f"save_draft failed (chat_id={chat_id})")
+        return log_and_format_error("save_draft", e, chat_id=chat_id)
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Get Drafts", openWorldHint=True, readOnlyHint=True))
+async def get_drafts() -> str:
+    """
+    Get all draft messages across all chats.
+    Returns a list of drafts with their chat info and message content.
+    """
+    try:
+        result = await client(functions.messages.GetAllDraftsRequest())
+
+        # The result contains updates with draft info
+        drafts_info = []
+
+        # GetAllDraftsRequest returns Updates object with updates array
+        if hasattr(result, "updates"):
+            for update in result.updates:
+                if hasattr(update, "draft") and update.draft:
+                    draft = update.draft
+                    peer_id = None
+
+                    # Extract peer ID based on type
+                    if hasattr(update, "peer"):
+                        peer = update.peer
+                        if hasattr(peer, "user_id"):
+                            peer_id = peer.user_id
+                        elif hasattr(peer, "chat_id"):
+                            peer_id = -peer.chat_id
+                        elif hasattr(peer, "channel_id"):
+                            peer_id = -1000000000000 - peer.channel_id
+
+                    draft_data = {
+                        "peer_id": peer_id,
+                        "message": getattr(draft, "message", ""),
+                        "date": (
+                            draft.date.isoformat()
+                            if hasattr(draft, "date") and draft.date
+                            else None
+                        ),
+                        "no_webpage": getattr(draft, "no_webpage", False),
+                        "reply_to_msg_id": (
+                            draft.reply_to.reply_to_msg_id
+                            if hasattr(draft, "reply_to") and draft.reply_to
+                            else None
+                        ),
+                    }
+                    drafts_info.append(draft_data)
+
+        if not drafts_info:
+            return "No drafts found."
+
+        return json.dumps(
+            {"drafts": drafts_info, "count": len(drafts_info)}, indent=2, default=json_serializer
+        )
+    except Exception as e:
+        logger.exception("get_drafts failed")
+        return log_and_format_error("get_drafts", e)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Clear Draft", openWorldHint=True, destructiveHint=True, idempotentHint=True
+    )
+)
+@validate_id("chat_id")
+async def clear_draft(chat_id: Union[int, str]) -> str:
+    """
+    Clear/delete a draft from a specific chat.
+
+    Args:
+        chat_id: The chat ID or username to clear the draft from
+    """
+    try:
+        peer = await client.get_input_entity(chat_id)
+
+        # Saving an empty message clears the draft
+        await client(
+            functions.messages.SaveDraftRequest(
+                peer=peer,
+                message="",
+            )
+        )
+
+        return f"Draft cleared from chat {chat_id}."
+    except Exception as e:
+        logger.exception(f"clear_draft failed (chat_id={chat_id})")
+        return log_and_format_error("clear_draft", e, chat_id=chat_id)
+
+
 async def _main() -> None:
     try:
         # Start the Telethon client non-interactively

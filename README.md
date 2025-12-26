@@ -125,6 +125,11 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **unarchive_chat(chat_id)**: Unarchive a chat
 - **get_recent_actions(chat_id)**: Get recent admin actions
 
+### Drafts
+- **save_draft(chat_id, message, reply_to_msg_id, no_webpage)**: Save a draft message to a chat/channel
+- **get_drafts()**: Get all draft messages across all chats
+- **clear_draft(chat_id)**: Clear/delete a draft from a specific chat
+
 ### Input Validation
 
 To improve robustness, all functions accepting `chat_id` or `user_id` parameters now include input validation. You can use any of the following formats for these IDs:
