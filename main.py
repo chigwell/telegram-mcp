@@ -946,7 +946,6 @@ async def list_chats(chat_type: str = None, limit: int = 20) -> str:
             unread_mark = bool(
                 getattr(inner_dialog, "unread_mark", False))
                 if inner_dialog else False
-                else False
 
             if unread_count > 0:
                 chat_info += f", Unread: {unread_count}"
