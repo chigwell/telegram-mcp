@@ -49,6 +49,8 @@ def get_credential(env_var: str, keychain_account: str) -> Optional[str]:
         return value
     # Fall back to environment variable
     return os.getenv(env_var)
+
+
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pythonjsonlogger import jsonlogger
