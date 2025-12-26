@@ -940,8 +940,19 @@ async def list_chats(chat_type: str = None, limit: int = 20) -> str:
                 chat_info += f", Username: @{entity.username}"
 
             # Add unread count if available
-            if hasattr(dialog, "unread_count") and dialog.unread_count > 0:
-                chat_info += f", Unread: {dialog.unread_count}"
+            unread_count = getattr(dialog, "unread_count", 0) or 0
+            # Also check unread_mark (manual "mark as unread" flag)
+            inner_dialog = getattr(dialog, "dialog", None)
+            unread_mark = (
+                bool(getattr(inner_dialog, "unread_mark", False)) if inner_dialog else False
+            )
+
+            if unread_count > 0:
+                chat_info += f", Unread: {unread_count}"
+            elif unread_mark:
+                chat_info += ", Unread: marked"
+            else:
+                chat_info += ", No unread messages"
 
             results.append(chat_info)
 
