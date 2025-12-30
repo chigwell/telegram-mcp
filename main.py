@@ -317,6 +317,23 @@ def get_sender_name(message) -> str:
         return "Unknown"
 
 
+def get_engagement_info(message) -> str:
+    """Helper function to get engagement metrics (views, forwards, reactions) from a message."""
+    engagement_parts = []
+    views = getattr(message, "views", None)
+    if views is not None:
+        engagement_parts.append(f"views:{views}")
+    forwards = getattr(message, "forwards", None)
+    if forwards is not None:
+        engagement_parts.append(f"forwards:{forwards}")
+    reactions = getattr(message, "reactions", None)
+    if reactions is not None:
+        results = getattr(reactions, "results", None)
+        total_reactions = sum(getattr(r, "count", 0) or 0 for r in results) if results else 0
+        engagement_parts.append(f"reactions:{total_reactions}")
+    return f" | {', '.join(engagement_parts)}" if engagement_parts else ""
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Get Chats", openWorldHint=True, readOnlyHint=True))
 async def get_chats(page: int = 1, page_size: int = 20) -> str:
     """
@@ -365,8 +382,11 @@ async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int =
             reply_info = ""
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
+
+            engagement_info = get_engagement_info(msg)
+
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {msg.message}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info} | Message: {msg.message}"
             )
         return "\n".join(lines)
     except Exception as e:
@@ -796,8 +816,10 @@ async def list_messages(
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
 
+            engagement_info = get_engagement_info(msg)
+
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {message_text}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info} | Message: {message_text}"
             )
 
         return "\n".join(lines)
