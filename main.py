@@ -3668,7 +3668,9 @@ async def get_folder(folder_id: int) -> str:
                 break
 
         if not target_folder:
-            return f"Folder with ID {folder_id} not found. Use list_folders to see available folders."
+            return (
+                f"Folder with ID {folder_id} not found. Use list_folders to see available folders."
+            )
 
         # Resolve included peers to readable names
         included_chats = []
@@ -3677,7 +3679,8 @@ async def get_folder(folder_id: int) -> str:
                 entity = await client.get_entity(peer)
                 chat_info = {
                     "id": entity.id,
-                    "name": getattr(entity, "title", None) or getattr(entity, "first_name", "Unknown"),
+                    "name": getattr(entity, "title", None)
+                    or getattr(entity, "first_name", "Unknown"),
                     "type": type(entity).__name__,
                 }
                 if hasattr(entity, "username") and entity.username:
@@ -3693,7 +3696,8 @@ async def get_folder(folder_id: int) -> str:
                 entity = await client.get_entity(peer)
                 chat_info = {
                     "id": entity.id,
-                    "name": getattr(entity, "title", None) or getattr(entity, "first_name", "Unknown"),
+                    "name": getattr(entity, "title", None)
+                    or getattr(entity, "first_name", "Unknown"),
                     "type": type(entity).__name__,
                 }
                 excluded_chats.append(chat_info)
@@ -3707,7 +3711,8 @@ async def get_folder(folder_id: int) -> str:
                 entity = await client.get_entity(peer)
                 chat_info = {
                     "id": entity.id,
-                    "name": getattr(entity, "title", None) or getattr(entity, "first_name", "Unknown"),
+                    "name": getattr(entity, "title", None)
+                    or getattr(entity, "first_name", "Unknown"),
                     "type": type(entity).__name__,
                 }
                 pinned_chats.append(chat_info)
@@ -3872,7 +3877,9 @@ async def add_chat_to_folder(
                 break
 
         if not target_folder:
-            return f"Folder with ID {folder_id} not found. Use list_folders to see available folders."
+            return (
+                f"Folder with ID {folder_id} not found. Use list_folders to see available folders."
+            )
 
         # Resolve chat to input peer
         try:
@@ -3922,7 +3929,9 @@ async def add_chat_to_folder(
             functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter)
         )
 
-        return f"Chat {chat_id} added to folder {folder_id}" + (" (pinned)" if pinned else "") + "."
+        return (
+            f"Chat {chat_id} added to folder {folder_id}" + (" (pinned)" if pinned else "") + "."
+        )
     except Exception as e:
         logger.exception(f"add_chat_to_folder failed (folder_id={folder_id}, chat_id={chat_id})")
         return log_and_format_error(
@@ -3958,7 +3967,9 @@ async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str]) -> s
                 break
 
         if not target_folder:
-            return f"Folder with ID {folder_id} not found. Use list_folders to see available folders."
+            return (
+                f"Folder with ID {folder_id} not found. Use list_folders to see available folders."
+            )
 
         # Resolve chat to get peer ID
         try:
@@ -3969,17 +3980,24 @@ async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str]) -> s
 
         # Filter out the peer from both include and pinned lists
         include_peers = [
-            p for p in getattr(target_folder, "include_peers", []) if utils.get_peer_id(p) != peer_id
+            p
+            for p in getattr(target_folder, "include_peers", [])
+            if utils.get_peer_id(p) != peer_id
         ]
         pinned_peers = [
-            p for p in getattr(target_folder, "pinned_peers", []) if utils.get_peer_id(p) != peer_id
+            p
+            for p in getattr(target_folder, "pinned_peers", [])
+            if utils.get_peer_id(p) != peer_id
         ]
 
         original_include_count = len(getattr(target_folder, "include_peers", []))
         original_pinned_count = len(getattr(target_folder, "pinned_peers", []))
 
         # Check if anything was removed (idempotent)
-        if len(include_peers) == original_include_count and len(pinned_peers) == original_pinned_count:
+        if (
+            len(include_peers) == original_include_count
+            and len(pinned_peers) == original_pinned_count
+        ):
             return f"Chat {chat_id} was not in folder {folder_id}."
 
         # Update the folder (keep all original attributes)
@@ -4012,7 +4030,11 @@ async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str]) -> s
             f"remove_chat_from_folder failed (folder_id={folder_id}, chat_id={chat_id})"
         )
         return log_and_format_error(
-            "remove_chat_from_folder", e, ErrorCategory.FOLDER, folder_id=folder_id, chat_id=chat_id
+            "remove_chat_from_folder",
+            e,
+            ErrorCategory.FOLDER,
+            folder_id=folder_id,
+            chat_id=chat_id,
         )
 
 
@@ -4097,7 +4119,9 @@ async def reorder_folders(folder_ids: List[int]) -> str:
         return f"Folders reordered: {folder_ids}"
     except Exception as e:
         logger.exception(f"reorder_folders failed (folder_ids={folder_ids})")
-        return log_and_format_error("reorder_folders", e, ErrorCategory.FOLDER, folder_ids=folder_ids)
+        return log_and_format_error(
+            "reorder_folders", e, ErrorCategory.FOLDER, folder_ids=folder_ids
+        )
 
 
 async def _main() -> None:
