@@ -36,11 +36,14 @@ dependencies = [
 "Homepage" = "https://github.com/chigwell/telegram-mcp"
 "Bug Tracker" = "https://github.com/chigwell/telegram-mcp/issues"
 
-[tool.setuptools]
-py-modules = ["main", "session_string_generator"]
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
 
 [project.scripts]
-telegram-mcp = "main:main"
+telegram-mcp = "telegram_mcp:main"
 telegram-mcp-generate-session = "session_string_generator:main"
 
 [tool.black]
@@ -64,4 +67,6 @@ exclude = [
 dev = [
     "black>=25.9.0",
     "flake8>=7.3.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
 ]
