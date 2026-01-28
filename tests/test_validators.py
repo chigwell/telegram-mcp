@@ -1,15 +1,10 @@
+"""Tests for the validate_id decorator and validation functions."""
+
 import pytest
-import os
-
-os.environ["TELEGRAM_API_ID"] = "12345"
-os.environ["TELEGRAM_API_HASH"] = "dummy_hash"
-from main import validate_id, ValidationError, log_and_format_error
-from functools import wraps
-import asyncio
-from typing import Union, List, Optional
+from telegram_mcp.validators import validate_id
+from telegram_mcp.exceptions import ValidationError
 
 
-# A simple async function to be decorated for testing
 @validate_id("user_id", "chat_id", "user_ids")
 async def dummy_function(**kwargs):
     return "success", kwargs
