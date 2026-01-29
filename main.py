@@ -1300,34 +1300,41 @@ async def get_message_context(
         title="Add Contact", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
-async def add_contact(phone: str, first_name: str, last_name: str = "") -> str:
+async def add_contact(phone: Optional[str] = None, first_name: str = "", last_name: str = "", username: Optional[str] = None) -> str:
     """
     Add a new contact to your Telegram account.
     Args:
-        phone: The phone number of the contact (with country code) OR username (starting with @) OR empty string for username-based addition.
+        phone: The phone number of the contact (with country code). Required if username is not provided.
         first_name: The contact's first name.
         last_name: The contact's last name (optional).
+        username: The Telegram username (without @). Use this for adding contacts without phone numbers.
     
-    Note: If phone is empty or starts with @, the function will try to resolve it as a username
+    Note: Either phone or username must be provided. If username is provided, the function will resolve it
     and add the contact using contacts.addContact API (which supports adding contacts without phone numbers).
     """
     try:
-        # Check if phone is empty or is a username (starts with @)
-        is_username = not phone or phone.startswith("@")
+        # Normalize None to empty string for easier checking
+        phone = phone or ""
+        username = username or ""
         
-        if is_username:
-            # Handle username-based contact addition
-            username = phone.lstrip("@") if phone else ""
-            if not username:
-                return "Error: Username cannot be empty when adding contact by username."
+        # Validate that at least one identifier is provided
+        if not phone and not username:
+            return "Error: Either phone or username must be provided."
+        
+        # If username is provided, use it for username-based contact addition
+        if username:
+            # Remove @ if present
+            username_clean = username.lstrip("@")
+            if not username_clean:
+                return "Error: Username cannot be empty."
             
             # Resolve username to get user information
             try:
-                resolve_result = await client(functions.contacts.ResolveUsernameRequest(username=username))
+                resolve_result = await client(functions.contacts.ResolveUsernameRequest(username=username_clean))
                 
                 # Extract user from the result
                 if not resolve_result.users:
-                    return f"Error: User with username @{username} not found."
+                    return f"Error: User with username @{username_clean} not found."
                 
                 user = resolve_result.users[0]
                 if not isinstance(user, User):
@@ -1349,15 +1356,15 @@ async def add_contact(phone: str, first_name: str, last_name: str = "") -> str:
                 )
                 
                 if hasattr(result, "updates") and result.updates:
-                    return f"Contact {first_name} {last_name} (@{username}) added successfully."
+                    return f"Contact {first_name} {last_name} (@{username_clean}) added successfully."
                 else:
-                    return f"Contact {first_name} {last_name} (@{username}) added successfully (no updates returned)."
+                    return f"Contact {first_name} {last_name} (@{username_clean}) added successfully (no updates returned)."
                     
             except Exception as resolve_e:
-                logger.exception(f"add_contact (username resolve) failed (username={username})")
-                return log_and_format_error("add_contact", resolve_e, username=username)
+                logger.exception(f"add_contact (username resolve) failed (username={username_clean})")
+                return log_and_format_error("add_contact", resolve_e, username=username_clean)
         
-        else:
+        elif phone:
             # Original phone-based contact addition
             from telethon.tl.types import InputPhoneContact
 
@@ -1377,11 +1384,11 @@ async def add_contact(phone: str, first_name: str, last_name: str = "") -> str:
                 return f"Contact {first_name} {last_name} added successfully."
             else:
                 return f"Contact not added. Response: {str(result)}"
+        else:
+            return "Error: Phone number is required when username is not provided."
     except (ImportError, AttributeError) as type_err:
         # Try alternative approach using raw API (only for phone-based)
-        # Check if phone is empty or is a username (starts with @)
-        is_username_alt = not phone or phone.startswith("@")
-        if not is_username_alt:
+        if phone and not username:
             try:
                 result = await client(
                     functions.contacts.ImportContactsRequest(
@@ -1403,11 +1410,11 @@ async def add_contact(phone: str, first_name: str, last_name: str = "") -> str:
                 logger.exception(f"add_contact (alt method) failed (phone={phone})")
                 return log_and_format_error("add_contact", alt_e, phone=phone)
         else:
-            logger.exception(f"add_contact (type error for username) failed")
+            logger.exception(f"add_contact (type error) failed")
             return log_and_format_error("add_contact", type_err)
     except Exception as e:
-        logger.exception(f"add_contact failed (phone={phone})")
-        return log_and_format_error("add_contact", e, phone=phone)
+        logger.exception(f"add_contact failed (phone={phone}, username={username})")
+        return log_and_format_error("add_contact", e, phone=phone, username=username)
 
 
 @mcp.tool(
