@@ -1304,52 +1304,107 @@ async def add_contact(phone: str, first_name: str, last_name: str = "") -> str:
     """
     Add a new contact to your Telegram account.
     Args:
-        phone: The phone number of the contact (with country code).
+        phone: The phone number of the contact (with country code) OR username (starting with @) OR empty string for username-based addition.
         first_name: The contact's first name.
         last_name: The contact's last name (optional).
+    
+    Note: If phone is empty or starts with @, the function will try to resolve it as a username
+    and add the contact using contacts.addContact API (which supports adding contacts without phone numbers).
     """
     try:
-        # Try to import the required types first
-        from telethon.tl.types import InputPhoneContact
-
-        result = await client(
-            functions.contacts.ImportContactsRequest(
-                contacts=[
-                    InputPhoneContact(
-                        client_id=0,
-                        phone=phone,
+        # Check if phone is empty or is a username (starts with @)
+        is_username = not phone or phone.startswith("@")
+        
+        if is_username:
+            # Handle username-based contact addition
+            username = phone.lstrip("@") if phone else ""
+            if not username:
+                return "Error: Username cannot be empty when adding contact by username."
+            
+            # Resolve username to get user information
+            try:
+                resolve_result = await client(functions.contacts.ResolveUsernameRequest(username=username))
+                
+                # Extract user from the result
+                if not resolve_result.users:
+                    return f"Error: User with username @{username} not found."
+                
+                user = resolve_result.users[0]
+                if not isinstance(user, User):
+                    return f"Error: Resolved entity is not a user."
+                
+                user_id = user.id
+                access_hash = user.access_hash
+                
+                # Use contacts.addContact to add the contact by user ID
+                from telethon.tl.types import InputUser
+                
+                result = await client(
+                    functions.contacts.AddContactRequest(
+                        id=InputUser(user_id=user_id, access_hash=access_hash),
                         first_name=first_name,
                         last_name=last_name,
+                        phone="",  # Empty phone for username-based contacts
                     )
-                ]
-            )
-        )
-        if result.imported:
-            return f"Contact {first_name} {last_name} added successfully."
+                )
+                
+                if hasattr(result, "updates") and result.updates:
+                    return f"Contact {first_name} {last_name} (@{username}) added successfully."
+                else:
+                    return f"Contact {first_name} {last_name} (@{username}) added successfully (no updates returned)."
+                    
+            except Exception as resolve_e:
+                logger.exception(f"add_contact (username resolve) failed (username={username})")
+                return log_and_format_error("add_contact", resolve_e, username=username)
+        
         else:
-            return f"Contact not added. Response: {str(result)}"
-    except (ImportError, AttributeError) as type_err:
-        # Try alternative approach using raw API
-        try:
+            # Original phone-based contact addition
+            from telethon.tl.types import InputPhoneContact
+
             result = await client(
                 functions.contacts.ImportContactsRequest(
                     contacts=[
-                        {
-                            "client_id": 0,
-                            "phone": phone,
-                            "first_name": first_name,
-                            "last_name": last_name,
-                        }
+                        InputPhoneContact(
+                            client_id=0,
+                            phone=phone,
+                            first_name=first_name,
+                            last_name=last_name,
+                        )
                     ]
                 )
             )
-            if hasattr(result, "imported") and result.imported:
-                return f"Contact {first_name} {last_name} added successfully (alt method)."
+            if result.imported:
+                return f"Contact {first_name} {last_name} added successfully."
             else:
-                return f"Contact not added. Alternative method response: {str(result)}"
-        except Exception as alt_e:
-            logger.exception(f"add_contact (alt method) failed (phone={phone})")
-            return log_and_format_error("add_contact", alt_e, phone=phone)
+                return f"Contact not added. Response: {str(result)}"
+    except (ImportError, AttributeError) as type_err:
+        # Try alternative approach using raw API (only for phone-based)
+        # Check if phone is empty or is a username (starts with @)
+        is_username_alt = not phone or phone.startswith("@")
+        if not is_username_alt:
+            try:
+                result = await client(
+                    functions.contacts.ImportContactsRequest(
+                        contacts=[
+                            {
+                                "client_id": 0,
+                                "phone": phone,
+                                "first_name": first_name,
+                                "last_name": last_name,
+                            }
+                        ]
+                    )
+                )
+                if hasattr(result, "imported") and result.imported:
+                    return f"Contact {first_name} {last_name} added successfully (alt method)."
+                else:
+                    return f"Contact not added. Alternative method response: {str(result)}"
+            except Exception as alt_e:
+                logger.exception(f"add_contact (alt method) failed (phone={phone})")
+                return log_and_format_error("add_contact", alt_e, phone=phone)
+        else:
+            logger.exception(f"add_contact (type error for username) failed")
+            return log_and_format_error("add_contact", type_err)
     except Exception as e:
         logger.exception(f"add_contact failed (phone={phone})")
         return log_and_format_error("add_contact", e, phone=phone)
