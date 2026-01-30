@@ -174,7 +174,7 @@ uv sync
 ```
 
 ### 3. Generate a Session String (Optional)
-The server needs a session string to interact with Telegram. The `init_telegram` and `verify_telegram` tools log in the user and save their session string in the `.env`. For most use cases, this should suffice. However, ìf for your use case you require that the there is a valid session before running the MCP, you can first run  
+The server needs a session string to interact with Telegram. The `init_telegram` and `verify_telegram` tools log in the user and save their session string in the `.env`. For most use cases, this should suffice. However, if for your use case you require that the there is a valid session before running the MCP, you can first run  
 ```bash
 uv run session_string_generator.py
 ```
