@@ -75,6 +75,12 @@ else:
     # Use file-based session
     client = TelegramClient(TELEGRAM_SESSION_NAME, TELEGRAM_API_ID, TELEGRAM_API_HASH)
 
+# Track whether the Telegram client is authorized
+_telegram_authorized = False
+# Temporary client and phone used during re-authentication flow
+_reauth_client = None
+_reauth_phone = None
+
 # Setup robust logging with both file and console output
 logger = logging.getLogger("telegram_mcp")
 logger.setLevel(logging.ERROR)  # Set to ERROR for production, INFO for debugging
@@ -336,6 +342,117 @@ def get_engagement_info(message) -> str:
         total_reactions = sum(getattr(r, "count", 0) or 0 for r in results) if results else 0
         engagement_parts.append(f"reactions:{total_reactions}")
     return f" | {', '.join(engagement_parts)}" if engagement_parts else ""
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Init Telegram Login", openWorldHint=True, destructiveHint=True))
+async def init_telegram(phone: str) -> str:
+    """
+    Start Telegram re-authentication. Call this when the session has expired.
+    Sends a verification code to the given phone number.
+    After calling this, ask the user for the code and call verify_telegram().
+
+    Args:
+        phone: Phone number with country code, e.g. +14155552671
+    """
+    global _reauth_client, _reauth_phone
+    try:
+        _reauth_client = TelegramClient(
+            StringSession(), TELEGRAM_API_ID, TELEGRAM_API_HASH
+        )
+        await _reauth_client.connect()
+        await _reauth_client.send_code_request(phone)
+        _reauth_phone = phone
+        return (
+            f"Verification code sent to {phone}. "
+            "Please ask the user for the code, then call verify_telegram(code=...) to complete login."
+        )
+    except Exception as e:
+        _reauth_client = None
+        _reauth_phone = None
+        return f"Failed to send verification code: {e}"
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Verify Telegram Login", openWorldHint=True, destructiveHint=True))
+async def verify_telegram(code: str, password: Optional[str] = None) -> str:
+    """
+    Complete Telegram re-authentication with the verification code.
+    Call this after init_telegram() has sent a code to the user's phone.
+
+    Args:
+        code: The verification code received on Telegram.
+        password: Two-factor authentication password, if enabled.
+    """
+    global _reauth_client, _reauth_phone, _telegram_authorized, client
+    if _reauth_client is None or _reauth_phone is None:
+        return "No pending login. Call init_telegram(phone=...) first."
+    try:
+        try:
+            await _reauth_client.sign_in(_reauth_phone, code)
+        except telethon.errors.rpcerrorlist.SessionPasswordNeededError:
+            if not password:
+                return (
+                    "Two-factor authentication is enabled. "
+                    "Call verify_telegram(code=..., password=...) with the 2FA password."
+                )
+            await _reauth_client.sign_in(password=password)
+
+        # Save new session string to .env
+        new_session_string = StringSession.save(_reauth_client.session)
+        env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+        with open(env_path, "r") as f:
+            lines = f.readlines()
+
+        updated = False
+        for i, line in enumerate(lines):
+            if line.startswith("TELEGRAM_SESSION_STRING="):
+                lines[i] = f"TELEGRAM_SESSION_STRING={new_session_string}\n"
+                updated = True
+                break
+        if not updated:
+            lines.append(f"TELEGRAM_SESSION_STRING={new_session_string}\n")
+
+        with open(env_path, "w") as f:
+            f.writelines(lines)
+
+        # Replace the global client with the newly authenticated one
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        client = _reauth_client
+        _telegram_authorized = True
+        _reauth_client = None
+        _reauth_phone = None
+
+        return (
+            f"Login successful! Session saved to {env_path}. "
+            "Telegram tools are now ready to use."
+        )
+    except Exception as e:
+        return f"Login failed: {e}"
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Check Telegram Status", readOnlyHint=True))
+async def check_telegram_status() -> str:
+    """
+    Check whether the Telegram client is connected and authorized.
+    Use this to verify the session is working before calling other tools.
+    """
+    
+    try:
+        connected = client.is_connected()
+        if not connected:
+            return "Status: DISCONNECTED. The Telegram client is not connected. Try calling init_telegram() to re-authenticate."
+        if not _telegram_authorized:
+            return "Status: NOT AUTHORIZED. The client is connected but the session is expired or invalid. Call init_telegram(phone=...) to re-authenticate."
+        me = await asyncio.wait_for(client.get_me(), timeout=5)
+        name = f"{me.first_name or ''} {me.last_name or ''}".strip()
+        username = f" (@{me.username})" if me.username else ""
+        return f"Status: OK. Logged in as {name}{username} (ID: {me.id})."
+    except asyncio.TimeoutError:
+        return "Status: TIMEOUT. The client is connected and authorized but Telegram is not responding. Check your network connection."
+    except Exception as e:
+        return f"Status: ERROR. {e}"
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chats", openWorldHint=True, readOnlyHint=True))
@@ -4124,17 +4241,39 @@ async def reorder_folders(folder_ids: List[int]) -> str:
         )
 
 
+async def _check_telegram_auth() -> None:
+    """Background task: connect to Telegram and check if the session is valid."""
+    global _telegram_authorized
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    env_file = os.path.join(script_dir, ".env")
+    try:
+        await client.connect()
+        if await client.is_user_authorized():
+            _telegram_authorized = True
+            print("Telegram client authorized.", file=sys.stderr)
+        else:
+            print(
+                "WARNING: Telegram session expired or invalid.\n"
+                "Telegram tools won't work until you re-authenticate.\n"
+                "Claude can re-authenticate by calling the init_telegram and verify_telegram tools.\n"
+                "Or run manually from a terminal:\n"
+                f"  cd {script_dir} && .venv\\Scripts\\python.exe main.py --login\n"
+                f"Session file: {env_file}",
+                file=sys.stderr,
+            )
+    except Exception as e:
+        print(f"Telegram connection error: {e}", file=sys.stderr)
+
+
 async def _main() -> None:
     try:
-        # Start the Telethon client non-interactively
-        print("Starting Telegram client...")
-        await client.start()
+        # Check Telegram auth in the background — don't block MCP startup
+        asyncio.create_task(_check_telegram_auth())
 
-        print("Telegram client started. Running MCP server...")
-        # Use the asynchronous entrypoint instead of mcp.run()
+        # Start MCP server immediately so it can respond to initialize
         await mcp.run_stdio_async()
     except Exception as e:
-        print(f"Error starting client: {e}", file=sys.stderr)
+        print(f"Error starting server: {e}", file=sys.stderr)
         if isinstance(e, sqlite3.OperationalError) and "database is locked" in str(e):
             print(
                 "Database lock detected. Please ensure no other instances are running.",
@@ -4143,9 +4282,50 @@ async def _main() -> None:
         sys.exit(1)
 
 
+async def _interactive_login() -> None:
+    """Interactive login when run from a terminal with --login."""
+    new_client = TelegramClient(
+        StringSession(), TELEGRAM_API_ID, TELEGRAM_API_HASH
+    )
+    await new_client.connect()
+    phone = input("Enter your phone number (with country code, e.g. +1...): ")
+    await new_client.send_code_request(phone)
+    code = input("Enter the verification code sent to your Telegram: ")
+    try:
+        await new_client.sign_in(phone, code)
+    except telethon.errors.rpcerrorlist.SessionPasswordNeededError:
+        password = input("Two-factor authentication enabled. Enter your password: ")
+        await new_client.sign_in(password=password)
+
+    new_session_string = StringSession.save(new_client.session)
+    await new_client.disconnect()
+
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    with open(env_path, "r") as f:
+        lines = f.readlines()
+
+    updated = False
+    for i, line in enumerate(lines):
+        if line.startswith("TELEGRAM_SESSION_STRING="):
+            lines[i] = f"TELEGRAM_SESSION_STRING={new_session_string}\n"
+            updated = True
+            break
+    if not updated:
+        lines.append(f"TELEGRAM_SESSION_STRING={new_session_string}\n")
+
+    with open(env_path, "w") as f:
+        f.writelines(lines)
+
+    print(f"\nNew session saved to {env_path}")
+    print("You can now restart the MCP server.")
+
+
 def main() -> None:
     nest_asyncio.apply()
-    asyncio.run(_main())
+    if "--login" in sys.argv:
+        asyncio.run(_interactive_login())
+    else:
+        asyncio.run(_main())
 
 
 if __name__ == "__main__":
