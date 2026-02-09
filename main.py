@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pythonjsonlogger import jsonlogger
-from telethon import TelegramClient, functions, utils
+from telethon import TelegramClient, functions, types, utils
 from telethon.sessions import StringSession
 from telethon.tl.types import (
     User,
@@ -2870,9 +2870,11 @@ async def archive_chat(chat_id: Union[int, str]) -> str:
     Archive a chat.
     """
     try:
+        entity = await client.get_entity(chat_id)
+        peer = utils.get_input_peer(entity)
         await client(
-            functions.messages.ToggleDialogPinRequest(
-                peer=await client.get_entity(chat_id), pinned=True
+            functions.folders.EditPeerFoldersRequest(
+                folder_peers=[types.InputFolderPeer(peer=peer, folder_id=1)]
             )
         )
         return f"Chat {chat_id} archived."
@@ -2891,9 +2893,11 @@ async def unarchive_chat(chat_id: Union[int, str]) -> str:
     Unarchive a chat.
     """
     try:
+        entity = await client.get_entity(chat_id)
+        peer = utils.get_input_peer(entity)
         await client(
-            functions.messages.ToggleDialogPinRequest(
-                peer=await client.get_entity(chat_id), pinned=False
+            functions.folders.EditPeerFoldersRequest(
+                folder_peers=[types.InputFolderPeer(peer=peer, folder_id=0)]
             )
         )
         return f"Chat {chat_id} unarchived."
