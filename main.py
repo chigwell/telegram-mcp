@@ -57,6 +57,31 @@ def json_serializer(obj):
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
+def get_entity_type(entity: Any) -> str:
+    """Return a normalized, human-readable chat/entity type."""
+    if isinstance(entity, User):
+        return "User"
+    if isinstance(entity, Chat):
+        return "Group (Basic)"
+    if isinstance(entity, Channel):
+        if getattr(entity, "megagroup", False):
+            return "Supergroup"
+        return "Channel" if getattr(entity, "broadcast", False) else "Group"
+    return type(entity).__name__
+
+
+def get_entity_filter_type(entity: Any) -> Optional[str]:
+    """Return list_chats-compatible filter type: user/group/channel."""
+    entity_type = get_entity_type(entity)
+    if entity_type == "User":
+        return "user"
+    if entity_type in ("Group (Basic)", "Group", "Supergroup"):
+        return "group"
+    if entity_type == "Channel":
+        return "channel"
+    return None
+
+
 load_dotenv()
 
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID"))
@@ -935,16 +960,7 @@ async def list_chats(chat_type: str = None, limit: int = 20) -> str:
             entity = dialog.entity
 
             # Filter by type if requested
-            current_type = None
-            if isinstance(entity, User):
-                current_type = "user"
-            elif isinstance(entity, Chat):
-                current_type = "group"
-            elif isinstance(entity, Channel):
-                if getattr(entity, "broadcast", False):
-                    current_type = "channel"
-                else:
-                    current_type = "group"  # Supergroup
+            current_type = get_entity_filter_type(entity)
 
             if chat_type and current_type != chat_type.lower():
                 continue
@@ -960,7 +976,7 @@ async def list_chats(chat_type: str = None, limit: int = 20) -> str:
                     name += f" {entity.last_name}"
                 chat_info += f", Name: {name}"
 
-            chat_info += f", Type: {current_type}"
+            chat_info += f", Type: {get_entity_type(entity)}"
 
             if hasattr(entity, "username") and entity.username:
                 chat_info += f", Username: @{entity.username}"
@@ -1005,20 +1021,11 @@ async def get_chat(chat_id: Union[int, str]) -> str:
         result = []
         result.append(f"ID: {entity.id}")
 
-        is_channel = isinstance(entity, Channel)
-        is_chat = isinstance(entity, Chat)
         is_user = isinstance(entity, User)
 
         if hasattr(entity, "title"):
             result.append(f"Title: {entity.title}")
-            chat_type = (
-                "Channel" if is_channel and getattr(entity, "broadcast", False) else "Group"
-            )
-            if is_channel and getattr(entity, "megagroup", False):
-                chat_type = "Supergroup"
-            elif is_chat:
-                chat_type = "Group (Basic)"
-            result.append(f"Type: {chat_type}")
+            result.append(f"Type: {get_entity_type(entity)}")
             if hasattr(entity, "username") and entity.username:
                 result.append(f"Username: @{entity.username}")
 
@@ -1034,7 +1041,7 @@ async def get_chat(chat_id: Union[int, str]) -> str:
             if entity.last_name:
                 name += f" {entity.last_name}"
             result.append(f"Name: {name}")
-            result.append(f"Type: User")
+            result.append(f"Type: {get_entity_type(entity)}")
             if entity.username:
                 result.append(f"Username: @{entity.username}")
             if entity.phone:
@@ -1171,7 +1178,7 @@ async def get_contact_chats(contact_id: Union[int, str]) -> str:
         try:
             common = await client.get_common_chats(contact)
             for chat in common:
-                chat_type = "Channel" if getattr(chat, "broadcast", False) else "Group"
+                chat_type = get_entity_type(chat)
                 chat_info = f"Chat ID: {chat.id}, Title: {chat.title}, Type: {chat_type}"
                 results.append(chat_info)
         except:
@@ -3758,7 +3765,7 @@ async def get_folder(folder_id: int) -> str:
                     "id": entity.id,
                     "name": getattr(entity, "title", None)
                     or getattr(entity, "first_name", "Unknown"),
-                    "type": type(entity).__name__,
+                    "type": get_entity_type(entity),
                 }
                 if hasattr(entity, "username") and entity.username:
                     chat_info["username"] = entity.username
@@ -3775,7 +3782,7 @@ async def get_folder(folder_id: int) -> str:
                     "id": entity.id,
                     "name": getattr(entity, "title", None)
                     or getattr(entity, "first_name", "Unknown"),
-                    "type": type(entity).__name__,
+                    "type": get_entity_type(entity),
                 }
                 excluded_chats.append(chat_info)
             except Exception:
@@ -3790,7 +3797,7 @@ async def get_folder(folder_id: int) -> str:
                     "id": entity.id,
                     "name": getattr(entity, "title", None)
                     or getattr(entity, "first_name", "Unknown"),
-                    "type": type(entity).__name__,
+                    "type": get_entity_type(entity),
                 }
                 pinned_chats.append(chat_info)
             except Exception:
