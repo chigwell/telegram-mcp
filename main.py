@@ -1300,7 +1300,12 @@ async def get_message_context(
         title="Add Contact", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
-async def add_contact(phone: Optional[str] = None, first_name: str = "", last_name: str = "", username: Optional[str] = None) -> str:
+async def add_contact(
+    phone: Optional[str] = None,
+    first_name: str = "",
+    last_name: str = "",
+    username: Optional[str] = None,
+) -> str:
     """
     Add a new contact to your Telegram account.
     Args:
@@ -1308,7 +1313,7 @@ async def add_contact(phone: Optional[str] = None, first_name: str = "", last_na
         first_name: The contact's first name.
         last_name: The contact's last name (optional).
         username: The Telegram username (without @). Use this for adding contacts without phone numbers.
-    
+
     Note: Either phone or username must be provided. If username is provided, the function will resolve it
     and add the contact using contacts.addContact API (which supports adding contacts without phone numbers).
     """
@@ -1316,36 +1321,38 @@ async def add_contact(phone: Optional[str] = None, first_name: str = "", last_na
         # Normalize None to empty string for easier checking
         phone = phone or ""
         username = username or ""
-        
+
         # Validate that at least one identifier is provided
         if not phone and not username:
             return "Error: Either phone or username must be provided."
-        
+
         # If username is provided, use it for username-based contact addition
         if username:
             # Remove @ if present
             username_clean = username.lstrip("@")
             if not username_clean:
                 return "Error: Username cannot be empty."
-            
+
             # Resolve username to get user information
             try:
-                resolve_result = await client(functions.contacts.ResolveUsernameRequest(username=username_clean))
-                
+                resolve_result = await client(
+                    functions.contacts.ResolveUsernameRequest(username=username_clean)
+                )
+
                 # Extract user from the result
                 if not resolve_result.users:
                     return f"Error: User with username @{username_clean} not found."
-                
+
                 user = resolve_result.users[0]
                 if not isinstance(user, User):
                     return f"Error: Resolved entity is not a user."
-                
+
                 user_id = user.id
                 access_hash = user.access_hash
-                
+
                 # Use contacts.addContact to add the contact by user ID
                 from telethon.tl.types import InputUser
-                
+
                 result = await client(
                     functions.contacts.AddContactRequest(
                         id=InputUser(user_id=user_id, access_hash=access_hash),
@@ -1354,16 +1361,20 @@ async def add_contact(phone: Optional[str] = None, first_name: str = "", last_na
                         phone="",  # Empty phone for username-based contacts
                     )
                 )
-                
+
                 if hasattr(result, "updates") and result.updates:
-                    return f"Contact {first_name} {last_name} (@{username_clean}) added successfully."
+                    return (
+                        f"Contact {first_name} {last_name} (@{username_clean}) added successfully."
+                    )
                 else:
                     return f"Contact {first_name} {last_name} (@{username_clean}) added successfully (no updates returned)."
-                    
+
             except Exception as resolve_e:
-                logger.exception(f"add_contact (username resolve) failed (username={username_clean})")
+                logger.exception(
+                    f"add_contact (username resolve) failed (username={username_clean})"
+                )
                 return log_and_format_error("add_contact", resolve_e, username=username_clean)
-        
+
         elif phone:
             # Original phone-based contact addition
             from telethon.tl.types import InputPhoneContact
