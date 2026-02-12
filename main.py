@@ -6,6 +6,8 @@ import asyncio
 import sqlite3
 import logging
 import mimetypes
+import subprocess
+import platform
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import List, Dict, Optional, Union, Any
@@ -13,6 +15,42 @@ from typing import List, Dict, Optional, Union, Any
 # Third-party libraries
 import nest_asyncio
 from dotenv import load_dotenv
+
+
+def get_credential_from_keychain(account: str, service: str = "telegram-mcp") -> Optional[str]:
+    """
+    Retrieve a credential from macOS Keychain.
+    Returns None if not on macOS or if credential not found.
+    """
+    if platform.system() != "Darwin":
+        return None
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-a", account, "-s", service, "-w"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
+def get_credential(env_var: str, keychain_account: str) -> Optional[str]:
+    """
+    Get credential from Keychain first, then fall back to environment variable.
+    This provides better security on macOS by avoiding plain text .env files.
+    """
+    # Try Keychain first (more secure)
+    value = get_credential_from_keychain(keychain_account)
+    if value:
+        return value
+    # Fall back to environment variable
+    return os.getenv(env_var)
+
+
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pythonjsonlogger import jsonlogger
@@ -84,12 +122,18 @@ def get_entity_filter_type(entity: Any) -> Optional[str]:
 
 load_dotenv()
 
-TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID"))
-TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
-TELEGRAM_SESSION_NAME = os.getenv("TELEGRAM_SESSION_NAME")
+# Load credentials from Keychain (preferred on macOS) or environment variables (fallback)
+# To use Keychain, store credentials with:
+#   security add-generic-password -a "api_id" -s "telegram-mcp" -w "YOUR_API_ID" -U
+#   security add-generic-password -a "api_hash" -s "telegram-mcp" -w "YOUR_API_HASH" -U
+#   security add-generic-password -a "session_string" -s "telegram-mcp" -w "YOUR_SESSION_STRING" -U
+_api_id = get_credential("TELEGRAM_API_ID", "api_id")
+TELEGRAM_API_ID = int(_api_id) if _api_id else None
+TELEGRAM_API_HASH = get_credential("TELEGRAM_API_HASH", "api_hash")
+TELEGRAM_SESSION_NAME = os.getenv("TELEGRAM_SESSION_NAME", "telegram_session")
 
-# Check if a string session exists in environment, otherwise use file-based session
-SESSION_STRING = os.getenv("TELEGRAM_SESSION_STRING")
+# Check if a string session exists in Keychain or environment
+SESSION_STRING = get_credential("TELEGRAM_SESSION_STRING", "session_string")
 
 mcp = FastMCP("telegram")
 
