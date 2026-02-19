@@ -295,6 +295,32 @@ def validate_id(*param_names_to_validate):
     return decorator
 
 
+def _utf16_to_python_offsets(text, utf16_offset, utf16_length):
+    """Convert UTF-16 offset/length to Python string offset/length.
+
+    Telegram entities use UTF-16 code units for offsets, but Python strings
+    use Unicode code points. Characters outside the BMP (most emoji) take
+    2 UTF-16 code units but only 1 Python char, so offsets diverge.
+    """
+    py_offset = 0
+    utf16_pos = 0
+    for ch in text:
+        if utf16_pos >= utf16_offset:
+            break
+        utf16_pos += 2 if ord(ch) > 0xFFFF else 1
+        py_offset += 1
+
+    py_length = 0
+    utf16_consumed = 0
+    for ch in text[py_offset:]:
+        if utf16_consumed >= utf16_length:
+            break
+        utf16_consumed += 2 if ord(ch) > 0xFFFF else 1
+        py_length += 1
+
+    return py_offset, py_length
+
+
 def message_to_markdown(msg) -> str:
     """Convert a Telethon message to markdown, preserving entities (bold, italic, links, etc.)."""
     text = msg.message
@@ -308,8 +334,7 @@ def message_to_markdown(msg) -> str:
     # Process entities in reverse order to preserve offsets
     insertions = []
     for ent in entities:
-        o = ent.offset
-        l = ent.length
+        o, l = _utf16_to_python_offsets(text, ent.offset, ent.length)
         if isinstance(ent, MessageEntityBold):
             insertions.append((o, l, "**", "**"))
         elif isinstance(ent, MessageEntityItalic):
