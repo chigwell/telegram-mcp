@@ -35,6 +35,14 @@ from telethon.tl.types import (
     DialogFilter,
     DialogFilterDefault,
     TextWithEntities,
+    MessageEntityBold,
+    MessageEntityItalic,
+    MessageEntityStrike,
+    MessageEntityCode,
+    MessageEntityPre,
+    MessageEntityTextUrl,
+    MessageEntityUrl,
+    MessageEntityMentionName,
 )
 import re
 from functools import wraps
@@ -287,6 +295,50 @@ def validate_id(*param_names_to_validate):
     return decorator
 
 
+def message_to_markdown(msg) -> str:
+    """Convert a Telethon message to markdown, preserving entities (bold, italic, links, etc.)."""
+    text = msg.message
+    if not text:
+        return ""
+    entities = msg.entities
+    if not entities:
+        return text
+
+    # Build list of (offset, length, prefix, suffix) insertions
+    # Process entities in reverse order to preserve offsets
+    insertions = []
+    for ent in entities:
+        o = ent.offset
+        l = ent.length
+        if isinstance(ent, MessageEntityBold):
+            insertions.append((o, l, "**", "**"))
+        elif isinstance(ent, MessageEntityItalic):
+            insertions.append((o, l, "_", "_"))
+        elif isinstance(ent, MessageEntityStrike):
+            insertions.append((o, l, "~~", "~~"))
+        elif isinstance(ent, MessageEntityCode):
+            insertions.append((o, l, "`", "`"))
+        elif isinstance(ent, MessageEntityPre):
+            lang = getattr(ent, "language", "") or ""
+            insertions.append((o, l, f"```{lang}\n", "\n```"))
+        elif isinstance(ent, MessageEntityTextUrl):
+            url = ent.url or ""
+            insertions.append((o, l, "[", f"]({url})"))
+        elif isinstance(ent, MessageEntityMentionName):
+            user_id = ent.user_id
+            insertions.append((o, l, "[", f"](tg://user?id={user_id})"))
+        # MessageEntityUrl, MessageEntityMention, MessageEntityHashtag — keep as-is (already visible in text)
+
+    # Sort by offset descending so we can modify string from the end
+    insertions.sort(key=lambda x: x[0], reverse=True)
+
+    result = text
+    for offset, length, prefix, suffix in insertions:
+        result = result[:offset] + prefix + result[offset:offset + length] + suffix + result[offset + length:]
+
+    return result
+
+
 def format_entity(entity) -> Dict[str, Any]:
     """Helper function to format entity information consistently."""
     result = {"id": entity.id}
@@ -315,7 +367,7 @@ def format_message(message) -> Dict[str, Any]:
     result = {
         "id": message.id,
         "date": message.date.isoformat(),
-        "text": message.message or "",
+        "text": message_to_markdown(message),
     }
 
     if message.from_id:
@@ -415,7 +467,7 @@ async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int =
             engagement_info = get_engagement_info(msg)
 
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info} | Message: {msg.message}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info} | Message: {message_to_markdown(msg)}"
             )
         return "\n".join(lines)
     except Exception as e:
@@ -840,7 +892,7 @@ async def list_messages(
         lines = []
         for msg in messages:
             sender_name = get_sender_name(msg)
-            message_text = msg.message or "[Media/No text]"
+            message_text = message_to_markdown(msg) or "[Media/No text]"
             reply_info = ""
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
@@ -1068,7 +1120,7 @@ async def get_chat(chat_id: Union[int, str]) -> str:
                             sender_name += f" {last_msg.sender.last_name}"
                     sender_name = sender_name.strip() or "Unknown"
                     result.append(f"Last Message: From {sender_name} at {last_msg.date}")
-                    result.append(f"Message: {last_msg.message or '[Media/No text]'}")
+                    result.append(f"Message: {message_to_markdown(last_msg) or '[Media/No text]'}")
         except Exception as diag_ex:
             logger.warning(f"Could not get dialog info for {chat_id}: {diag_ex}")
             pass
@@ -1225,7 +1277,7 @@ async def get_last_interaction(contact_id: Union[int, str]) -> str:
 
         for msg in messages:
             sender = "You" if msg.out else contact_name
-            message_text = msg.message or "[Media/No text]"
+            message_text = message_to_markdown(msg) or "[Media/No text]"
             results.append(f"Date: {msg.date}, From: {sender}, Message: {message_text}")
 
         return "\n".join(results)
@@ -1282,14 +1334,14 @@ async def get_message_context(
                             replied_sender = getattr(
                                 replied_msg.sender, "first_name", ""
                             ) or getattr(replied_msg.sender, "title", "Unknown")
-                        reply_content = f" | reply to {msg.reply_to.reply_to_msg_id}\n  → Replied message: [{replied_sender}] {replied_msg.message or '[Media/No text]'}"
+                        reply_content = f" | reply to {msg.reply_to.reply_to_msg_id}\n  → Replied message: [{replied_sender}] {message_to_markdown(replied_msg) or '[Media/No text]'}"
                 except Exception:
                     reply_content = (
                         f" | reply to {msg.reply_to.reply_to_msg_id} (original message not found)"
                     )
 
             results.append(
-                f"ID: {msg.id} | {sender_name} | {msg.date}{highlight}{reply_content}\n{msg.message or '[Media/No text]'}\n"
+                f"ID: {msg.id} | {sender_name} | {msg.date}{highlight}{reply_content}\n{message_to_markdown(msg) or '[Media/No text]'}\n"
             )
         return "\n".join(results)
     except Exception as e:
@@ -2830,7 +2882,7 @@ async def search_messages(chat_id: Union[int, str], query: str, limit: int = 20)
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {msg.message}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {message_to_markdown(msg)}"
             )
         return "\n".join(lines)
     except Exception as e:
@@ -3208,7 +3260,7 @@ async def get_history(chat_id: Union[int, str], limit: int = 100) -> str:
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {msg.message}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {message_to_markdown(msg)}"
             )
         return "\n".join(lines)
     except Exception as e:
@@ -3311,7 +3363,7 @@ async def get_pinned_messages(chat_id: Union[int, str]) -> str:
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {msg.message or '[Media/No text]'}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info} | Message: {message_to_markdown(msg) or '[Media/No text]'}"
             )
 
         return "\n".join(lines)
