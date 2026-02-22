@@ -2178,7 +2178,7 @@ async def delete_profile_photo() -> str:
         )
         if not photos.photos:
             return "No profile photo to delete."
-        await client(functions.photos.DeletePhotosRequest(id=[photos.photos[0].id]))
+        await client(functions.photos.DeletePhotosRequest(id=[photos.photos[0]]))
         return "Profile photo deleted."
     except Exception as e:
         return log_and_format_error("delete_profile_photo", e)
