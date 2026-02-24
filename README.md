@@ -169,7 +169,7 @@ Example server launch with allowlisted roots:
 uv --directory /full/path/to/telegram-mcp run main.py /data/telegram /tmp/telegram-mcp
 ```
 
-Additionally, GIF-related tools (`get_gif_search`, `get_saved_gifs`, `send_gif`) have been removed due to ongoing issues with reliability in the Telethon library or Telegram API interactions.
+GIF tools are currently limited: `get_gif_search` and `send_gif` are available, while `get_saved_gifs` is not implemented due to reliability limits in Telethon/Telegram API interactions.
 
 ---
 

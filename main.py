@@ -161,6 +161,7 @@ MAX_FILE_BYTES: dict[str, int] = {
     "set_profile_photo": 50 * 1024 * 1024,
     "edit_chat_photo": 50 * 1024 * 1024,
 }
+ROOTS_UNSUPPORTED_ERROR_CODES = {-32601}
 
 
 # Error code prefix mapping for better error tracing
@@ -462,22 +463,39 @@ def _ensure_size_within_limit(tool_name: str, candidate: Path) -> Optional[str]:
 
 
 async def _get_effective_allowed_roots(ctx: Optional[Context]) -> List[Path]:
-    if ctx is not None:
+    fallback_roots = list(SERVER_ALLOWED_ROOTS)
+    if ctx is None:
+        return fallback_roots
+
+    try:
+        list_roots_result = await ctx.session.list_roots()
+    except McpError as error:
+        error_code = getattr(getattr(error, "error", None), "code", None)
+        error_message = (
+            getattr(getattr(error, "error", None), "message", None) or str(error)
+        ).lower()
+        if error_code in ROOTS_UNSUPPORTED_ERROR_CODES or "method not found" in error_message:
+            # Fallback is allowed only when roots are unsupported in this MCP client session.
+            return fallback_roots
+        logger.error("MCP roots request failed; disabling file-path tools for safety.", exc_info=True)
+        return []
+    except Exception:
+        logger.error("Unexpected MCP roots failure; disabling file-path tools for safety.", exc_info=True)
+        return []
+
+    client_roots: List[Path] = []
+    for root in list_roots_result.roots:
         try:
-            list_roots_result = await ctx.session.list_roots()
-            client_roots: List[Path] = []
-            for root in list_roots_result.roots:
-                try:
-                    client_roots.append(_coerce_root_uri_to_path(str(root.uri)))
-                except Exception:
-                    # Ignore invalid root entries supplied by a client.
-                    continue
-            return _dedupe_paths(client_roots)
-        except (McpError, Exception):
-            # Fall back to server-side allowlist when roots are unsupported
-            # or not available in this MCP client session.
-            pass
-    return list(SERVER_ALLOWED_ROOTS)
+            client_roots.append(_coerce_root_uri_to_path(str(root.uri)))
+        except Exception:
+            # Ignore invalid root entries supplied by a client.
+            continue
+
+    if client_roots:
+        return _dedupe_paths(client_roots)
+
+    # If client returned an empty roots list, keep server-side fallback roots.
+    return fallback_roots
 
 
 async def _ensure_allowed_roots(
