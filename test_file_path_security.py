@@ -38,6 +38,15 @@ class _FailingContext:
         self.session = _FailingSession(error)
 
 
+class _MissingRootsSession:
+    pass
+
+
+class _MissingRootsContext:
+    def __init__(self):
+        self.session = _MissingRootsSession()
+
+
 @pytest.mark.asyncio
 async def test_readable_relative_path_resolves_inside_first_server_root(tmp_path, monkeypatch):
     root = (tmp_path / "root").resolve()
@@ -139,7 +148,8 @@ async def test_empty_client_roots_disable_file_tools(tmp_path, monkeypatch):
     )
     assert resolved is None
     assert error is not None
-    assert "disabled" in error
+    assert "empty MCP Roots list" in error
+    assert "deny-all" in error
 
 
 @pytest.mark.asyncio
@@ -149,6 +159,18 @@ async def test_mcp_method_not_found_falls_back_to_server_allowlist(tmp_path, mon
 
     monkeypatch.setattr(main, "SERVER_ALLOWED_ROOTS", [server_root])
     ctx = _FailingContext(McpError(ErrorData(code=-32601, message="Method not found")))
+
+    roots = await main._get_effective_allowed_roots(ctx)
+    assert roots == [server_root]
+
+
+@pytest.mark.asyncio
+async def test_missing_list_roots_method_falls_back_to_server_allowlist(tmp_path, monkeypatch):
+    server_root = (tmp_path / "server_root").resolve()
+    server_root.mkdir(parents=True)
+
+    monkeypatch.setattr(main, "SERVER_ALLOWED_ROOTS", [server_root])
+    ctx = _MissingRootsContext()
 
     roots = await main._get_effective_allowed_roots(ctx)
     assert roots == [server_root]
