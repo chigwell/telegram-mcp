@@ -157,8 +157,9 @@ Supported file-path tools:
 - `send_file`, `download_media`, `set_profile_photo`, `edit_chat_photo`, `send_voice`, `send_sticker`, `upload_file`
 
 Security semantics (aligned with MCP filesystem server):
-- Server-side allowlist via CLI positional arguments (fallback).
+- Server-side allowlist via CLI positional arguments (fallback when Roots API is unsupported).
 - Client-provided MCP Roots replace the server allowlist when available.
+- If the client returns an empty Roots list, file-path tools are disabled (deny-all).
 - All paths are resolved via realpath and must stay inside an allowed root.
 - Traversal/glob-like patterns are rejected (`..`, `*`, `?`, `~`, etc.).
 - Relative paths resolve against the first allowed root.

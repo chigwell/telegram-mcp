@@ -498,8 +498,8 @@ async def _get_effective_allowed_roots(ctx: Optional[Context]) -> List[Path]:
     if client_roots:
         return _dedupe_paths(client_roots)
 
-    # If client returned an empty roots list, keep server-side fallback roots.
-    return fallback_roots
+    # Roots API succeeded; an empty roots list is treated as explicit deny-all.
+    return []
 
 
 async def _ensure_allowed_roots(

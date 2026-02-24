@@ -122,25 +122,24 @@ async def test_client_roots_replace_server_allowlist(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_empty_client_roots_fall_back_to_server_allowlist(tmp_path, monkeypatch):
+async def test_empty_client_roots_disable_file_tools(tmp_path, monkeypatch):
     server_root = (tmp_path / "server_root").resolve()
     server_root.mkdir(parents=True)
-    server_file = server_root / "server.txt"
-    server_file.write_text("server", encoding="utf-8")
 
     monkeypatch.setattr(main, "SERVER_ALLOWED_ROOTS", [server_root])
     ctx = _DummyContext([])
 
     roots = await main._get_effective_allowed_roots(ctx)
-    assert roots == [server_root]
+    assert roots == []
 
     resolved, error = await main._resolve_readable_file_path(
         raw_path="server.txt",
         ctx=ctx,
         tool_name="send_file",
     )
-    assert error is None
-    assert resolved == server_file.resolve()
+    assert resolved is None
+    assert error is not None
+    assert "disabled" in error
 
 
 @pytest.mark.asyncio
