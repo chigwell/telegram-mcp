@@ -477,10 +477,14 @@ async def _get_effective_allowed_roots(ctx: Optional[Context]) -> List[Path]:
         if error_code in ROOTS_UNSUPPORTED_ERROR_CODES or "method not found" in error_message:
             # Fallback is allowed only when roots are unsupported in this MCP client session.
             return fallback_roots
-        logger.error("MCP roots request failed; disabling file-path tools for safety.", exc_info=True)
+        logger.error(
+            "MCP roots request failed; disabling file-path tools for safety.", exc_info=True
+        )
         return []
     except Exception:
-        logger.error("Unexpected MCP roots failure; disabling file-path tools for safety.", exc_info=True)
+        logger.error(
+            "Unexpected MCP roots failure; disabling file-path tools for safety.", exc_info=True
+        )
         return []
 
     client_roots: List[Path] = []
