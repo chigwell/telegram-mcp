@@ -247,12 +247,44 @@ docker run -it --rm \
 *   Use `-e TELEGRAM_SESSION_NAME=your_session_file_name` instead of `TELEGRAM_SESSION_STRING` if you prefer file-based sessions (requires volume mounting, see `docker-compose.yml` for an example).
 *   The `-it` flags are crucial for interacting with the server.
 
+### HTTP Mode: Server Runs, Cursor Connects via URL
+
+When using Docker Compose, the server runs with **HTTP transport** by default. The server stays running and Cursor connects to it via URL—no process spawning.
+
+1. **Start the server:** `docker compose up --build` (or `-d` for background)
+2. **Configure Cursor** in `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "telegram-mcp": {
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+The server is available at `http://localhost:8000/mcp`. Restart Cursor after changing the config.
+
 ---
 
 ## ⚙️ Configuration for Claude & Cursor
 
 ### MCP Configuration
-Edit your Claude desktop config (e.g. `~/Library/Application Support/Claude/claude_desktop_config.json`) or Cursor config (`~/.cursor/mcp.json`):
+
+**Option A: URL (recommended with Docker)** — Server runs independently, Cursor connects:
+
+```json
+{
+  "mcpServers": {
+    "telegram-mcp": {
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+**Option B: Command (stdio)** — Cursor spawns the server process:
 
 ```json
 {
@@ -269,6 +301,8 @@ Edit your Claude desktop config (e.g. `~/Library/Application Support/Claude/clau
   }
 }
 ```
+
+Or with Docker: `"command": "docker", "args": ["run", "-i", "--rm", "--env-file", "/path/to/.env", "telegram-mcp:latest"]`
 
 ## 📝 Tool Examples with Code & Output
 
