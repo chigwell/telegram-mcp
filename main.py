@@ -99,11 +99,6 @@ MCP_HTTP_PORT = int(os.getenv("TELEGRAM_MCP_HTTP_PORT", "8000"))
 
 # Read-only mode: when set, only expose tools that read data (no send, edit, delete, react, etc.)
 READ_ONLY = os.getenv("TELEGRAM_READ_ONLY", "").lower() in ("true", "1", "yes")
-# HTTP transport: when set, run as HTTP server so clients (e.g. Cursor) can connect via URL.
-# Default: False (stdio) when running directly. Docker Compose sets this to True automatically.
-MCP_HTTP = os.getenv("TELEGRAM_MCP_HTTP", "").lower() in ("true", "1", "yes")
-MCP_HTTP_PORT = int(os.getenv("TELEGRAM_MCP_HTTP_PORT", "8000"))
-
 
 def _tool(annotations=None, **kwargs):
     """
@@ -4266,35 +4261,14 @@ async def reorder_folders(folder_ids: List[int]) -> str:
         )
 
 
-<<<<<<< HEAD
-async def _run_stdio() -> None:
-    """Run MCP server over stdio (default: client spawns this process)."""
-    print("Starting Telegram client...")
-    try:
-        if READ_ONLY:
-            print("Read-only mode: only read tools exposed (no send, edit, react, etc.)")
-        await client.start()
-        print("Telegram client started. Running MCP server...")
-=======
 async def _connect_client() -> None:
     """Connect the Telethon client. Must run before MCP server starts."""
     print("Starting Telegram client...")
     if READ_ONLY:
         print("Read-only mode: only read tools exposed (no send, edit, react, etc.)")
-    await client.start()
-    print("Telegram client started.")
-
-
-async def _run_stdio() -> None:
-    """Run MCP server over stdio (default: client spawns this process)."""
-    await mcp.run_stdio_async()
-
-
-def main() -> None:
-    nest_asyncio.apply()
     try:
-        asyncio.run(_connect_client())
->>>>>>> e7a74d2 (feat: add HTTP transport - server runs, Cursor connects via URL)
+        await client.start()
+        print("Telegram client started.")
     except Exception as e:
         print(f"Error starting client: {e}", file=sys.stderr)
         if isinstance(e, sqlite3.OperationalError) and "database is locked" in str(e):
@@ -4310,22 +4284,20 @@ def main() -> None:
                 file=sys.stderr,
             )
         sys.exit(1)
+
+
+async def _run_stdio() -> None:
+    """Run MCP server over stdio (default: client spawns this process)."""
+    await _connect_client()
     await mcp.run_stdio_async()
 
-<<<<<<< HEAD
 
 def main() -> None:
     nest_asyncio.apply()
     if MCP_HTTP:
         print(f"MCP server running at http://0.0.0.0:{MCP_HTTP_PORT}/mcp")
         print("Connect Cursor with: {\"url\": \"http://localhost:" + str(MCP_HTTP_PORT) + "/mcp\"}")
-        mcp.run(transport="streamable-http")
-=======
-    if MCP_HTTP:
-        print(f"MCP server running at http://0.0.0.0:{MCP_HTTP_PORT}/mcp")
-        print("Connect Cursor with: {\"url\": \"http://localhost:" + str(MCP_HTTP_PORT) + "/mcp\"}")
         mcp.run(transport="streamable-http", host="0.0.0.0", port=MCP_HTTP_PORT)
->>>>>>> e7a74d2 (feat: add HTTP transport - server runs, Cursor connects via URL)
     else:
         print("Running MCP server (stdio)...")
         asyncio.run(_run_stdio())
