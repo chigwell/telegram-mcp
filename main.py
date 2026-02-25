@@ -91,7 +91,24 @@ TELEGRAM_SESSION_NAME = os.getenv("TELEGRAM_SESSION_NAME")
 # Check if a string session exists in environment, otherwise use file-based session
 SESSION_STRING = os.getenv("TELEGRAM_SESSION_STRING")
 
+# Read-only mode: when set, only expose tools that read data (no send, edit, delete, react, etc.)
+READ_ONLY = os.getenv("TELEGRAM_READ_ONLY", "").lower() in ("true", "1", "yes")
+
 mcp = FastMCP("telegram")
+
+
+def _tool(annotations=None, **kwargs):
+    """
+    Register a tool with MCP. In read-only mode, only tools with readOnlyHint=True
+    are registered; write tools are skipped so the agent cannot send, edit, or
+    otherwise modify Telegram state.
+    """
+    is_read_only = annotations and getattr(annotations, "readOnlyHint", False)
+    if not is_read_only and READ_ONLY:
+        def _noop(f):
+            return f
+        return _noop
+    return mcp.tool(annotations=annotations, **kwargs)
 
 if SESSION_STRING:
     # Use the string session if available
@@ -363,7 +380,7 @@ def get_engagement_info(message) -> str:
     return f" | {', '.join(engagement_parts)}" if engagement_parts else ""
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Chats", openWorldHint=True, readOnlyHint=True))
+@_tool(annotations=ToolAnnotations(title="Get Chats", openWorldHint=True, readOnlyHint=True))
 async def get_chats(page: int = 1, page_size: int = 20) -> str:
     """
     Get a paginated list of chats.
@@ -389,7 +406,7 @@ async def get_chats(page: int = 1, page_size: int = 20) -> str:
         return log_and_format_error("get_chats", e)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Messages", openWorldHint=True, readOnlyHint=True))
+@_tool(annotations=ToolAnnotations(title="Get Messages", openWorldHint=True, readOnlyHint=True))
 @validate_id("chat_id")
 async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int = 20) -> str:
     """
@@ -424,7 +441,7 @@ async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int =
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Send Message", openWorldHint=True, destructiveHint=True)
 )
 @validate_id("chat_id")
@@ -443,7 +460,7 @@ async def send_message(chat_id: Union[int, str], message: str) -> str:
         return log_and_format_error("send_message", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Subscribe Public Channel",
         openWorldHint=True,
@@ -470,7 +487,7 @@ async def subscribe_public_channel(channel: Union[int, str]) -> str:
         return log_and_format_error("subscribe_public_channel", e, channel=channel)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="List Inline Buttons", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
@@ -536,7 +553,7 @@ async def list_inline_buttons(
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Press Inline Button", openWorldHint=True, destructiveHint=True
     )
@@ -655,7 +672,7 @@ async def press_inline_button(
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="List Contacts", openWorldHint=True, readOnlyHint=True)
 )
 async def list_contacts() -> str:
@@ -683,7 +700,7 @@ async def list_contacts() -> str:
         return log_and_format_error("list_contacts", e)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Search Contacts", openWorldHint=True, readOnlyHint=True)
 )
 async def search_contacts(query: str) -> str:
@@ -713,7 +730,7 @@ async def search_contacts(query: str) -> str:
         return log_and_format_error("search_contacts", e, query=query)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get Contact Ids", openWorldHint=True, readOnlyHint=True)
 )
 async def get_contact_ids() -> str:
@@ -729,7 +746,7 @@ async def get_contact_ids() -> str:
         return log_and_format_error("get_contact_ids", e)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="List Messages", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
@@ -856,7 +873,7 @@ async def list_messages(
         return log_and_format_error("list_messages", e, chat_id=chat_id)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="List Topics", openWorldHint=True, readOnlyHint=True))
+@_tool(annotations=ToolAnnotations(title="List Topics", openWorldHint=True, readOnlyHint=True))
 async def list_topics(
     chat_id: int,
     limit: int = 200,
@@ -943,7 +960,7 @@ async def list_topics(
         )
 
 
-@mcp.tool(annotations=ToolAnnotations(title="List Chats", openWorldHint=True, readOnlyHint=True))
+@_tool(annotations=ToolAnnotations(title="List Chats", openWorldHint=True, readOnlyHint=True))
 async def list_chats(chat_type: str = None, limit: int = 20) -> str:
     """
     List available chats with metadata.
@@ -1006,7 +1023,7 @@ async def list_chats(chat_type: str = None, limit: int = 20) -> str:
         return log_and_format_error("list_chats", e, chat_type=chat_type, limit=limit)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Chat", openWorldHint=True, readOnlyHint=True))
+@_tool(annotations=ToolAnnotations(title="Get Chat", openWorldHint=True, readOnlyHint=True))
 @validate_id("chat_id")
 async def get_chat(chat_id: Union[int, str]) -> str:
     """
@@ -1078,7 +1095,7 @@ async def get_chat(chat_id: Union[int, str]) -> str:
         return log_and_format_error("get_chat", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Get Direct Chat By Contact", openWorldHint=True, readOnlyHint=True
     )
@@ -1137,7 +1154,7 @@ async def get_direct_chat_by_contact(contact_query: str) -> str:
         return log_and_format_error("get_direct_chat_by_contact", e, contact_query=contact_query)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get Contact Chats", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("contact_id")
@@ -1192,7 +1209,7 @@ async def get_contact_chats(contact_id: Union[int, str]) -> str:
         return log_and_format_error("get_contact_chats", e, contact_id=contact_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Get Last Interaction", openWorldHint=True, readOnlyHint=True
     )
@@ -1233,7 +1250,7 @@ async def get_last_interaction(contact_id: Union[int, str]) -> str:
         return log_and_format_error("get_last_interaction", e, contact_id=contact_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get Message Context", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
@@ -1302,7 +1319,7 @@ async def get_message_context(
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Add Contact", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -1435,7 +1452,7 @@ async def add_contact(
         return log_and_format_error("add_contact", e, phone=phone, username=username)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Delete Contact", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -1455,7 +1472,7 @@ async def delete_contact(user_id: Union[int, str]) -> str:
         return log_and_format_error("delete_contact", e, user_id=user_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Block User", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -1475,7 +1492,7 @@ async def block_user(user_id: Union[int, str]) -> str:
         return log_and_format_error("block_user", e, user_id=user_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Unblock User", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -1495,7 +1512,7 @@ async def unblock_user(user_id: Union[int, str]) -> str:
         return log_and_format_error("unblock_user", e, user_id=user_id)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Me", openWorldHint=True, readOnlyHint=True))
+@_tool(annotations=ToolAnnotations(title="Get Me", openWorldHint=True, readOnlyHint=True))
 async def get_me() -> str:
     """
     Get your own user information.
@@ -1507,7 +1524,7 @@ async def get_me() -> str:
         return log_and_format_error("get_me", e)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Create Group", openWorldHint=True, destructiveHint=True)
 )
 @validate_id("user_ids")
@@ -1568,7 +1585,7 @@ async def create_group(title: str, user_ids: List[Union[int, str]]) -> str:
         return log_and_format_error("create_group", e, title=title, user_ids=user_ids)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Invite To Group", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -1622,7 +1639,7 @@ async def invite_to_group(group_id: Union[int, str], user_ids: List[Union[int, s
         return log_and_format_error("invite_to_group", e, group_id=group_id, user_ids=user_ids)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Leave Chat", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -1707,7 +1724,7 @@ async def leave_chat(chat_id: Union[int, str]) -> str:
         return log_and_format_error("leave_chat", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get Participants", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
@@ -1728,7 +1745,7 @@ async def get_participants(chat_id: Union[int, str]) -> str:
         return log_and_format_error("get_participants", e, chat_id=chat_id)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Send File", openWorldHint=True, destructiveHint=True))
+@_tool(annotations=ToolAnnotations(title="Send File", openWorldHint=True, destructiveHint=True))
 @validate_id("chat_id")
 async def send_file(chat_id: Union[int, str], file_path: str, caption: str = None) -> str:
     """
@@ -1752,7 +1769,7 @@ async def send_file(chat_id: Union[int, str], file_path: str, caption: str = Non
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Download Media", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
@@ -1787,7 +1804,7 @@ async def download_media(chat_id: Union[int, str], message_id: int, file_path: s
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Update Profile", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -1809,7 +1826,7 @@ async def update_profile(first_name: str = None, last_name: str = None, about: s
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Set Profile Photo", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -1827,7 +1844,7 @@ async def set_profile_photo(file_path: str) -> str:
         return log_and_format_error("set_profile_photo", e, file_path=file_path)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Delete Profile Photo", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -1848,7 +1865,7 @@ async def delete_profile_photo() -> str:
         return log_and_format_error("delete_profile_photo", e)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Get Privacy Settings", openWorldHint=True, readOnlyHint=True
     )
@@ -1876,7 +1893,7 @@ async def get_privacy_settings() -> str:
         return log_and_format_error("get_privacy_settings", e)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Set Privacy Settings", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -1977,7 +1994,7 @@ async def set_privacy_settings(
         return log_and_format_error("set_privacy_settings", e, key=key)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Import Contacts", openWorldHint=True, destructiveHint=True)
 )
 async def import_contacts(contacts: list) -> str:
@@ -2000,7 +2017,7 @@ async def import_contacts(contacts: list) -> str:
         return log_and_format_error("import_contacts", e, contacts=contacts)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Export Contacts", openWorldHint=True, readOnlyHint=True)
 )
 async def export_contacts() -> str:
@@ -2015,7 +2032,7 @@ async def export_contacts() -> str:
         return log_and_format_error("export_contacts", e)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get Blocked Users", openWorldHint=True, readOnlyHint=True)
 )
 async def get_blocked_users() -> str:
@@ -2029,7 +2046,7 @@ async def get_blocked_users() -> str:
         return log_and_format_error("get_blocked_users", e)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Create Channel", openWorldHint=True, destructiveHint=True)
 )
 async def create_channel(title: str, about: str = "", megagroup: bool = False) -> str:
@@ -2047,7 +2064,7 @@ async def create_channel(title: str, about: str = "", megagroup: bool = False) -
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Edit Chat Title", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2071,7 +2088,7 @@ async def edit_chat_title(chat_id: Union[int, str], title: str) -> str:
         return log_and_format_error("edit_chat_title", e, chat_id=chat_id, title=title)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Edit Chat Photo", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2109,7 +2126,7 @@ async def edit_chat_photo(chat_id: Union[int, str], file_path: str) -> str:
         return log_and_format_error("edit_chat_photo", e, chat_id=chat_id, file_path=file_path)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Delete Chat Photo", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2142,7 +2159,7 @@ async def delete_chat_photo(chat_id: Union[int, str]) -> str:
         return log_and_format_error("delete_chat_photo", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Promote Admin", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2213,7 +2230,7 @@ async def promote_admin(
         return log_and_format_error("promote_admin", e, group_id=group_id, user_id=user_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Demote Admin", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2266,7 +2283,7 @@ async def demote_admin(group_id: Union[int, str], user_id: Union[int, str]) -> s
         return log_and_format_error("demote_admin", e, group_id=group_id, user_id=user_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Ban User", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2317,7 +2334,7 @@ async def ban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
         return log_and_format_error("ban_user", e, chat_id=chat_id, user_id=user_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Unban User", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2368,7 +2385,7 @@ async def unban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
         return log_and_format_error("unban_user", e, chat_id=chat_id, user_id=user_id)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Admins", openWorldHint=True, readOnlyHint=True))
+@_tool(annotations=ToolAnnotations(title="Get Admins", openWorldHint=True, readOnlyHint=True))
 @validate_id("chat_id")
 async def get_admins(chat_id: Union[int, str]) -> str:
     """
@@ -2387,7 +2404,7 @@ async def get_admins(chat_id: Union[int, str]) -> str:
         return log_and_format_error("get_admins", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get Banned Users", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
@@ -2410,7 +2427,7 @@ async def get_banned_users(chat_id: Union[int, str]) -> str:
         return log_and_format_error("get_banned_users", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get Invite Link", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
@@ -2456,7 +2473,7 @@ async def get_invite_link(chat_id: Union[int, str]) -> str:
         return log_and_format_error("get_invite_link", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Join Chat By Link", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2504,7 +2521,7 @@ async def join_chat_by_link(link: str) -> str:
         return f"Error joining chat: {e}"
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Export Chat Invite", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
@@ -2541,7 +2558,7 @@ async def export_chat_invite(chat_id: Union[int, str]) -> str:
         return log_and_format_error("export_chat_invite", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Import Chat Invite", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2602,7 +2619,7 @@ async def import_chat_invite(hash: str) -> str:
         return log_and_format_error("import_chat_invite", e, hash=hash)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Send Voice", openWorldHint=True, destructiveHint=True)
 )
 @validate_id("chat_id")
@@ -2638,7 +2655,7 @@ async def send_voice(chat_id: Union[int, str], file_path: str) -> str:
         return log_and_format_error("send_voice", e, chat_id=chat_id, file_path=file_path)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Forward Message", openWorldHint=True, destructiveHint=True)
 )
 @validate_id("from_chat_id", "to_chat_id")
@@ -2663,7 +2680,7 @@ async def forward_message(
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Edit Message", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2683,7 +2700,7 @@ async def edit_message(chat_id: Union[int, str], message_id: int, new_text: str)
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Delete Message", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2701,7 +2718,7 @@ async def delete_message(chat_id: Union[int, str], message_id: int) -> str:
         return log_and_format_error("delete_message", e, chat_id=chat_id, message_id=message_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Pin Message", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2719,7 +2736,7 @@ async def pin_message(chat_id: Union[int, str], message_id: int) -> str:
         return log_and_format_error("pin_message", e, chat_id=chat_id, message_id=message_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Unpin Message", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2737,7 +2754,7 @@ async def unpin_message(chat_id: Union[int, str], message_id: int) -> str:
         return log_and_format_error("unpin_message", e, chat_id=chat_id, message_id=message_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Mark As Read", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2755,7 +2772,7 @@ async def mark_as_read(chat_id: Union[int, str]) -> str:
         return log_and_format_error("mark_as_read", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Reply To Message", openWorldHint=True, destructiveHint=True)
 )
 @validate_id("chat_id")
@@ -2773,7 +2790,7 @@ async def reply_to_message(chat_id: Union[int, str], message_id: int, text: str)
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get Media Info", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
@@ -2797,7 +2814,7 @@ async def get_media_info(chat_id: Union[int, str], message_id: int) -> str:
         return log_and_format_error("get_media_info", e, chat_id=chat_id, message_id=message_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Search Public Chats", openWorldHint=True, readOnlyHint=True)
 )
 async def search_public_chats(query: str) -> str:
@@ -2811,7 +2828,7 @@ async def search_public_chats(query: str) -> str:
         return log_and_format_error("search_public_chats", e, query=query)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Search Messages", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
@@ -2839,7 +2856,7 @@ async def search_messages(chat_id: Union[int, str], query: str, limit: int = 20)
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Resolve Username", openWorldHint=True, readOnlyHint=True)
 )
 async def resolve_username(username: str) -> str:
@@ -2853,7 +2870,7 @@ async def resolve_username(username: str) -> str:
         return log_and_format_error("resolve_username", e, username=username)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Mute Chat", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2896,7 +2913,7 @@ async def mute_chat(chat_id: Union[int, str]) -> str:
         return log_and_format_error("mute_chat", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Unmute Chat", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2939,7 +2956,7 @@ async def unmute_chat(chat_id: Union[int, str]) -> str:
         return log_and_format_error("unmute_chat", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Archive Chat", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2962,7 +2979,7 @@ async def archive_chat(chat_id: Union[int, str]) -> str:
         return log_and_format_error("archive_chat", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Unarchive Chat", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -2985,7 +3002,7 @@ async def unarchive_chat(chat_id: Union[int, str]) -> str:
         return log_and_format_error("unarchive_chat", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get Sticker Sets", openWorldHint=True, readOnlyHint=True)
 )
 async def get_sticker_sets() -> str:
@@ -2999,7 +3016,7 @@ async def get_sticker_sets() -> str:
         return log_and_format_error("get_sticker_sets", e)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Send Sticker", openWorldHint=True, destructiveHint=True)
 )
 @validate_id("chat_id")
@@ -3026,7 +3043,7 @@ async def send_sticker(chat_id: Union[int, str], file_path: str) -> str:
         return log_and_format_error("send_sticker", e, chat_id=chat_id, file_path=file_path)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get Gif Search", openWorldHint=True, readOnlyHint=True)
 )
 async def get_gif_search(query: str, limit: int = 10) -> str:
@@ -3084,7 +3101,7 @@ async def get_gif_search(query: str, limit: int = 10) -> str:
         return log_and_format_error("get_gif_search", e, query=query, limit=limit)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Send Gif", openWorldHint=True, destructiveHint=True))
+@_tool(annotations=ToolAnnotations(title="Send Gif", openWorldHint=True, destructiveHint=True))
 @validate_id("chat_id")
 async def send_gif(chat_id: Union[int, str], gif_id: int) -> str:
     """
@@ -3104,7 +3121,7 @@ async def send_gif(chat_id: Union[int, str], gif_id: int) -> str:
         return log_and_format_error("send_gif", e, chat_id=chat_id, gif_id=gif_id)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Bot Info", openWorldHint=True, readOnlyHint=True))
+@_tool(annotations=ToolAnnotations(title="Get Bot Info", openWorldHint=True, readOnlyHint=True))
 async def get_bot_info(bot_username: str) -> str:
     """
     Get information about a bot by username.
@@ -3140,7 +3157,7 @@ async def get_bot_info(bot_username: str) -> str:
         return log_and_format_error("get_bot_info", e, bot_username=bot_username)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Set Bot Commands", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -3191,7 +3208,7 @@ async def set_bot_commands(bot_username: str, commands: list) -> str:
         return log_and_format_error("set_bot_commands", e, bot_username=bot_username)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get History", openWorldHint=True, readOnlyHint=True))
+@_tool(annotations=ToolAnnotations(title="Get History", openWorldHint=True, readOnlyHint=True))
 @validate_id("chat_id")
 async def get_history(chat_id: Union[int, str], limit: int = 100) -> str:
     """
@@ -3215,7 +3232,7 @@ async def get_history(chat_id: Union[int, str], limit: int = 100) -> str:
         return log_and_format_error("get_history", e, chat_id=chat_id, limit=limit)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get User Photos", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("user_id")
@@ -3233,7 +3250,7 @@ async def get_user_photos(user_id: Union[int, str], limit: int = 10) -> str:
         return log_and_format_error("get_user_photos", e, user_id=user_id, limit=limit)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get User Status", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("user_id")
@@ -3248,7 +3265,7 @@ async def get_user_status(user_id: Union[int, str]) -> str:
         return log_and_format_error("get_user_status", e, user_id=user_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get Recent Actions", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
@@ -3279,7 +3296,7 @@ async def get_recent_actions(chat_id: Union[int, str]) -> str:
         return log_and_format_error("get_recent_actions", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Get Pinned Messages", openWorldHint=True, readOnlyHint=True)
 )
 @validate_id("chat_id")
@@ -3320,7 +3337,7 @@ async def get_pinned_messages(chat_id: Union[int, str]) -> str:
         return log_and_format_error("get_pinned_messages", e, chat_id=chat_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(title="Create Poll", openWorldHint=True, destructiveHint=True)
 )
 async def create_poll(
@@ -3395,7 +3412,7 @@ async def create_poll(
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Send Reaction", openWorldHint=True, destructiveHint=False, idempotentHint=True
     )
@@ -3438,7 +3455,7 @@ async def send_reaction(
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Remove Reaction", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -3470,7 +3487,7 @@ async def remove_reaction(
         return log_and_format_error("remove_reaction", e, chat_id=chat_id, message_id=message_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Get Message Reactions", openWorldHint=True, readOnlyHint=True, idempotentHint=True
     )
@@ -3546,7 +3563,7 @@ async def get_message_reactions(
 # ============================================================================
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Save Draft", openWorldHint=True, destructiveHint=False, idempotentHint=True
     )
@@ -3593,7 +3610,7 @@ async def save_draft(
         return log_and_format_error("save_draft", e, chat_id=chat_id)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Drafts", openWorldHint=True, readOnlyHint=True))
+@_tool(annotations=ToolAnnotations(title="Get Drafts", openWorldHint=True, readOnlyHint=True))
 async def get_drafts() -> str:
     """
     Get all draft messages across all chats.
@@ -3650,7 +3667,7 @@ async def get_drafts() -> str:
         return log_and_format_error("get_drafts", e)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Clear Draft", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -3685,7 +3702,7 @@ async def clear_draft(chat_id: Union[int, str]) -> str:
 # ============================================================================
 
 
-@mcp.tool(annotations=ToolAnnotations(title="List Folders", openWorldHint=True, readOnlyHint=True))
+@_tool(annotations=ToolAnnotations(title="List Folders", openWorldHint=True, readOnlyHint=True))
 async def list_folders() -> str:
     """
     Get all dialog folders (filters) with their IDs, names, and emoji.
@@ -3734,7 +3751,7 @@ async def list_folders() -> str:
         return log_and_format_error("list_folders", e, ErrorCategory.FOLDER)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Folder", openWorldHint=True, readOnlyHint=True))
+@_tool(annotations=ToolAnnotations(title="Get Folder", openWorldHint=True, readOnlyHint=True))
 async def get_folder(folder_id: int) -> str:
     """
     Get detailed information about a specific folder including all included chats.
@@ -3833,7 +3850,7 @@ async def get_folder(folder_id: int) -> str:
         return log_and_format_error("get_folder", e, ErrorCategory.FOLDER, folder_id=folder_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Create Folder", openWorldHint=True, destructiveHint=True, idempotentHint=False
     )
@@ -3933,7 +3950,7 @@ async def create_folder(
         return log_and_format_error("create_folder", e, ErrorCategory.FOLDER, title=title)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Add Chat to Folder", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -4023,7 +4040,7 @@ async def add_chat_to_folder(
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Remove Chat from Folder",
         openWorldHint=True,
@@ -4122,7 +4139,7 @@ async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str]) -> s
         )
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Delete Folder", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -4166,7 +4183,7 @@ async def delete_folder(folder_id: int) -> str:
         return log_and_format_error("delete_folder", e, ErrorCategory.FOLDER, folder_id=folder_id)
 
 
-@mcp.tool(
+@_tool(
     annotations=ToolAnnotations(
         title="Reorder Folders", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
@@ -4212,6 +4229,8 @@ async def _main() -> None:
     try:
         # Start the Telethon client non-interactively
         print("Starting Telegram client...")
+        if READ_ONLY:
+            print("Read-only mode: only read tools exposed (no send, edit, react, etc.)")
         await client.start()
 
         print("Telegram client started. Running MCP server...")

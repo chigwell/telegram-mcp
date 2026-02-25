@@ -192,6 +192,16 @@ TELEGRAM_SESSION_STRING=your_session_string_here
 ```
 Get your API credentials at [my.telegram.org/apps](https://my.telegram.org/apps).
 
+### Read-Only Mode (Summarization / Analysis Only)
+
+To restrict the agent to **read-only** access—e.g., for summarizing messages without sending, reacting, or editing—set:
+
+```
+TELEGRAM_READ_ONLY=true
+```
+
+When enabled, only read tools are exposed (get chats, list messages, get history, search, etc.). Write tools (send message, reply, edit, delete, react, create group, etc.) are hidden, so the agent cannot modify your Telegram account.
+
 ---
 
 ## 🐳 Running with Docker
