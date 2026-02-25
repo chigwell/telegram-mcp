@@ -100,19 +100,6 @@ MCP_HTTP_PORT = int(os.getenv("TELEGRAM_MCP_HTTP_PORT", "8000"))
 # Read-only mode: when set, only expose tools that read data (no send, edit, delete, react, etc.)
 READ_ONLY = os.getenv("TELEGRAM_READ_ONLY", "").lower() in ("true", "1", "yes")
 
-def _tool(annotations=None, **kwargs):
-    """
-    Register a tool with MCP. In read-only mode, only tools with readOnlyHint=True
-    are registered; write tools are skipped so the agent cannot send, edit, or
-    otherwise modify Telegram state.
-    """
-    is_read_only = annotations and getattr(annotations, "readOnlyHint", False)
-    if not is_read_only and READ_ONLY:
-        def _noop(f):
-            return f
-        return _noop
-    return mcp.tool(annotations=annotations, **kwargs)
-
 if SESSION_STRING:
     client = TelegramClient(StringSession(SESSION_STRING), TELEGRAM_API_ID, TELEGRAM_API_HASH)
 else:
@@ -152,6 +139,19 @@ mcp = FastMCP(
     port=MCP_HTTP_PORT,
     lifespan=_telegram_lifespan,
 )
+
+def _tool(annotations=None, **kwargs):
+    """
+    Register a tool with MCP. In read-only mode, only tools with readOnlyHint=True
+    are registered; write tools are skipped so the agent cannot send, edit, or
+    otherwise modify Telegram state.
+    """
+    is_read_only = annotations and getattr(annotations, "readOnlyHint", False)
+    if not is_read_only and READ_ONLY:
+        def _noop(f):
+            return f
+        return _noop
+    return mcp.tool(annotations=annotations, **kwargs)
 
 # Setup robust logging with both file and console output
 logger = logging.getLogger("telegram_mcp")
