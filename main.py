@@ -98,9 +98,6 @@ READ_ONLY = os.getenv("TELEGRAM_READ_ONLY", "").lower() in ("true", "1", "yes")
 MCP_HTTP = os.getenv("TELEGRAM_MCP_HTTP", "").lower() in ("true", "1", "yes")
 MCP_HTTP_PORT = int(os.getenv("TELEGRAM_MCP_HTTP_PORT", "8000"))
 
-# Read-only mode: when set, only expose tools that read data (no send, edit, delete, react, etc.)
-READ_ONLY = os.getenv("TELEGRAM_READ_ONLY", "").lower() in ("true", "1", "yes")
-
 mcp = FastMCP("telegram")
 
 
