@@ -96,7 +96,11 @@ SESSION_STRING = os.getenv("TELEGRAM_SESSION_STRING")
 MCP_HTTP = os.getenv("TELEGRAM_MCP_HTTP", "").lower() in ("true", "1", "yes")
 MCP_HTTP_PORT = int(os.getenv("TELEGRAM_MCP_HTTP_PORT", "8000"))
 
-mcp = FastMCP("telegram")
+mcp = FastMCP(
+    "telegram",
+    host="0.0.0.0" if MCP_HTTP else "127.0.0.1",
+    port=MCP_HTTP_PORT,
+)
 
 if SESSION_STRING:
     # Use the string session if available
@@ -4248,7 +4252,7 @@ def main() -> None:
     if MCP_HTTP:
         print(f"MCP server running at http://0.0.0.0:{MCP_HTTP_PORT}/mcp")
         print("Connect Cursor with: {\"url\": \"http://localhost:" + str(MCP_HTTP_PORT) + "/mcp\"}")
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=MCP_HTTP_PORT)
+        mcp.run(transport="streamable-http")
     else:
         print("Running MCP server (stdio)...")
         asyncio.run(_run_stdio())

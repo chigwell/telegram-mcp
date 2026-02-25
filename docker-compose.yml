@@ -11,11 +11,12 @@ services:
       - .env
     # HTTP transport by default for Docker: server runs, Cursor connects via URL.
     # (Direct runs default to stdio; set TELEGRAM_MCP_HTTP=true in .env to override.)
+    # TELEGRAM_MCP_HTTP_PORT from .env (default 8000) controls the port.
     environment:
       - TELEGRAM_MCP_HTTP=true
-      - TELEGRAM_MCP_HTTP_PORT=8000
+      - TELEGRAM_MCP_HTTP_PORT=${TELEGRAM_MCP_HTTP_PORT:-8000}
     ports:
-      - "8000:8000"
+      - "${TELEGRAM_MCP_HTTP_PORT:-8000}:${TELEGRAM_MCP_HTTP_PORT:-8000}"
     # Optional: Uncomment the following lines to mount a local directory
     # for persisting the Telegram session file if NOT using TELEGRAM_SESSION_STRING.
     # Replace './telegram_sessions' with your desired host path.
