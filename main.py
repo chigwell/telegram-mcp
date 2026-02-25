@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 import json
@@ -9,12 +10,15 @@ import mimetypes
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import List, Dict, Optional, Union, Any
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 # Third-party libraries
 import nest_asyncio
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 from mcp.types import ToolAnnotations
+from mcp.shared.exceptions import McpError
 from pythonjsonlogger import jsonlogger
 from telethon import TelegramClient, functions, types, utils
 from telethon.sessions import StringSession
@@ -137,6 +141,32 @@ except Exception as log_error:
     # Fallback to console-only logging
     logger.addHandler(console_handler)
     logger.error(f"Failed to set up log file handler: {log_error}")
+
+
+# File-path tool security configuration
+SERVER_ALLOWED_ROOTS: list[Path] = []
+DEFAULT_DOWNLOAD_SUBDIR = "downloads"
+DISALLOWED_PATH_PATTERNS = ("*", "?", "[", "]", "{", "}", "~", "\x00")
+EXTENSION_ALLOWLISTS: dict[str, set[str]] = {
+    "send_voice": {".ogg", ".opus"},
+    "send_sticker": {".webp"},
+    "set_profile_photo": {".jpg", ".jpeg", ".png", ".webp"},
+    "edit_chat_photo": {".jpg", ".jpeg", ".png", ".webp"},
+}
+MAX_FILE_BYTES: dict[str, int] = {
+    "send_file": 200 * 1024 * 1024,  # 200 MB
+    "upload_file": 200 * 1024 * 1024,
+    "send_voice": 100 * 1024 * 1024,
+    "send_sticker": 10 * 1024 * 1024,
+    "set_profile_photo": 50 * 1024 * 1024,
+    "edit_chat_photo": 50 * 1024 * 1024,
+}
+ROOTS_UNSUPPORTED_ERROR_CODES = {-32601}
+ROOTS_STATUS_READY = "ready"
+ROOTS_STATUS_NOT_CONFIGURED = "not_configured"
+ROOTS_STATUS_UNSUPPORTED_FALLBACK = "unsupported_fallback"
+ROOTS_STATUS_CLIENT_DENY_ALL = "client_deny_all"
+ROOTS_STATUS_ERROR = "error"
 
 
 # Error code prefix mapping for better error tracing
@@ -361,6 +391,274 @@ def get_engagement_info(message) -> str:
         total_reactions = sum(getattr(r, "count", 0) or 0 for r in results) if results else 0
         engagement_parts.append(f"reactions:{total_reactions}")
     return f" | {', '.join(engagement_parts)}" if engagement_parts else ""
+
+
+def _dedupe_paths(paths: List[Path]) -> List[Path]:
+    seen: set[str] = set()
+    result: List[Path] = []
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+def _contains_forbidden_path_patterns(raw_path: str) -> Optional[str]:
+    value = raw_path.strip()
+    if not value:
+        return "Path must not be empty."
+    if any(token in value for token in DISALLOWED_PATH_PATTERNS):
+        return "Path contains disallowed wildcard/shell patterns."
+    if ".." in Path(value).parts:
+        return "Path traversal is not allowed."
+    return None
+
+
+def _coerce_root_uri_to_path(uri: str) -> Path:
+    parsed = urlparse(uri)
+    if parsed.scheme != "file":
+        raise ValueError(f"Unsupported root URI scheme: {parsed.scheme}")
+
+    decoded_path = unquote(parsed.path or "")
+    if parsed.netloc and parsed.netloc not in ("", "localhost"):
+        decoded_path = f"//{parsed.netloc}{decoded_path}"
+    if os.name == "nt" and decoded_path.startswith("/") and len(decoded_path) > 2:
+        # file:///C:/tmp -> C:/tmp on Windows
+        if decoded_path[2] == ":":
+            decoded_path = decoded_path[1:]
+    return Path(decoded_path).resolve(strict=True)
+
+
+def _path_is_within_root(candidate: Path, root: Path) -> bool:
+    root = root.resolve()
+    if root.is_file():
+        return candidate == root
+    return candidate == root or root in candidate.parents
+
+
+def _path_is_within_any_root(candidate: Path, roots: List[Path]) -> bool:
+    return any(_path_is_within_root(candidate, root) for root in roots)
+
+
+def _first_resolution_root(roots: List[Path]) -> Path:
+    first = roots[0]
+    return first if first.is_dir() else first.parent
+
+
+def _ensure_extension_allowed(tool_name: str, candidate: Path) -> Optional[str]:
+    allowlist = EXTENSION_ALLOWLISTS.get(tool_name)
+    if not allowlist:
+        return None
+    if candidate.suffix.lower() not in allowlist:
+        allowed = ", ".join(sorted(allowlist))
+        return f"File extension is not allowed for {tool_name}. Allowed: {allowed}."
+    return None
+
+
+def _ensure_size_within_limit(tool_name: str, candidate: Path) -> Optional[str]:
+    max_bytes = MAX_FILE_BYTES.get(tool_name)
+    if not max_bytes:
+        return None
+    size = candidate.stat().st_size
+    if size > max_bytes:
+        return f"File is too large for {tool_name}: {size} bytes " f"(limit: {max_bytes} bytes)."
+    return None
+
+
+async def _get_effective_allowed_roots(ctx: Optional[Context]) -> List[Path]:
+    roots, _status = await _get_effective_allowed_roots_with_status(ctx)
+    return roots
+
+
+def _is_roots_unsupported_error(error: Exception) -> bool:
+    if isinstance(error, McpError):
+        error_code = getattr(getattr(error, "error", None), "code", None)
+        error_message = (
+            getattr(getattr(error, "error", None), "message", None) or str(error)
+        ).lower()
+        if error_code in ROOTS_UNSUPPORTED_ERROR_CODES:
+            return True
+        return "method not found" in error_message or "not implemented" in error_message
+
+    if isinstance(error, NotImplementedError):
+        return True
+    if isinstance(error, AttributeError):
+        return "list_roots" in str(error)
+    return False
+
+
+async def _get_effective_allowed_roots_with_status(
+    ctx: Optional[Context],
+) -> tuple[List[Path], str]:
+    fallback_roots = list(SERVER_ALLOWED_ROOTS)
+    if ctx is None:
+        if fallback_roots:
+            return fallback_roots, ROOTS_STATUS_READY
+        return [], ROOTS_STATUS_NOT_CONFIGURED
+
+    try:
+        list_roots_result = await ctx.session.list_roots()
+    except Exception as error:
+        if _is_roots_unsupported_error(error):
+            if fallback_roots:
+                return fallback_roots, ROOTS_STATUS_UNSUPPORTED_FALLBACK
+            return [], ROOTS_STATUS_NOT_CONFIGURED
+        logger.error(
+            "MCP roots request failed; disabling file-path tools for safety.", exc_info=True
+        )
+        return [], ROOTS_STATUS_ERROR
+
+    client_roots: List[Path] = []
+    for root in list_roots_result.roots:
+        try:
+            client_roots.append(_coerce_root_uri_to_path(str(root.uri)))
+        except Exception:
+            # Ignore invalid root entries supplied by a client.
+            continue
+
+    if client_roots:
+        return _dedupe_paths(client_roots), ROOTS_STATUS_READY
+
+    # Roots API succeeded; an empty roots list is treated as explicit deny-all.
+    return [], ROOTS_STATUS_CLIENT_DENY_ALL
+
+
+async def _ensure_allowed_roots(
+    ctx: Optional[Context], tool_name: str
+) -> tuple[List[Path], Optional[str]]:
+    roots, status = await _get_effective_allowed_roots_with_status(ctx)
+    if not roots:
+        if status == ROOTS_STATUS_CLIENT_DENY_ALL:
+            return (
+                [],
+                (
+                    f"{tool_name} is disabled because the client provided an empty "
+                    "MCP Roots list (deny-all)."
+                ),
+            )
+        if status == ROOTS_STATUS_ERROR:
+            return (
+                [],
+                (
+                    f"{tool_name} is disabled because MCP Roots could not be verified safely. "
+                    "Check MCP client/server logs."
+                ),
+            )
+        return (
+            [],
+            (
+                f"{tool_name} is disabled until allowed roots are configured. "
+                "Provide server CLI roots and/or client MCP Roots."
+            ),
+        )
+    return roots, None
+
+
+async def _resolve_readable_file_path(
+    *,
+    raw_path: str,
+    ctx: Optional[Context],
+    tool_name: str,
+) -> tuple[Optional[Path], Optional[str]]:
+    roots, error = await _ensure_allowed_roots(ctx, tool_name)
+    if error:
+        return None, error
+
+    pattern_error = _contains_forbidden_path_patterns(raw_path)
+    if pattern_error:
+        return None, pattern_error
+
+    candidate = Path(raw_path.strip())
+    if not candidate.is_absolute():
+        candidate = _first_resolution_root(roots) / candidate
+
+    try:
+        candidate = candidate.resolve(strict=True)
+    except FileNotFoundError:
+        return None, f"File not found: {raw_path}"
+
+    if not _path_is_within_any_root(candidate, roots):
+        return None, "Path is outside allowed roots."
+    if not candidate.is_file():
+        return None, f"Path is not a file: {candidate}"
+    if not os.access(candidate, os.R_OK):
+        return None, f"File is not readable: {candidate}"
+
+    extension_error = _ensure_extension_allowed(tool_name, candidate)
+    if extension_error:
+        return None, extension_error
+
+    size_error = _ensure_size_within_limit(tool_name, candidate)
+    if size_error:
+        return None, size_error
+
+    return candidate, None
+
+
+async def _resolve_writable_file_path(
+    *,
+    raw_path: Optional[str],
+    default_filename: str,
+    ctx: Optional[Context],
+    tool_name: str,
+) -> tuple[Optional[Path], Optional[str]]:
+    roots, error = await _ensure_allowed_roots(ctx, tool_name)
+    if error:
+        return None, error
+
+    if raw_path and raw_path.strip():
+        pattern_error = _contains_forbidden_path_patterns(raw_path)
+        if pattern_error:
+            return None, pattern_error
+        candidate = Path(raw_path.strip())
+        if not candidate.is_absolute():
+            candidate = _first_resolution_root(roots) / candidate
+    else:
+        safe_name = Path(default_filename).name
+        candidate = _first_resolution_root(roots) / DEFAULT_DOWNLOAD_SUBDIR / safe_name
+
+    candidate = candidate.resolve(strict=False)
+    parent = candidate.parent.resolve(strict=False)
+    if not _path_is_within_any_root(candidate, roots) or not _path_is_within_any_root(
+        parent, roots
+    ):
+        return None, "Path is outside allowed roots."
+
+    extension_error = _ensure_extension_allowed(tool_name, candidate)
+    if extension_error:
+        return None, extension_error
+
+    parent.mkdir(parents=True, exist_ok=True)
+    if not os.access(parent, os.W_OK):
+        return None, f"Directory not writable: {parent}"
+
+    return candidate, None
+
+
+def _configure_allowed_roots_from_cli(argv: Optional[List[str]] = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="telegram-mcp",
+        add_help=False,
+        description=(
+            "Optional positional arguments define server-side allowed roots "
+            "for file-path tools."
+        ),
+    )
+    parser.add_argument("allowed_roots", nargs="*")
+    parsed, _unknown = parser.parse_known_args(argv or [])
+
+    resolved_roots: List[Path] = []
+    for raw_root in parsed.allowed_roots:
+        root = Path(raw_root).expanduser()
+        if not root.exists():
+            raise SystemExit(f"Allowed root does not exist: {root}")
+        resolved = root.resolve(strict=True)
+        resolved_roots.append(resolved)
+
+    global SERVER_ALLOWED_ROOTS
+    SERVER_ALLOWED_ROOTS = _dedupe_paths(resolved_roots)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chats", openWorldHint=True, readOnlyHint=True))
@@ -1730,22 +2028,30 @@ async def get_participants(chat_id: Union[int, str]) -> str:
 
 @mcp.tool(annotations=ToolAnnotations(title="Send File", openWorldHint=True, destructiveHint=True))
 @validate_id("chat_id")
-async def send_file(chat_id: Union[int, str], file_path: str, caption: str = None) -> str:
+async def send_file(
+    chat_id: Union[int, str],
+    file_path: str,
+    caption: str = None,
+    ctx: Optional[Context] = None,
+) -> str:
     """
     Send a file to a chat.
     Args:
         chat_id: The chat ID or username.
-        file_path: Absolute path to the file to send (must exist and be readable).
+        file_path: Absolute or relative path to the file under allowed roots.
         caption: Optional caption for the file.
     """
     try:
-        if not os.path.isfile(file_path):
-            return f"File not found: {file_path}"
-        if not os.access(file_path, os.R_OK):
-            return f"File is not readable: {file_path}"
+        safe_path, path_error = await _resolve_readable_file_path(
+            raw_path=file_path,
+            ctx=ctx,
+            tool_name="send_file",
+        )
+        if path_error:
+            return path_error
         entity = await client.get_entity(chat_id)
-        await client.send_file(entity, file_path, caption=caption)
-        return f"File sent to chat {chat_id}."
+        await client.send_file(entity, str(safe_path), caption=caption)
+        return f"File sent to chat {chat_id} from {safe_path}."
     except Exception as e:
         return log_and_format_error(
             "send_file", e, chat_id=chat_id, file_path=file_path, caption=caption
@@ -1753,30 +2059,51 @@ async def send_file(chat_id: Union[int, str], file_path: str, caption: str = Non
 
 
 @mcp.tool(
-    annotations=ToolAnnotations(title="Download Media", openWorldHint=True, readOnlyHint=True)
+    annotations=ToolAnnotations(title="Download Media", openWorldHint=True, destructiveHint=True)
 )
 @validate_id("chat_id")
-async def download_media(chat_id: Union[int, str], message_id: int, file_path: str) -> str:
+async def download_media(
+    chat_id: Union[int, str],
+    message_id: int,
+    file_path: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> str:
     """
     Download media from a message in a chat.
     Args:
         chat_id: The chat ID or username.
         message_id: The message ID containing the media.
-        file_path: Absolute path to save the downloaded file (must be writable).
+        file_path: Optional absolute or relative path under allowed roots.
+            If omitted, saves into `<first_root>/downloads/`.
     """
     try:
         entity = await client.get_entity(chat_id)
         msg = await client.get_messages(entity, ids=message_id)
         if not msg or not msg.media:
             return "No media found in the specified message."
-        # Check if directory is writable
-        dir_path = os.path.dirname(file_path) or "."
-        if not os.access(dir_path, os.W_OK):
-            return f"Directory not writable: {dir_path}"
-        await client.download_media(msg, file=file_path)
-        if not os.path.isfile(file_path):
-            return f"Download failed: file not created at {file_path}"
-        return f"Media downloaded to {file_path}."
+
+        default_name = f"telegram_{chat_id}_{message_id}_{int(time.time())}"
+        out_path, path_error = await _resolve_writable_file_path(
+            raw_path=file_path,
+            default_filename=default_name,
+            ctx=ctx,
+            tool_name="download_media",
+        )
+        if path_error:
+            return path_error
+
+        downloaded = await client.download_media(msg, file=str(out_path))
+        if not downloaded:
+            return f"Download failed for message {message_id}."
+
+        final_path = Path(downloaded).resolve(strict=True)
+        roots, roots_error = await _ensure_allowed_roots(ctx, "download_media")
+        if roots_error:
+            return roots_error
+        if not _path_is_within_any_root(final_path, roots):
+            return "Download failed: resulting path is outside allowed roots."
+
+        return f"Media downloaded to {final_path}."
     except Exception as e:
         return log_and_format_error(
             "download_media",
@@ -1814,15 +2141,24 @@ async def update_profile(first_name: str = None, last_name: str = None, about: s
         title="Set Profile Photo", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
-async def set_profile_photo(file_path: str) -> str:
+async def set_profile_photo(file_path: str, ctx: Optional[Context] = None) -> str:
     """
     Set a new profile photo.
     """
     try:
-        await client(
-            functions.photos.UploadProfilePhotoRequest(file=await client.upload_file(file_path))
+        safe_path, path_error = await _resolve_readable_file_path(
+            raw_path=file_path,
+            ctx=ctx,
+            tool_name="set_profile_photo",
         )
-        return "Profile photo updated."
+        if path_error:
+            return path_error
+        await client(
+            functions.photos.UploadProfilePhotoRequest(
+                file=await client.upload_file(str(safe_path))
+            )
+        )
+        return f"Profile photo updated from {safe_path}."
     except Exception as e:
         return log_and_format_error("set_profile_photo", e, file_path=file_path)
 
@@ -2077,18 +2413,25 @@ async def edit_chat_title(chat_id: Union[int, str], title: str) -> str:
     )
 )
 @validate_id("chat_id")
-async def edit_chat_photo(chat_id: Union[int, str], file_path: str) -> str:
+async def edit_chat_photo(
+    chat_id: Union[int, str],
+    file_path: str,
+    ctx: Optional[Context] = None,
+) -> str:
     """
     Edit the photo of a chat, group, or channel. Requires a file path to an image.
     """
     try:
-        if not os.path.isfile(file_path):
-            return f"Photo file not found: {file_path}"
-        if not os.access(file_path, os.R_OK):
-            return f"Photo file not readable: {file_path}"
+        safe_path, path_error = await _resolve_readable_file_path(
+            raw_path=file_path,
+            ctx=ctx,
+            tool_name="edit_chat_photo",
+        )
+        if path_error:
+            return path_error
 
         entity = await client.get_entity(chat_id)
-        uploaded_file = await client.upload_file(file_path)
+        uploaded_file = await client.upload_file(str(safe_path))
 
         if isinstance(entity, Channel):
             # For channels/supergroups, use EditPhotoRequest with InputChatUploadedPhoto
@@ -2103,7 +2446,7 @@ async def edit_chat_photo(chat_id: Union[int, str], file_path: str) -> str:
         else:
             return f"Cannot edit photo for this entity type ({type(entity)})."
 
-        return f"Chat {chat_id} photo updated."
+        return f"Chat {chat_id} photo updated from {safe_path}."
     except Exception as e:
         logger.exception(f"edit_chat_photo failed (chat_id={chat_id}, file_path='{file_path}')")
         return log_and_format_error("edit_chat_photo", e, chat_id=chat_id, file_path=file_path)
@@ -2606,36 +2949,74 @@ async def import_chat_invite(hash: str) -> str:
     annotations=ToolAnnotations(title="Send Voice", openWorldHint=True, destructiveHint=True)
 )
 @validate_id("chat_id")
-async def send_voice(chat_id: Union[int, str], file_path: str) -> str:
+async def send_voice(
+    chat_id: Union[int, str],
+    file_path: str,
+    ctx: Optional[Context] = None,
+) -> str:
     """
     Send a voice message to a chat. File must be an OGG/OPUS voice note.
 
     Args:
         chat_id: The chat ID or username.
-        file_path: Absolute path to the OGG/OPUS file.
+        file_path: Absolute or relative path under allowed roots to the OGG/OPUS file.
     """
     try:
-        if not os.path.isfile(file_path):
-            return f"File not found: {file_path}"
-        if not os.access(file_path, os.R_OK):
-            return f"File is not readable: {file_path}"
+        safe_path, path_error = await _resolve_readable_file_path(
+            raw_path=file_path,
+            ctx=ctx,
+            tool_name="send_voice",
+        )
+        if path_error:
+            return path_error
 
-        mime, _ = mimetypes.guess_type(file_path)
+        mime, _ = mimetypes.guess_type(str(safe_path))
         if not (
             mime
             and (
                 mime == "audio/ogg"
-                or file_path.lower().endswith(".ogg")
-                or file_path.lower().endswith(".opus")
+                or str(safe_path).lower().endswith(".ogg")
+                or str(safe_path).lower().endswith(".opus")
             )
         ):
             return "Voice file must be .ogg or .opus format."
 
         entity = await client.get_entity(chat_id)
-        await client.send_file(entity, file_path, voice_note=True)
-        return f"Voice message sent to chat {chat_id}."
+        await client.send_file(entity, str(safe_path), voice_note=True)
+        return f"Voice message sent to chat {chat_id} from {safe_path}."
     except Exception as e:
         return log_and_format_error("send_voice", e, chat_id=chat_id, file_path=file_path)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Upload File", openWorldHint=True, destructiveHint=True)
+)
+async def upload_file(file_path: str, ctx: Optional[Context] = None) -> str:
+    """
+    Upload a local file to Telegram and return upload metadata.
+
+    Args:
+        file_path: Absolute or relative path under allowed roots.
+    """
+    try:
+        safe_path, path_error = await _resolve_readable_file_path(
+            raw_path=file_path,
+            ctx=ctx,
+            tool_name="upload_file",
+        )
+        if path_error:
+            return path_error
+
+        uploaded = await client.upload_file(str(safe_path))
+        payload = {
+            "path": str(safe_path),
+            "name": getattr(uploaded, "name", safe_path.name),
+            "size": getattr(uploaded, "size", safe_path.stat().st_size),
+            "md5_checksum": getattr(uploaded, "md5_checksum", None),
+        }
+        return json.dumps(payload, indent=2, default=json_serializer)
+    except Exception as e:
+        return log_and_format_error("upload_file", e, file_path=file_path)
 
 
 @mcp.tool(
@@ -3003,25 +3384,30 @@ async def get_sticker_sets() -> str:
     annotations=ToolAnnotations(title="Send Sticker", openWorldHint=True, destructiveHint=True)
 )
 @validate_id("chat_id")
-async def send_sticker(chat_id: Union[int, str], file_path: str) -> str:
+async def send_sticker(
+    chat_id: Union[int, str],
+    file_path: str,
+    ctx: Optional[Context] = None,
+) -> str:
     """
     Send a sticker to a chat. File must be a valid .webp sticker file.
 
     Args:
         chat_id: The chat ID or username.
-        file_path: Absolute path to the .webp sticker file.
+        file_path: Absolute or relative path under allowed roots to the .webp sticker file.
     """
     try:
-        if not os.path.isfile(file_path):
-            return f"Sticker file not found: {file_path}"
-        if not os.access(file_path, os.R_OK):
-            return f"Sticker file is not readable: {file_path}"
-        if not file_path.lower().endswith(".webp"):
-            return "Sticker file must be a .webp file."
+        safe_path, path_error = await _resolve_readable_file_path(
+            raw_path=file_path,
+            ctx=ctx,
+            tool_name="send_sticker",
+        )
+        if path_error:
+            return path_error
 
         entity = await client.get_entity(chat_id)
-        await client.send_file(entity, file_path, force_document=False)
-        return f"Sticker sent to chat {chat_id}."
+        await client.send_file(entity, str(safe_path), force_document=False)
+        return f"Sticker sent to chat {chat_id} from {safe_path}."
     except Exception as e:
         return log_and_format_error("send_sticker", e, chat_id=chat_id, file_path=file_path)
 
@@ -4228,6 +4614,7 @@ async def _main() -> None:
 
 
 def main() -> None:
+    _configure_allowed_roots_from_cli(sys.argv[1:])
     nest_asyncio.apply()
     asyncio.run(_main())
 

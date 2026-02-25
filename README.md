@@ -101,12 +101,19 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 ### User & Profile
 - **get_me()**: Get your user info
 - **update_profile(first_name, last_name, about)**: Update your profile
+- **set_profile_photo(file_path)**: Set a profile photo from an allowed root path
 - **delete_profile_photo()**: Remove your profile photo
 - **get_user_photos(user_id, limit)**: Get a user's profile photos
 - **get_user_status(user_id)**: Get a user's online status
 
 ### Media
 - **get_media_info(chat_id, message_id)**: Get info about media in a message
+- **send_file(chat_id, file_path, caption)**: Send a local file from allowed roots
+- **download_media(chat_id, message_id, file_path)**: Save message media under allowed roots
+- **upload_file(file_path)**: Upload a local file and return upload metadata
+- **send_voice(chat_id, file_path)**: Send `.ogg/.opus` voice note from allowed roots
+- **send_sticker(chat_id, file_path)**: Send `.webp` sticker from allowed roots
+- **edit_chat_photo(chat_id, file_path)**: Update chat photo from allowed roots
 
 ### Search & Discovery
 - **search_public_chats(query)**: Search public chats/channels/bots
@@ -142,11 +149,28 @@ To improve robustness, all functions accepting `chat_id` or `user_id` parameters
 
 The server will automatically validate the input and convert it to the correct format before making a request to Telegram. If the input is invalid, a clear error message will be returned.
 
-## Removed Functionality
+## File-path Tools Security Model
 
-Please note that tools requiring direct file path access on the server (`send_file`, `download_media`, `set_profile_photo`, `edit_chat_photo`, `send_voice`, `send_sticker`, `upload_file`) have been removed from `main.py`. This is due to limitations in the current MCP environment regarding handling file attachments and local file system paths.
+File-path tools are available, but **disabled by default** until allowed roots are configured.
 
-Additionally, GIF-related tools (`get_gif_search`, `get_saved_gifs`, `send_gif`) have been removed due to ongoing issues with reliability in the Telethon library or Telegram API interactions.
+Supported file-path tools:
+- `send_file`, `download_media`, `set_profile_photo`, `edit_chat_photo`, `send_voice`, `send_sticker`, `upload_file`
+
+Security semantics (aligned with MCP filesystem server):
+- Server-side allowlist via CLI positional arguments (fallback when Roots API is unsupported).
+- Client-provided MCP Roots replace the server allowlist when available.
+- If the client returns an empty Roots list, file-path tools are disabled (deny-all).
+- All paths are resolved via realpath and must stay inside an allowed root.
+- Traversal/glob-like patterns are rejected (`..`, `*`, `?`, `~`, etc.).
+- Relative paths resolve against the first allowed root.
+- Write tools default to `<first_root>/downloads/` when `file_path` is omitted.
+
+Example server launch with allowlisted roots:
+```bash
+uv --directory /full/path/to/telegram-mcp run main.py /data/telegram /tmp/telegram-mcp
+```
+
+GIF tools are currently limited: `get_gif_search` and `send_gif` are available, while `get_saved_gifs` is not implemented due to reliability limits in Telethon/Telegram API interactions.
 
 ---
 
