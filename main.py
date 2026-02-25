@@ -91,6 +91,11 @@ TELEGRAM_SESSION_NAME = os.getenv("TELEGRAM_SESSION_NAME")
 # Check if a string session exists in environment, otherwise use file-based session
 SESSION_STRING = os.getenv("TELEGRAM_SESSION_STRING")
 
+# HTTP transport: when set, run as HTTP server so clients (e.g. Cursor) can connect via URL.
+# Default: False (stdio) when running directly. Docker Compose sets this to True automatically.
+MCP_HTTP = os.getenv("TELEGRAM_MCP_HTTP", "").lower() in ("true", "1", "yes")
+MCP_HTTP_PORT = int(os.getenv("TELEGRAM_MCP_HTTP_PORT", "8000"))
+
 mcp = FastMCP("telegram")
 
 if SESSION_STRING:
@@ -4208,15 +4213,22 @@ async def reorder_folders(folder_ids: List[int]) -> str:
         )
 
 
-async def _main() -> None:
-    try:
-        # Start the Telethon client non-interactively
-        print("Starting Telegram client...")
-        await client.start()
+async def _connect_client() -> None:
+    """Connect the Telethon client. Must run before MCP server starts."""
+    print("Starting Telegram client...")
+    await client.start()
+    print("Telegram client started.")
 
-        print("Telegram client started. Running MCP server...")
-        # Use the asynchronous entrypoint instead of mcp.run()
-        await mcp.run_stdio_async()
+
+async def _run_stdio() -> None:
+    """Run MCP server over stdio (default: client spawns this process)."""
+    await mcp.run_stdio_async()
+
+
+def main() -> None:
+    nest_asyncio.apply()
+    try:
+        asyncio.run(_connect_client())
     except Exception as e:
         print(f"Error starting client: {e}", file=sys.stderr)
         if isinstance(e, sqlite3.OperationalError) and "database is locked" in str(e):
@@ -4226,10 +4238,13 @@ async def _main() -> None:
             )
         sys.exit(1)
 
-
-def main() -> None:
-    nest_asyncio.apply()
-    asyncio.run(_main())
+    if MCP_HTTP:
+        print(f"MCP server running at http://0.0.0.0:{MCP_HTTP_PORT}/mcp")
+        print("Connect Cursor with: {\"url\": \"http://localhost:" + str(MCP_HTTP_PORT) + "/mcp\"}")
+        mcp.run(transport="streamable-http", host="0.0.0.0", port=MCP_HTTP_PORT)
+    else:
+        print("Running MCP server (stdio)...")
+        asyncio.run(_run_stdio())
 
 
 if __name__ == "__main__":
