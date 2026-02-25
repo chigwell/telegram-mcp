@@ -4236,6 +4236,13 @@ def main() -> None:
                 "Database lock detected. Please ensure no other instances are running.",
                 file=sys.stderr,
             )
+        elif "EOF when reading a line" in str(e) or "Please enter your phone" in str(e):
+            print(
+                "Docker/non-interactive: Telethon needs a pre-authorized session. "
+                "Run 'uv run session_string_generator.py' locally (with TTY), then add "
+                "TELEGRAM_SESSION_STRING to your .env before using Docker.",
+                file=sys.stderr,
+            )
         sys.exit(1)
 
     if MCP_HTTP:

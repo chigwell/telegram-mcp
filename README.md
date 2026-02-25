@@ -214,8 +214,9 @@ You have two options:
 
 This method uses the `docker-compose.yml` file and automatically reads your credentials from a `.env` file.
 
-1.  **Create `.env` File:** Ensure you have a `.env` file in the project root containing your `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, and `TELEGRAM_SESSION_STRING` (or `TELEGRAM_SESSION_NAME`). Use `.env.example` as a template.
-2.  **Run Compose:**
+1.  **Create `.env` File:** Ensure you have a `.env` file in the project root containing your `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, and **`TELEGRAM_SESSION_STRING`**. Use `.env.example` as a template.
+2.  **Session string required for Docker:** Docker has no interactive terminal, so you must generate a session string **before** running in Docker. Run `uv run session_string_generator.py` locally (outside Docker), follow the prompts, then add the output to `.env` as `TELEGRAM_SESSION_STRING`.
+3.  **Run Compose:**
     ```bash
     docker compose up --build
     ```
