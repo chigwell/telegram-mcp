@@ -37,6 +37,7 @@ from telethon.tl.types import (
     TextWithEntities,
 )
 import re
+from contextlib import asynccontextmanager
 from functools import wraps
 import telethon.errors.rpcerrorlist
 
@@ -96,18 +97,43 @@ SESSION_STRING = os.getenv("TELEGRAM_SESSION_STRING")
 MCP_HTTP = os.getenv("TELEGRAM_MCP_HTTP", "").lower() in ("true", "1", "yes")
 MCP_HTTP_PORT = int(os.getenv("TELEGRAM_MCP_HTTP_PORT", "8000"))
 
+if SESSION_STRING:
+    client = TelegramClient(StringSession(SESSION_STRING), TELEGRAM_API_ID, TELEGRAM_API_HASH)
+else:
+    client = TelegramClient(TELEGRAM_SESSION_NAME, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+
+
+@asynccontextmanager
+async def _telegram_lifespan(app):
+    """Connect Telethon in the server's event loop so tools run in the same loop."""
+    print("Starting Telegram client...")
+    try:
+        await client.start()
+        print("Telegram client started.")
+    except Exception as e:
+        print(f"Error starting client: {e}", file=sys.stderr)
+        if isinstance(e, sqlite3.OperationalError) and "database is locked" in str(e):
+            print(
+                "Database lock detected. Please ensure no other instances are running.",
+                file=sys.stderr,
+            )
+        elif "EOF when reading a line" in str(e) or "Please enter your phone" in str(e):
+            print(
+                "Docker/non-interactive: Telethon needs a pre-authorized session. "
+                "Run 'uv run session_string_generator.py' locally (with TTY), then add "
+                "TELEGRAM_SESSION_STRING to your .env before using Docker.",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+    yield
+
+
 mcp = FastMCP(
     "telegram",
     host="0.0.0.0" if MCP_HTTP else "127.0.0.1",
     port=MCP_HTTP_PORT,
+    lifespan=_telegram_lifespan,
 )
-
-if SESSION_STRING:
-    # Use the string session if available
-    client = TelegramClient(StringSession(SESSION_STRING), TELEGRAM_API_ID, TELEGRAM_API_HASH)
-else:
-    # Use file-based session
-    client = TelegramClient(TELEGRAM_SESSION_NAME, TELEGRAM_API_ID, TELEGRAM_API_HASH)
 
 # Setup robust logging with both file and console output
 logger = logging.getLogger("telegram_mcp")
@@ -4217,22 +4243,12 @@ async def reorder_folders(folder_ids: List[int]) -> str:
         )
 
 
-async def _connect_client() -> None:
-    """Connect the Telethon client. Must run before MCP server starts."""
-    print("Starting Telegram client...")
-    await client.start()
-    print("Telegram client started.")
-
-
 async def _run_stdio() -> None:
     """Run MCP server over stdio (default: client spawns this process)."""
-    await mcp.run_stdio_async()
-
-
-def main() -> None:
-    nest_asyncio.apply()
+    print("Starting Telegram client...")
     try:
-        asyncio.run(_connect_client())
+        await client.start()
+        print("Telegram client started. Running MCP server...")
     except Exception as e:
         print(f"Error starting client: {e}", file=sys.stderr)
         if isinstance(e, sqlite3.OperationalError) and "database is locked" in str(e):
@@ -4248,7 +4264,11 @@ def main() -> None:
                 file=sys.stderr,
             )
         sys.exit(1)
+    await mcp.run_stdio_async()
 
+
+def main() -> None:
+    nest_asyncio.apply()
     if MCP_HTTP:
         print(f"MCP server running at http://0.0.0.0:{MCP_HTTP_PORT}/mcp")
         print("Connect Cursor with: {\"url\": \"http://localhost:" + str(MCP_HTTP_PORT) + "/mcp\"}")
