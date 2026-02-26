@@ -726,16 +726,21 @@ async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int =
     annotations=ToolAnnotations(title="Send Message", openWorldHint=True, destructiveHint=True)
 )
 @validate_id("chat_id")
-async def send_message(chat_id: Union[int, str], message: str) -> str:
+async def send_message(
+    chat_id: Union[int, str], message: str, parse_mode: Optional[str] = None
+) -> str:
     """
     Send a message to a specific chat.
     Args:
         chat_id: The ID or username of the chat.
         message: The message content to send.
+        parse_mode: Optional formatting mode. Use 'html' for HTML tags (<b>, <i>, <code>, <pre>,
+            <a href="...">), 'md' or 'markdown' for Markdown (**bold**, __italic__, `code`,
+            ```pre```), or omit for plain text (no formatting).
     """
     try:
         entity = await client.get_entity(chat_id)
-        await client.send_message(entity, message)
+        await client.send_message(entity, message, parse_mode=parse_mode)
         return "Message sent successfully."
     except Exception as e:
         return log_and_format_error("send_message", e, chat_id=chat_id)
@@ -3140,13 +3145,22 @@ async def mark_as_read(chat_id: Union[int, str]) -> str:
     annotations=ToolAnnotations(title="Reply To Message", openWorldHint=True, destructiveHint=True)
 )
 @validate_id("chat_id")
-async def reply_to_message(chat_id: Union[int, str], message_id: int, text: str) -> str:
+async def reply_to_message(
+    chat_id: Union[int, str], message_id: int, text: str, parse_mode: Optional[str] = None
+) -> str:
     """
     Reply to a specific message in a chat.
+    Args:
+        chat_id: The chat ID or username.
+        message_id: The message ID to reply to.
+        text: The reply text.
+        parse_mode: Optional formatting mode. Use 'html' for HTML tags (<b>, <i>, <code>, <pre>,
+            <a href="...">), 'md' or 'markdown' for Markdown (**bold**, __italic__, `code`,
+            ```pre```), or omit for plain text (no formatting).
     """
     try:
         entity = await client.get_entity(chat_id)
-        await client.send_message(entity, text, reply_to=message_id)
+        await client.send_message(entity, text, reply_to=message_id, parse_mode=parse_mode)
         return f"Replied to message {message_id} in chat {chat_id}."
     except Exception as e:
         return log_and_format_error(
