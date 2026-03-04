@@ -137,7 +137,7 @@ try:
     logger.addHandler(file_handler)
     logger.info(f"Logging initialized to {log_file_path}")
 except Exception as log_error:
-    print(f"WARNING: Error setting up log file: {log_error}")
+    print(f"WARNING: Error setting up log file: {log_error}", file=sys.stderr)
     # Fallback to console-only logging
     logger.addHandler(console_handler)
     logger.error(f"Failed to set up log file handler: {log_error}")
@@ -4611,10 +4611,10 @@ async def reorder_folders(folder_ids: List[int]) -> str:
 async def _main() -> None:
     try:
         # Start the Telethon client non-interactively
-        print("Starting Telegram client...")
+        print("Starting Telegram client...", file=sys.stderr)
         await client.start()
 
-        print("Telegram client started. Running MCP server...")
+        print("Telegram client started. Running MCP server...", file=sys.stderr)
         # Use the asynchronous entrypoint instead of mcp.run()
         await mcp.run_stdio_async()
     except Exception as e:
