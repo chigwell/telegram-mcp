@@ -3201,7 +3201,8 @@ async def search_public_chats(query: str) -> str:
     """
     try:
         result = await client(functions.contacts.SearchRequest(q=query, limit=20))
-        return json.dumps([format_entity(u) for u in result.users], indent=2)
+        entities = [format_entity(e) for e in result.chats + result.users]
+        return json.dumps(entities, indent=2)
     except Exception as e:
         return log_and_format_error("search_public_chats", e, query=query)
 
