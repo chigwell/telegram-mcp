@@ -37,6 +37,7 @@ from telethon.tl.types import (
     InputPeerChat,
     InputPeerChannel,
     DialogFilter,
+    DialogFilterChatlist,
     DialogFilterDefault,
     TextWithEntities,
 )
@@ -4123,6 +4124,21 @@ async def list_folders() -> str:
                 }
                 folders.append(folder_data)
 
+            elif isinstance(f, DialogFilterChatlist):
+                # Shared folders use DialogFilterChatlist type
+                title = f.title
+                if isinstance(title, TextWithEntities):
+                    title = title.text
+                folder_data = {
+                    "id": f.id,
+                    "title": title,
+                    "emoticon": getattr(f, "emoticon", None),
+                    "type": "shared",
+                    "included_peers_count": len(getattr(f, "include_peers", [])),
+                    "pinned_peers_count": len(getattr(f, "pinned_peers", [])),
+                }
+                folders.append(folder_data)
+
         if not folders:
             return "No folders found. Create one with create_folder tool."
 
@@ -4147,7 +4163,7 @@ async def get_folder(folder_id: int) -> str:
 
         target_folder = None
         for f in result.filters:
-            if isinstance(f, DialogFilter) and f.id == folder_id:
+            if isinstance(f, (DialogFilter, DialogFilterChatlist)) and f.id == folder_id:
                 target_folder = f
                 break
 
@@ -4212,7 +4228,15 @@ async def get_folder(folder_id: int) -> str:
             "id": target_folder.id,
             "title": title,
             "emoticon": getattr(target_folder, "emoticon", None),
-            "filters": {
+            "included_chats": included_chats,
+            "excluded_chats": excluded_chats,
+            "pinned_chats": pinned_chats,
+        }
+
+        if isinstance(target_folder, DialogFilterChatlist):
+            folder_data["type"] = "shared"
+        else:
+            folder_data["filters"] = {
                 "contacts": getattr(target_folder, "contacts", False),
                 "non_contacts": getattr(target_folder, "non_contacts", False),
                 "groups": getattr(target_folder, "groups", False),
@@ -4221,11 +4245,7 @@ async def get_folder(folder_id: int) -> str:
                 "exclude_muted": getattr(target_folder, "exclude_muted", False),
                 "exclude_read": getattr(target_folder, "exclude_read", False),
                 "exclude_archived": getattr(target_folder, "exclude_archived", False),
-            },
-            "included_chats": included_chats,
-            "excluded_chats": excluded_chats,
-            "pinned_chats": pinned_chats,
-        }
+            }
 
         return json.dumps(folder_data, indent=2, default=json_serializer)
     except Exception as e:
@@ -4274,7 +4294,7 @@ async def create_folder(
         existing_ids = set()
         folder_count = 0
         for f in result.filters:
-            if isinstance(f, DialogFilter):
+            if isinstance(f, (DialogFilter, DialogFilterChatlist)):
                 existing_ids.add(f.id)
                 folder_count += 1
 
@@ -4356,7 +4376,7 @@ async def add_chat_to_folder(
 
         target_folder = None
         for f in result.filters:
-            if isinstance(f, DialogFilter) and f.id == folder_id:
+            if isinstance(f, (DialogFilter, DialogFilterChatlist)) and f.id == folder_id:
                 target_folder = f
                 break
 
@@ -4390,24 +4410,35 @@ async def add_chat_to_folder(
             pinned_peers.append(peer)
 
         # Update the folder (keep all original attributes)
-        updated_filter = DialogFilter(
-            id=target_folder.id,
-            title=target_folder.title,
-            emoticon=getattr(target_folder, "emoticon", None),
-            pinned_peers=pinned_peers,
-            include_peers=include_peers,
-            exclude_peers=list(getattr(target_folder, "exclude_peers", [])),
-            contacts=getattr(target_folder, "contacts", False),
-            non_contacts=getattr(target_folder, "non_contacts", False),
-            groups=getattr(target_folder, "groups", False),
-            broadcasts=getattr(target_folder, "broadcasts", False),
-            bots=getattr(target_folder, "bots", False),
-            exclude_muted=getattr(target_folder, "exclude_muted", False),
-            exclude_read=getattr(target_folder, "exclude_read", False),
-            exclude_archived=getattr(target_folder, "exclude_archived", False),
-            title_noanimate=getattr(target_folder, "title_noanimate", None),
-            color=getattr(target_folder, "color", None),
-        )
+        if isinstance(target_folder, DialogFilterChatlist):
+            updated_filter = DialogFilterChatlist(
+                id=target_folder.id,
+                title=target_folder.title,
+                emoticon=getattr(target_folder, "emoticon", None),
+                pinned_peers=pinned_peers,
+                include_peers=include_peers,
+                title_noanimate=getattr(target_folder, "title_noanimate", None),
+                color=getattr(target_folder, "color", None),
+            )
+        else:
+            updated_filter = DialogFilter(
+                id=target_folder.id,
+                title=target_folder.title,
+                emoticon=getattr(target_folder, "emoticon", None),
+                pinned_peers=pinned_peers,
+                include_peers=include_peers,
+                exclude_peers=list(getattr(target_folder, "exclude_peers", [])),
+                contacts=getattr(target_folder, "contacts", False),
+                non_contacts=getattr(target_folder, "non_contacts", False),
+                groups=getattr(target_folder, "groups", False),
+                broadcasts=getattr(target_folder, "broadcasts", False),
+                bots=getattr(target_folder, "bots", False),
+                exclude_muted=getattr(target_folder, "exclude_muted", False),
+                exclude_read=getattr(target_folder, "exclude_read", False),
+                exclude_archived=getattr(target_folder, "exclude_archived", False),
+                title_noanimate=getattr(target_folder, "title_noanimate", None),
+                color=getattr(target_folder, "color", None),
+            )
 
         await client(
             functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter)
@@ -4446,7 +4477,7 @@ async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str]) -> s
 
         target_folder = None
         for f in result.filters:
-            if isinstance(f, DialogFilter) and f.id == folder_id:
+            if isinstance(f, (DialogFilter, DialogFilterChatlist)) and f.id == folder_id:
                 target_folder = f
                 break
 
@@ -4485,24 +4516,35 @@ async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str]) -> s
             return f"Chat {chat_id} was not in folder {folder_id}."
 
         # Update the folder (keep all original attributes)
-        updated_filter = DialogFilter(
-            id=target_folder.id,
-            title=target_folder.title,
-            emoticon=getattr(target_folder, "emoticon", None),
-            pinned_peers=pinned_peers,
-            include_peers=include_peers,
-            exclude_peers=list(getattr(target_folder, "exclude_peers", [])),
-            contacts=getattr(target_folder, "contacts", False),
-            non_contacts=getattr(target_folder, "non_contacts", False),
-            groups=getattr(target_folder, "groups", False),
-            broadcasts=getattr(target_folder, "broadcasts", False),
-            bots=getattr(target_folder, "bots", False),
-            exclude_muted=getattr(target_folder, "exclude_muted", False),
-            exclude_read=getattr(target_folder, "exclude_read", False),
-            exclude_archived=getattr(target_folder, "exclude_archived", False),
-            title_noanimate=getattr(target_folder, "title_noanimate", None),
-            color=getattr(target_folder, "color", None),
-        )
+        if isinstance(target_folder, DialogFilterChatlist):
+            updated_filter = DialogFilterChatlist(
+                id=target_folder.id,
+                title=target_folder.title,
+                emoticon=getattr(target_folder, "emoticon", None),
+                pinned_peers=pinned_peers,
+                include_peers=include_peers,
+                title_noanimate=getattr(target_folder, "title_noanimate", None),
+                color=getattr(target_folder, "color", None),
+            )
+        else:
+            updated_filter = DialogFilter(
+                id=target_folder.id,
+                title=target_folder.title,
+                emoticon=getattr(target_folder, "emoticon", None),
+                pinned_peers=pinned_peers,
+                include_peers=include_peers,
+                exclude_peers=list(getattr(target_folder, "exclude_peers", [])),
+                contacts=getattr(target_folder, "contacts", False),
+                non_contacts=getattr(target_folder, "non_contacts", False),
+                groups=getattr(target_folder, "groups", False),
+                broadcasts=getattr(target_folder, "broadcasts", False),
+                bots=getattr(target_folder, "bots", False),
+                exclude_muted=getattr(target_folder, "exclude_muted", False),
+                exclude_read=getattr(target_folder, "exclude_read", False),
+                exclude_archived=getattr(target_folder, "exclude_archived", False),
+                title_noanimate=getattr(target_folder, "title_noanimate", None),
+                color=getattr(target_folder, "color", None),
+            )
 
         await client(
             functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter)
@@ -4545,7 +4587,7 @@ async def delete_folder(folder_id: int) -> str:
         folder_exists = False
         folder_title = None
         for f in result.filters:
-            if isinstance(f, DialogFilter) and f.id == folder_id:
+            if isinstance(f, (DialogFilter, DialogFilterChatlist)) and f.id == folder_id:
                 folder_exists = True
                 # Handle title which can be str or TextWithEntities
                 title = f.title
@@ -4584,7 +4626,7 @@ async def reorder_folders(folder_ids: List[int]) -> str:
 
         existing_ids = set()
         for f in result.filters:
-            if isinstance(f, DialogFilter):
+            if isinstance(f, (DialogFilter, DialogFilterChatlist)):
                 existing_ids.add(f.id)
 
         # Validate all provided IDs exist
