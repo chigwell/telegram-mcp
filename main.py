@@ -3237,6 +3237,45 @@ async def search_messages(chat_id: Union[int, str], query: str, limit: int = 20)
 
 
 @mcp.tool(
+    annotations=ToolAnnotations(
+        title="Search Global Messages",
+        openWorldHint=True,
+        readOnlyHint=True,
+    )
+)
+async def search_global(query: str, page: int = 1, page_size: int = 20) -> str:
+    """
+    Search for messages across all public chats and channels by text content.
+    """
+    try:
+        offset = (page - 1) * page_size
+        messages = await client.get_messages(
+            None, limit=page_size, search=query, add_offset=offset
+        )
+
+        if not messages:
+            return "No messages found for this page."
+
+        lines = []
+        for msg in messages:
+            chat = msg.chat
+            chat_name = (
+                getattr(chat, "title", None) or getattr(chat, "first_name", "") or str(msg.chat_id)
+            )
+            sender_name = get_sender_name(msg)
+            lines.append(
+                f"Chat: {chat_name} | ID: {msg.id} | {sender_name} | "
+                f"Date: {msg.date} | Message: {msg.message}"
+            )
+
+        return "\n".join(lines)
+    except Exception as e:
+        return log_and_format_error(
+            "search_global", e, query=query, page=page, page_size=page_size
+        )
+
+
+@mcp.tool(
     annotations=ToolAnnotations(title="Resolve Username", openWorldHint=True, readOnlyHint=True)
 )
 async def resolve_username(username: str) -> str:
