@@ -118,6 +118,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 ### Search & Discovery
 - **search_public_chats(query, limit)**: Search public chats/channels/bots with a configurable result limit
 - **search_messages(chat_id, query, limit)**: Search messages in a chat
+- **search_global(query, page, page_size)**: Search messages globally with pagination
 - **resolve_username(username)**: Resolve a username to ID
 
 ### Stickers, GIFs, Bots
