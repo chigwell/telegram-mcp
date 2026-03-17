@@ -3196,16 +3196,16 @@ async def get_media_info(chat_id: Union[int, str], message_id: int) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Search Public Chats", openWorldHint=True, readOnlyHint=True)
 )
-async def search_public_chats(query: str) -> str:
+async def search_public_chats(query: str, limit: int = 20) -> str:
     """
     Search for public chats, channels, or bots by username or title.
     """
     try:
-        result = await client(functions.contacts.SearchRequest(q=query, limit=20))
+        result = await client(functions.contacts.SearchRequest(q=query, limit=limit))
         entities = [format_entity(e) for e in result.chats + result.users]
         return json.dumps(entities, indent=2)
     except Exception as e:
-        return log_and_format_error("search_public_chats", e, query=query)
+        return log_and_format_error("search_public_chats", e, query=query, limit=limit)
 
 
 @mcp.tool(
