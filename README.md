@@ -116,7 +116,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **edit_chat_photo(chat_id, file_path)**: Update chat photo from allowed roots
 
 ### Search & Discovery
-- **search_public_chats(query)**: Search public chats/channels/bots
+- **search_public_chats(query, limit)**: Search public chats/channels/bots with a configurable result limit
 - **search_messages(chat_id, query, limit)**: Search messages in a chat
 - **resolve_username(username)**: Resolve a username to ID
 
@@ -533,13 +533,14 @@ Successfully joined chat: Developer Community
 
 ```python
 @mcp.tool()
-async def search_public_chats(query: str) -> str:
+async def search_public_chats(query: str, limit: int = 20) -> str:
     """
     Search for public chats, channels, or bots by username or title.
     """
     try:
-        result = await client(functions.contacts.SearchRequest(q=query, limit=20))
-        return json.dumps([format_entity(u) for u in result.users], indent=2)
+        result = await client(functions.contacts.SearchRequest(q=query, limit=limit))
+        entities = [format_entity(e) for e in result.chats + result.users]
+        return json.dumps(entities, indent=2)
     except Exception as e:
         return f"Error searching public chats: {e}"
 ```
