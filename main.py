@@ -764,7 +764,7 @@ async def send_message(
     """
     try:
         entity = await resolve_entity(chat_id)
-        await client.send_message(entity, message)
+        await client.send_message(entity, message, parse_mode=parse_mode)
         return "Message sent successfully."
     except Exception as e:
         return log_and_format_error("send_message", e, chat_id=chat_id)
@@ -2071,13 +2071,16 @@ async def send_file(
         caption: Optional caption for the file.
     """
     try:
-        if not os.path.isfile(file_path):
-            return f"File not found: {file_path}"
-        if not os.access(file_path, os.R_OK):
-            return f"File is not readable: {file_path}"
+        safe_path, path_error = await _resolve_readable_file_path(
+            raw_path=file_path,
+            ctx=ctx,
+            tool_name="send_file",
+        )
+        if path_error:
+            return path_error
         entity = await resolve_entity(chat_id)
-        await client.send_file(entity, file_path, caption=caption)
-        return f"File sent to chat {chat_id}."
+        await client.send_file(entity, str(safe_path), caption=caption)
+        return f"File sent to chat {chat_id} from {safe_path}."
     except Exception as e:
         return log_and_format_error(
             "send_file", e, chat_id=chat_id, file_path=file_path, caption=caption
@@ -2457,7 +2460,7 @@ async def edit_chat_photo(
             return path_error
 
         entity = await resolve_entity(chat_id)
-        uploaded_file = await client.upload_file(file_path)
+        uploaded_file = await client.upload_file(str(safe_path))
 
         if isinstance(entity, Channel):
             # For channels/supergroups, use EditPhotoRequest with InputChatUploadedPhoto
@@ -3008,8 +3011,8 @@ async def send_voice(
             return "Voice file must be .ogg or .opus format."
 
         entity = await resolve_entity(chat_id)
-        await client.send_file(entity, file_path, voice_note=True)
-        return f"Voice message sent to chat {chat_id}."
+        await client.send_file(entity, str(safe_path), voice_note=True)
+        return f"Voice message sent to chat {chat_id} from {safe_path}."
     except Exception as e:
         return log_and_format_error("send_voice", e, chat_id=chat_id, file_path=file_path)
 
@@ -3181,7 +3184,7 @@ async def reply_to_message(
     """
     try:
         entity = await resolve_entity(chat_id)
-        await client.send_message(entity, text, reply_to=message_id)
+        await client.send_message(entity, text, reply_to=message_id, parse_mode=parse_mode)
         return f"Replied to message {message_id} in chat {chat_id}."
     except Exception as e:
         return log_and_format_error(
@@ -3481,8 +3484,8 @@ async def send_sticker(
             return path_error
 
         entity = await resolve_entity(chat_id)
-        await client.send_file(entity, file_path, force_document=False)
-        return f"Sticker sent to chat {chat_id}."
+        await client.send_file(entity, str(safe_path), force_document=False)
+        return f"Sticker sent to chat {chat_id} from {safe_path}."
     except Exception as e:
         return log_and_format_error("send_sticker", e, chat_id=chat_id, file_path=file_path)
 
