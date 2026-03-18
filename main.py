@@ -341,6 +341,29 @@ def format_entity(entity) -> Dict[str, Any]:
     return result
 
 
+async def resolve_entity(identifier: Union[int, str]) -> Any:
+    """Resolve entity with automatic cache warming on miss.
+
+    StringSession has no persistent entity cache. If get_entity() fails
+    because the cache is cold (ValueError on PeerUser lookup for group IDs),
+    warm the cache via get_dialogs() and retry.
+    """
+    try:
+        return await client.get_entity(identifier)
+    except ValueError:
+        await client.get_dialogs()
+        return await client.get_entity(identifier)
+
+
+async def resolve_input_entity(identifier: Union[int, str]) -> Any:
+    """Like resolve_entity() but returns an InputPeer."""
+    try:
+        return await client.get_input_entity(identifier)
+    except ValueError:
+        await client.get_dialogs()
+        return await client.get_input_entity(identifier)
+
+
 def format_message(message) -> Dict[str, Any]:
     """Helper function to format message information consistently."""
     result = {
@@ -699,7 +722,7 @@ async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int =
         page_size: Number of messages per page.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         offset = (page - 1) * page_size
         messages = await client.get_messages(entity, limit=page_size, add_offset=offset)
         if not messages:
@@ -740,7 +763,7 @@ async def send_message(
             ```pre```), or omit for plain text (no formatting).
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         await client.send_message(entity, message, parse_mode=parse_mode)
         return "Message sent successfully."
     except Exception as e:
@@ -761,7 +784,7 @@ async def subscribe_public_channel(channel: Union[int, str]) -> str:
     Subscribe (join) to a public channel or supergroup by username or ID.
     """
     try:
-        entity = await client.get_entity(channel)
+        entity = await resolve_entity(channel)
         await client(functions.channels.JoinChannelRequest(channel=entity))
         title = getattr(entity, "title", getattr(entity, "username", "Unknown channel"))
         return f"Subscribed to {title}."
@@ -791,7 +814,7 @@ async def list_inline_buttons(
             else:
                 return "message_id must be an integer."
 
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         target_message = None
 
         if message_id is not None:
@@ -878,7 +901,7 @@ async def press_inline_button(
             else:
                 return "button_index must be an integer."
 
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
 
         target_message = None
         if message_id is not None:
@@ -1055,7 +1078,7 @@ async def list_messages(
         to_date: Filter messages until this date (format: YYYY-MM-DD).
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
 
         # Parse date filters if provided
         from_date_obj = None
@@ -1180,7 +1203,7 @@ async def list_topics(
         search_query: Optional query to filter topics by title.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
 
         if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
             return "The specified chat is not a supergroup."
@@ -1320,7 +1343,7 @@ async def get_chat(chat_id: Union[int, str]) -> str:
         chat_id: The ID or username of the chat.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
 
         result = []
         result.append(f"ID: {entity.id}")
@@ -1454,7 +1477,7 @@ async def get_contact_chats(contact_id: Union[int, str]) -> str:
     """
     try:
         # Get contact info
-        contact = await client.get_entity(contact_id)
+        contact = await resolve_entity(contact_id)
         if not isinstance(contact, User):
             return f"ID {contact_id} is not a user/contact."
 
@@ -1511,7 +1534,7 @@ async def get_last_interaction(contact_id: Union[int, str]) -> str:
     """
     try:
         # Get contact info
-        contact = await client.get_entity(contact_id)
+        contact = await resolve_entity(contact_id)
         if not isinstance(contact, User):
             return f"ID {contact_id} is not a user/contact."
 
@@ -1553,7 +1576,7 @@ async def get_message_context(
         context_size: Number of messages before and after to include.
     """
     try:
-        chat = await client.get_entity(chat_id)
+        chat = await resolve_entity(chat_id)
         # Get messages around the specified message
         messages_before = await client.get_messages(chat, limit=context_size, max_id=message_id)
         central_message = await client.get_messages(chat, ids=message_id)
@@ -1752,7 +1775,7 @@ async def delete_contact(user_id: Union[int, str]) -> str:
         user_id: The Telegram user ID or username of the contact to delete.
     """
     try:
-        user = await client.get_entity(user_id)
+        user = await resolve_entity(user_id)
         await client(functions.contacts.DeleteContactsRequest(id=[user]))
         return f"Contact with user ID {user_id} deleted."
     except Exception as e:
@@ -1772,7 +1795,7 @@ async def block_user(user_id: Union[int, str]) -> str:
         user_id: The Telegram user ID or username to block.
     """
     try:
-        user = await client.get_entity(user_id)
+        user = await resolve_entity(user_id)
         await client(functions.contacts.BlockRequest(id=user))
         return f"User {user_id} blocked."
     except Exception as e:
@@ -1792,7 +1815,7 @@ async def unblock_user(user_id: Union[int, str]) -> str:
         user_id: The Telegram user ID or username to unblock.
     """
     try:
-        user = await client.get_entity(user_id)
+        user = await resolve_entity(user_id)
         await client(functions.contacts.UnblockRequest(id=user))
         return f"User {user_id} unblocked."
     except Exception as e:
@@ -1828,7 +1851,7 @@ async def create_group(title: str, user_ids: List[Union[int, str]]) -> str:
         users = []
         for user_id in user_ids:
             try:
-                user = await client.get_entity(user_id)
+                user = await resolve_entity(user_id)
                 users.append(user)
             except Exception as e:
                 logger.error(f"Failed to get entity for user ID {user_id}: {e}")
@@ -1887,12 +1910,12 @@ async def invite_to_group(group_id: Union[int, str], user_ids: List[Union[int, s
         user_ids: List of user IDs or usernames to invite.
     """
     try:
-        entity = await client.get_entity(group_id)
+        entity = await resolve_entity(group_id)
         users_to_add = []
 
         for user_id in user_ids:
             try:
-                user = await client.get_entity(user_id)
+                user = await resolve_entity(user_id)
                 users_to_add.append(user)
             except ValueError as e:
                 return f"Error: User with ID {user_id} could not be found. {e}"
@@ -1940,7 +1963,7 @@ async def leave_chat(chat_id: Union[int, str]) -> str:
         chat_id: The chat ID or username to leave.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
 
         # Check the entity type carefully
         if isinstance(entity, Channel):
@@ -2055,7 +2078,7 @@ async def send_file(
         )
         if path_error:
             return path_error
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         await client.send_file(entity, str(safe_path), caption=caption)
         return f"File sent to chat {chat_id} from {safe_path}."
     except Exception as e:
@@ -2083,7 +2106,7 @@ async def download_media(
             If omitted, saves into `<first_root>/downloads/`.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         msg = await client.get_messages(entity, ids=message_id)
         if not msg or not msg.media:
             return "No media found in the specified message."
@@ -2275,7 +2298,7 @@ async def set_privacy_settings(
                 allow_entities = []
                 for user_id in allow_users:
                     try:
-                        user = await client.get_entity(user_id)
+                        user = await resolve_entity(user_id)
                         allow_entities.append(user)
                     except Exception as user_err:
                         logger.warning(f"Could not get entity for user ID {user_id}: {user_err}")
@@ -2292,7 +2315,7 @@ async def set_privacy_settings(
                 disallow_entities = []
                 for user_id in disallow_users:
                     try:
-                        user = await client.get_entity(user_id)
+                        user = await resolve_entity(user_id)
                         disallow_entities.append(user)
                     except Exception as user_err:
                         logger.warning(f"Could not get entity for user ID {user_id}: {user_err}")
@@ -2400,7 +2423,7 @@ async def edit_chat_title(chat_id: Union[int, str], title: str) -> str:
     Edit the title of a chat, group, or channel.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         if isinstance(entity, Channel):
             await client(functions.channels.EditTitleRequest(channel=entity, title=title))
         elif isinstance(entity, Chat):
@@ -2436,7 +2459,7 @@ async def edit_chat_photo(
         if path_error:
             return path_error
 
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         uploaded_file = await client.upload_file(str(safe_path))
 
         if isinstance(entity, Channel):
@@ -2469,7 +2492,7 @@ async def delete_chat_photo(chat_id: Union[int, str]) -> str:
     Delete the photo of a chat, group, or channel.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         if isinstance(entity, Channel):
             # Use InputChatPhotoEmpty for channels/supergroups
             await client(
@@ -2509,8 +2532,8 @@ async def promote_admin(
         rights: Admin rights to give (optional)
     """
     try:
-        chat = await client.get_entity(group_id)
-        user = await client.get_entity(user_id)
+        chat = await resolve_entity(group_id)
+        user = await resolve_entity(user_id)
 
         # Set default admin rights if not provided
         if not rights:
@@ -2577,8 +2600,8 @@ async def demote_admin(group_id: Union[int, str], user_id: Union[int, str]) -> s
         user_id: User ID or username to demote
     """
     try:
-        chat = await client.get_entity(group_id)
-        user = await client.get_entity(user_id)
+        chat = await resolve_entity(group_id)
+        user = await resolve_entity(user_id)
 
         # Create empty admin rights (regular user)
         admin_rights = ChatAdminRights(
@@ -2630,8 +2653,8 @@ async def ban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
         user_id: User ID or username to ban
     """
     try:
-        chat = await client.get_entity(chat_id)
-        user = await client.get_entity(user_id)
+        chat = await resolve_entity(chat_id)
+        user = await resolve_entity(user_id)
 
         # Create banned rights (all restrictions enabled)
         banned_rights = ChatBannedRights(
@@ -2681,8 +2704,8 @@ async def unban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
         user_id: User ID or username to unban
     """
     try:
-        chat = await client.get_entity(chat_id)
-        user = await client.get_entity(user_id)
+        chat = await resolve_entity(chat_id)
+        user = await resolve_entity(user_id)
 
         # Create unbanned rights (no restrictions)
         unbanned_rights = ChatBannedRights(
@@ -2768,7 +2791,7 @@ async def get_invite_link(chat_id: Union[int, str]) -> str:
     Get the invite link for a group or channel.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
 
         # Try using ExportChatInviteRequest first
         try:
@@ -2862,7 +2885,7 @@ async def export_chat_invite(chat_id: Union[int, str]) -> str:
     Export a chat invite link.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
 
         # Try using ExportChatInviteRequest first
         try:
@@ -2987,7 +3010,7 @@ async def send_voice(
         ):
             return "Voice file must be .ogg or .opus format."
 
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         await client.send_file(entity, str(safe_path), voice_note=True)
         return f"Voice message sent to chat {chat_id} from {safe_path}."
     except Exception as e:
@@ -3036,8 +3059,8 @@ async def forward_message(
     Forward a message from one chat to another.
     """
     try:
-        from_entity = await client.get_entity(from_chat_id)
-        to_entity = await client.get_entity(to_chat_id)
+        from_entity = await resolve_entity(from_chat_id)
+        to_entity = await resolve_entity(to_chat_id)
         await client.forward_messages(to_entity, message_id, from_entity)
         return f"Message {message_id} forwarded from {from_chat_id} to {to_chat_id}."
     except Exception as e:
@@ -3061,7 +3084,7 @@ async def edit_message(chat_id: Union[int, str], message_id: int, new_text: str)
     Edit a message you sent.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         await client.edit_message(entity, message_id, new_text)
         return f"Message {message_id} edited."
     except Exception as e:
@@ -3081,7 +3104,7 @@ async def delete_message(chat_id: Union[int, str], message_id: int) -> str:
     Delete a message by ID.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         await client.delete_messages(entity, message_id)
         return f"Message {message_id} deleted."
     except Exception as e:
@@ -3099,7 +3122,7 @@ async def pin_message(chat_id: Union[int, str], message_id: int) -> str:
     Pin a message in a chat.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         await client.pin_message(entity, message_id)
         return f"Message {message_id} pinned in chat {chat_id}."
     except Exception as e:
@@ -3117,7 +3140,7 @@ async def unpin_message(chat_id: Union[int, str], message_id: int) -> str:
     Unpin a message in a chat.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         await client.unpin_message(entity, message_id)
         return f"Message {message_id} unpinned in chat {chat_id}."
     except Exception as e:
@@ -3135,7 +3158,7 @@ async def mark_as_read(chat_id: Union[int, str]) -> str:
     Mark all messages as read in a chat.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         await client.send_read_acknowledge(entity)
         return f"Marked all messages as read in chat {chat_id}."
     except Exception as e:
@@ -3160,7 +3183,7 @@ async def reply_to_message(
             ```pre```), or omit for plain text (no formatting).
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         await client.send_message(entity, text, reply_to=message_id, parse_mode=parse_mode)
         return f"Replied to message {message_id} in chat {chat_id}."
     except Exception as e:
@@ -3182,7 +3205,7 @@ async def get_media_info(chat_id: Union[int, str], message_id: int) -> str:
         message_id: The message ID.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         msg = await client.get_messages(entity, ids=message_id)
 
         if not msg or not msg.media:
@@ -3217,7 +3240,7 @@ async def search_messages(chat_id: Union[int, str], query: str, limit: int = 20)
     Search for messages in a chat by text.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         messages = await client.get_messages(entity, limit=limit, search=query)
 
         lines = []
@@ -3302,7 +3325,7 @@ async def mute_chat(chat_id: Union[int, str]) -> str:
     try:
         from telethon.tl.types import InputPeerNotifySettings
 
-        peer = await client.get_entity(chat_id)
+        peer = await resolve_entity(chat_id)
         await client(
             functions.account.UpdateNotifySettingsRequest(
                 peer=peer, settings=InputPeerNotifySettings(mute_until=2**31 - 1)
@@ -3312,7 +3335,7 @@ async def mute_chat(chat_id: Union[int, str]) -> str:
     except (ImportError, AttributeError) as type_err:
         try:
             # Alternative approach directly using raw API
-            peer = await client.get_input_entity(chat_id)
+            peer = await resolve_input_entity(chat_id)
             await client(
                 functions.account.UpdateNotifySettingsRequest(
                     peer=peer,
@@ -3345,7 +3368,7 @@ async def unmute_chat(chat_id: Union[int, str]) -> str:
     try:
         from telethon.tl.types import InputPeerNotifySettings
 
-        peer = await client.get_entity(chat_id)
+        peer = await resolve_entity(chat_id)
         await client(
             functions.account.UpdateNotifySettingsRequest(
                 peer=peer, settings=InputPeerNotifySettings(mute_until=0)
@@ -3355,7 +3378,7 @@ async def unmute_chat(chat_id: Union[int, str]) -> str:
     except (ImportError, AttributeError) as type_err:
         try:
             # Alternative approach directly using raw API
-            peer = await client.get_input_entity(chat_id)
+            peer = await resolve_input_entity(chat_id)
             await client(
                 functions.account.UpdateNotifySettingsRequest(
                     peer=peer,
@@ -3386,7 +3409,7 @@ async def archive_chat(chat_id: Union[int, str]) -> str:
     Archive a chat.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         peer = utils.get_input_peer(entity)
         await client(
             functions.folders.EditPeerFoldersRequest(
@@ -3409,7 +3432,7 @@ async def unarchive_chat(chat_id: Union[int, str]) -> str:
     Unarchive a chat.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         peer = utils.get_input_peer(entity)
         await client(
             functions.folders.EditPeerFoldersRequest(
@@ -3460,7 +3483,7 @@ async def send_sticker(
         if path_error:
             return path_error
 
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         await client.send_file(entity, str(safe_path), force_document=False)
         return f"Sticker sent to chat {chat_id} from {safe_path}."
     except Exception as e:
@@ -3538,7 +3561,7 @@ async def send_gif(chat_id: Union[int, str], gif_id: int) -> str:
     try:
         if not isinstance(gif_id, int):
             return "gif_id must be a Telegram document ID (integer), not a file path. Use get_gif_search to find IDs."
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         await client.send_file(entity, gif_id)
         return f"GIF sent to chat {chat_id}."
     except Exception as e:
@@ -3551,7 +3574,7 @@ async def get_bot_info(bot_username: str) -> str:
     Get information about a bot by username.
     """
     try:
-        entity = await client.get_entity(bot_username)
+        entity = await resolve_entity(bot_username)
         if not entity:
             return f"Bot with username {bot_username} not found."
 
@@ -3612,7 +3635,7 @@ async def set_bot_commands(bot_username: str, commands: list) -> str:
         ]
 
         # Get the bot entity
-        bot = await client.get_entity(bot_username)
+        bot = await resolve_entity(bot_username)
 
         # Set the commands with proper scope
         await client(
@@ -3639,7 +3662,7 @@ async def get_history(chat_id: Union[int, str], limit: int = 100) -> str:
     Get full chat history (up to limit).
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
         messages = await client.get_messages(entity, limit=limit)
 
         lines = []
@@ -3665,7 +3688,7 @@ async def get_user_photos(user_id: Union[int, str], limit: int = 10) -> str:
     Get profile photos of a user.
     """
     try:
-        user = await client.get_entity(user_id)
+        user = await resolve_entity(user_id)
         photos = await client(
             functions.photos.GetUserPhotosRequest(user_id=user, offset=0, max_id=0, limit=limit)
         )
@@ -3683,7 +3706,7 @@ async def get_user_status(user_id: Union[int, str]) -> str:
     Get the online status of a user.
     """
     try:
-        user = await client.get_entity(user_id)
+        user = await resolve_entity(user_id)
         return str(user.status)
     except Exception as e:
         return log_and_format_error("get_user_status", e, user_id=user_id)
@@ -3729,7 +3752,7 @@ async def get_pinned_messages(chat_id: Union[int, str]) -> str:
     Get all pinned messages in a chat.
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
 
         # Use correct filter based on Telethon version
         try:
@@ -3786,7 +3809,7 @@ async def create_poll(
         close_date: Optional close date in ISO format (YYYY-MM-DD HH:MM:SS)
     """
     try:
-        entity = await client.get_entity(chat_id)
+        entity = await resolve_entity(chat_id)
 
         # Validate options
         if len(options) < 2:
@@ -3860,7 +3883,7 @@ async def send_reaction(
     try:
         from telethon.tl.types import ReactionEmoji
 
-        peer = await client.get_input_entity(chat_id)
+        peer = await resolve_input_entity(chat_id)
         await client(
             functions.messages.SendReactionRequest(
                 peer=peer,
@@ -3897,7 +3920,7 @@ async def remove_reaction(
         message_id: The message ID to remove reaction from
     """
     try:
-        peer = await client.get_input_entity(chat_id)
+        peer = await resolve_input_entity(chat_id)
         await client(
             functions.messages.SendReactionRequest(
                 peer=peer,
@@ -3933,7 +3956,7 @@ async def get_message_reactions(
     try:
         from telethon.tl.types import ReactionEmoji, ReactionCustomEmoji
 
-        peer = await client.get_input_entity(chat_id)
+        peer = await resolve_input_entity(chat_id)
 
         result = await client(
             functions.messages.GetMessageReactionsListRequest(
@@ -4010,7 +4033,7 @@ async def save_draft(
         no_webpage: If True, disable link preview in the draft
     """
     try:
-        peer = await client.get_input_entity(chat_id)
+        peer = await resolve_input_entity(chat_id)
 
         # Build reply_to parameter if provided
         reply_to = None
@@ -4105,7 +4128,7 @@ async def clear_draft(chat_id: Union[int, str]) -> str:
         chat_id: The chat ID or username to clear the draft from
     """
     try:
-        peer = await client.get_input_entity(chat_id)
+        peer = await resolve_input_entity(chat_id)
 
         # Saving an empty message clears the draft
         await client(
@@ -4216,7 +4239,7 @@ async def get_folder(folder_id: int) -> str:
         included_chats = []
         for peer in getattr(target_folder, "include_peers", []):
             try:
-                entity = await client.get_entity(peer)
+                entity = await resolve_entity(peer)
                 chat_info = {
                     "id": entity.id,
                     "name": getattr(entity, "title", None)
@@ -4233,7 +4256,7 @@ async def get_folder(folder_id: int) -> str:
         excluded_chats = []
         for peer in getattr(target_folder, "exclude_peers", []):
             try:
-                entity = await client.get_entity(peer)
+                entity = await resolve_entity(peer)
                 chat_info = {
                     "id": entity.id,
                     "name": getattr(entity, "title", None)
@@ -4248,7 +4271,7 @@ async def get_folder(folder_id: int) -> str:
         pinned_chats = []
         for peer in getattr(target_folder, "pinned_peers", []):
             try:
-                entity = await client.get_entity(peer)
+                entity = await resolve_entity(peer)
                 chat_info = {
                     "id": entity.id,
                     "name": getattr(entity, "title", None)
@@ -4352,7 +4375,7 @@ async def create_folder(
         if chat_ids:
             for chat_id in chat_ids:
                 try:
-                    peer = await client.get_input_entity(chat_id)
+                    peer = await resolve_input_entity(chat_id)
                     include_peers.append(peer)
                 except Exception as e:
                     return f"Failed to resolve chat '{chat_id}': {str(e)}"
@@ -4427,7 +4450,7 @@ async def add_chat_to_folder(
 
         # Resolve chat to input peer
         try:
-            peer = await client.get_input_entity(chat_id)
+            peer = await resolve_input_entity(chat_id)
         except Exception as e:
             return f"Failed to resolve chat '{chat_id}': {str(e)}"
 
@@ -4528,7 +4551,7 @@ async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str]) -> s
 
         # Resolve chat to get peer ID
         try:
-            peer = await client.get_input_entity(chat_id)
+            peer = await resolve_input_entity(chat_id)
             peer_id = utils.get_peer_id(peer)
         except Exception as e:
             return f"Failed to resolve chat '{chat_id}': {str(e)}"
@@ -4696,7 +4719,12 @@ async def _main() -> None:
         print("Starting Telegram client...", file=sys.stderr)
         await client.start()
 
-        print("Telegram client started. Running MCP server...", file=sys.stderr)
+        # Warm entity cache — StringSession has no persistent cache,
+        # so fetch all dialogs once to populate it
+        print("Warming entity cache...")
+        await client.get_dialogs()
+
+        print("Telegram client started. Running MCP server...")
         # Use the asynchronous entrypoint instead of mcp.run()
         await mcp.run_stdio_async()
     except Exception as e:
