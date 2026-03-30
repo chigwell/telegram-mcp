@@ -718,3 +718,8 @@ This project is licensed under the [Apache 2.0 License](LICENSE).
 <a href="https://github.com/chigwell/telegram-mcp/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=chigwell/telegram-mcp" />
 </a>
+
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/chigwell-telegram-mcp).
+
