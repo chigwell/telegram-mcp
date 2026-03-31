@@ -1323,6 +1323,11 @@ async def list_chats(chat_type: str = None, limit: int = 20) -> str:
             else:
                 chat_info += ", No unread messages"
 
+            # Add unread mentions count if available
+            unread_mentions = getattr(dialog, "unread_mentions_count", 0) or 0
+            if unread_mentions > 0:
+                chat_info += f", Unread mentions: {unread_mentions}"
+
             results.append(chat_info)
 
         if not results:
