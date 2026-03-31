@@ -712,3 +712,9 @@ This project is licensed under the [Apache 2.0 License](LICENSE).
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=chigwell/telegram-mcp&type=Date)](https://www.star-history.com/#chigwell/telegram-mcp&Date)
+
+## Contributors
+
+<a href="https://github.com/chigwell/telegram-mcp/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=chigwell/telegram-mcp" />
+</a>
