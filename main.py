@@ -1271,13 +1271,17 @@ async def list_topics(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List Chats", openWorldHint=True, readOnlyHint=True))
-async def list_chats(chat_type: str = None, limit: int = 20) -> str:
+async def list_chats(
+    chat_type: str = None, limit: int = 20, unread_only: bool = False, unmuted_only: bool = False
+) -> str:
     """
     List available chats with metadata.
 
     Args:
         chat_type: Filter by chat type ('user', 'group', 'channel', or None for all)
-        limit: Maximum number of chats to retrieve.
+        limit: Maximum number of chats to retrieve from Telegram API (applied before filtering, so fewer results may be returned when filters are active).
+        unread_only: If True, only return chats with unread messages.
+        unmuted_only: If True, only return unmuted chats.
     """
     try:
         dialogs = await client.get_dialogs(limit=limit)
@@ -1316,12 +1320,32 @@ async def list_chats(chat_type: str = None, limit: int = 20) -> str:
                 bool(getattr(inner_dialog, "unread_mark", False)) if inner_dialog else False
             )
 
+            # Extract mute status from notify_settings
+            notify_settings = getattr(inner_dialog, "notify_settings", None)
+            mute_until = getattr(notify_settings, "mute_until", None)
+            if mute_until is None:
+                is_muted = False
+            elif isinstance(mute_until, datetime):
+                is_muted = mute_until.timestamp() > time.time()
+            else:
+                is_muted = mute_until > time.time()
+
+            # Filter by mute status if requested
+            if unmuted_only and is_muted:
+                continue
+
+            # Filter by unread status if requested
+            if unread_only and unread_count == 0 and not unread_mark:
+                continue
+
             if unread_count > 0:
                 chat_info += f", Unread: {unread_count}"
             elif unread_mark:
                 chat_info += ", Unread: marked"
             else:
                 chat_info += ", No unread messages"
+
+            chat_info += f", Muted: {'yes' if is_muted else 'no'}"
 
             results.append(chat_info)
 
@@ -1330,7 +1354,14 @@ async def list_chats(chat_type: str = None, limit: int = 20) -> str:
 
         return "\n".join(results)
     except Exception as e:
-        return log_and_format_error("list_chats", e, chat_type=chat_type, limit=limit)
+        return log_and_format_error(
+            "list_chats",
+            e,
+            chat_type=chat_type,
+            limit=limit,
+            unread_only=unread_only,
+            unmuted_only=unmuted_only,
+        )
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chat", openWorldHint=True, readOnlyHint=True))
