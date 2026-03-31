@@ -1248,7 +1248,9 @@ async def list_topics(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List Chats", openWorldHint=True, readOnlyHint=True))
-async def list_chats(chat_type: str = None, limit: int = 20, unread_only: bool = False, unmuted_only: bool = False) -> str:
+async def list_chats(
+    chat_type: str = None, limit: int = 20, unread_only: bool = False, unmuted_only: bool = False
+) -> str:
     """
     List available chats with metadata.
 
@@ -1329,7 +1331,14 @@ async def list_chats(chat_type: str = None, limit: int = 20, unread_only: bool =
 
         return "\n".join(results)
     except Exception as e:
-        return log_and_format_error("list_chats", e, chat_type=chat_type, limit=limit, unread_only=unread_only, unmuted_only=unmuted_only)
+        return log_and_format_error(
+            "list_chats",
+            e,
+            chat_type=chat_type,
+            limit=limit,
+            unread_only=unread_only,
+            unmuted_only=unmuted_only,
+        )
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chat", openWorldHint=True, readOnlyHint=True))
