@@ -153,9 +153,7 @@ def get_client(account: str = None) -> TelegramClient:
     if account is None:
         if len(clients) == 1:
             return next(iter(clients.values()))
-        raise ValueError(
-            f"Account is required. Available accounts: {', '.join(clients.keys())}"
-        )
+        raise ValueError(f"Account is required. Available accounts: {', '.join(clients.keys())}")
     label = account.lower()
     if label not in clients:
         raise ValueError(
@@ -845,7 +843,9 @@ async def get_chats(account: str = None, page: int = 1, page_size: int = 20) -> 
 @mcp.tool(annotations=ToolAnnotations(title="Get Messages", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
 @validate_id("chat_id")
-async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int = 20, account: str = None) -> str:
+async def get_messages(
+    chat_id: Union[int, str], page: int = 1, page_size: int = 20, account: str = None
+) -> str:
     """
     Get paginated messages from a specific chat.
     Args:
@@ -885,7 +885,9 @@ async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int =
 @with_account(readonly=False)
 @validate_id("chat_id")
 async def send_message(
-    chat_id: Union[int, str], message: str, parse_mode: Optional[str] = None,
+    chat_id: Union[int, str],
+    message: str,
+    parse_mode: Optional[str] = None,
     account: str = None,
 ) -> str:
     """
@@ -941,7 +943,9 @@ async def subscribe_public_channel(channel: Union[int, str], account: str = None
 @with_account(readonly=True)
 @validate_id("chat_id")
 async def list_inline_buttons(
-    chat_id: Union[int, str], message_id: Optional[Union[int, str]] = None, limit: int = 20,
+    chat_id: Union[int, str],
+    message_id: Optional[Union[int, str]] = None,
+    limit: int = 20,
     account: str = None,
 ) -> str:
     """
@@ -1430,7 +1434,10 @@ async def list_topics(
 @with_account(readonly=True)
 async def list_chats(
     account: str = None,
-    chat_type: str = None, limit: int = 20, unread_only: bool = False, unmuted_only: bool = False
+    chat_type: str = None,
+    limit: int = 20,
+    unread_only: bool = False,
+    unmuted_only: bool = False,
 ) -> str:
     """
     List available chats with metadata.
@@ -1769,7 +1776,9 @@ async def get_last_interaction(contact_id: Union[int, str], account: str = None)
 @with_account(readonly=True)
 @validate_id("chat_id")
 async def get_message_context(
-    chat_id: Union[int, str], message_id: int, context_size: int = 3,
+    chat_id: Union[int, str],
+    message_id: int,
+    context_size: int = 3,
     account: str = None,
 ) -> str:
     """
@@ -2121,7 +2130,9 @@ async def create_group(title: str, user_ids: List[Union[int, str]], account: str
 )
 @with_account(readonly=False)
 @validate_id("group_id", "user_ids")
-async def invite_to_group(group_id: Union[int, str], user_ids: List[Union[int, str]], account: str = None) -> str:
+async def invite_to_group(
+    group_id: Union[int, str], user_ids: List[Union[int, str]], account: str = None
+) -> str:
     """
     Invite users to a group or channel.
 
@@ -2385,7 +2396,9 @@ async def download_media(
     )
 )
 @with_account(readonly=False)
-async def update_profile(account: str = None, first_name: str = None, last_name: str = None, about: str = None) -> str:
+async def update_profile(
+    account: str = None, first_name: str = None, last_name: str = None, about: str = None
+) -> str:
     """
     Update your profile information (name, bio).
     """
@@ -2409,7 +2422,9 @@ async def update_profile(account: str = None, first_name: str = None, last_name:
     )
 )
 @with_account(readonly=False)
-async def set_profile_photo(file_path: str, ctx: Optional[Context] = None, account: str = None) -> str:
+async def set_profile_photo(
+    file_path: str, ctx: Optional[Context] = None, account: str = None
+) -> str:
     """
     Set a new profile photo.
     """
@@ -2423,9 +2438,7 @@ async def set_profile_photo(file_path: str, ctx: Optional[Context] = None, accou
         if path_error:
             return path_error
         await cl(
-            functions.photos.UploadProfilePhotoRequest(
-                file=await cl.upload_file(str(safe_path))
-            )
+            functions.photos.UploadProfilePhotoRequest(file=await cl.upload_file(str(safe_path)))
         )
         return f"Profile photo updated from {safe_path}."
     except Exception as e:
@@ -2575,9 +2588,7 @@ async def set_privacy_settings(
 
         # Apply the privacy settings
         try:
-            result = await cl(
-                functions.account.SetPrivacyRequest(key=privacy_key, rules=rules)
-            )
+            result = await cl(functions.account.SetPrivacyRequest(key=privacy_key, rules=rules))
             return f"Privacy settings for {key} updated successfully."
         except TypeError as type_err:
             if "TLObject was expected" in str(type_err):
@@ -2651,7 +2662,9 @@ async def get_blocked_users(account: str = None) -> str:
     annotations=ToolAnnotations(title="Create Channel", openWorldHint=True, destructiveHint=True)
 )
 @with_account(readonly=False)
-async def create_channel(title: str, about: str = "", megagroup: bool = False, account: str = None) -> str:
+async def create_channel(
+    title: str, about: str = "", megagroup: bool = False, account: str = None
+) -> str:
     """
     Create a new channel or supergroup.
     """
@@ -2729,9 +2742,7 @@ async def edit_chat_photo(
         elif isinstance(entity, Chat):
             # For basic groups, use EditChatPhotoRequest with InputChatUploadedPhoto
             input_photo = InputChatUploadedPhoto(file=uploaded_file)
-            await cl(
-                functions.messages.EditChatPhotoRequest(chat_id=chat_id, photo=input_photo)
-            )
+            await cl(functions.messages.EditChatPhotoRequest(chat_id=chat_id, photo=input_photo))
         else:
             return f"Cannot edit photo for this entity type ({type(entity)})."
 
@@ -2784,7 +2795,9 @@ async def delete_chat_photo(chat_id: Union[int, str], account: str = None) -> st
 @with_account(readonly=False)
 @validate_id("group_id", "user_id")
 async def promote_admin(
-    group_id: Union[int, str], user_id: Union[int, str], rights: dict = None,
+    group_id: Union[int, str],
+    user_id: Union[int, str],
+    rights: dict = None,
     account: str = None,
 ) -> str:
     """
@@ -2857,7 +2870,9 @@ async def promote_admin(
 )
 @with_account(readonly=False)
 @validate_id("group_id", "user_id")
-async def demote_admin(group_id: Union[int, str], user_id: Union[int, str], account: str = None) -> str:
+async def demote_admin(
+    group_id: Union[int, str], user_id: Union[int, str], account: str = None
+) -> str:
     """
     Demote a user from admin in a group/channel.
 
@@ -2965,7 +2980,9 @@ async def ban_user(chat_id: Union[int, str], user_id: Union[int, str], account: 
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
-async def unban_user(chat_id: Union[int, str], user_id: Union[int, str], account: str = None) -> str:
+async def unban_user(
+    chat_id: Union[int, str], user_id: Union[int, str], account: str = None
+) -> str:
     """
     Unban a user from a group or channel.
 
@@ -3044,9 +3061,7 @@ async def get_banned_users(chat_id: Union[int, str], account: str = None) -> str
     try:
         cl = get_client(account)
         # Fix: Use the correct filter type ChannelParticipantsKicked
-        participants = await cl.get_participants(
-            chat_id, filter=ChannelParticipantsKicked(q="")
-        )
+        participants = await cl.get_participants(chat_id, filter=ChannelParticipantsKicked(q=""))
         lines = [
             f"ID: {p.id}, Name: {getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
             for p in participants
@@ -3342,7 +3357,9 @@ async def upload_file(file_path: str, ctx: Optional[Context] = None, account: st
 @with_account(readonly=False)
 @validate_id("from_chat_id", "to_chat_id")
 async def forward_message(
-    from_chat_id: Union[int, str], message_id: int, to_chat_id: Union[int, str],
+    from_chat_id: Union[int, str],
+    message_id: int,
+    to_chat_id: Union[int, str],
     account: str = None,
 ) -> str:
     """
@@ -3371,7 +3388,9 @@ async def forward_message(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
-async def edit_message(chat_id: Union[int, str], message_id: int, new_text: str, account: str = None) -> str:
+async def edit_message(
+    chat_id: Union[int, str], message_id: int, new_text: str, account: str = None
+) -> str:
     """
     Edit a message you sent.
     """
@@ -3472,7 +3491,10 @@ async def mark_as_read(chat_id: Union[int, str], account: str = None) -> str:
 @with_account(readonly=False)
 @validate_id("chat_id")
 async def reply_to_message(
-    chat_id: Union[int, str], message_id: int, text: str, parse_mode: Optional[str] = None,
+    chat_id: Union[int, str],
+    message_id: int,
+    text: str,
+    parse_mode: Optional[str] = None,
     account: str = None,
 ) -> str:
     """
@@ -3544,7 +3566,9 @@ async def search_public_chats(query: str, limit: int = 20, account: str = None) 
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
-async def search_messages(chat_id: Union[int, str], query: str, limit: int = 20, account: str = None) -> str:
+async def search_messages(
+    chat_id: Union[int, str], query: str, limit: int = 20, account: str = None
+) -> str:
     """
     Search for messages in a chat by text.
     """
@@ -3577,16 +3601,16 @@ async def search_messages(chat_id: Union[int, str], query: str, limit: int = 20,
     )
 )
 @with_account(readonly=True)
-async def search_global(query: str, page: int = 1, page_size: int = 20, account: str = None) -> str:
+async def search_global(
+    query: str, page: int = 1, page_size: int = 20, account: str = None
+) -> str:
     """
     Search for messages across all public chats and channels by text content.
     """
     try:
         cl = get_client(account)
         offset = (page - 1) * page_size
-        messages = await cl.get_messages(
-            None, limit=page_size, search=query, add_offset=offset
-        )
+        messages = await cl.get_messages(None, limit=page_size, search=query, add_offset=offset)
 
         if not messages:
             return "No messages found for this page."
@@ -4795,7 +4819,9 @@ async def create_folder(
 @with_account(readonly=False)
 @validate_id("chat_id")
 async def add_chat_to_folder(
-    folder_id: int, chat_id: Union[int, str], pinned: bool = False,
+    folder_id: int,
+    chat_id: Union[int, str],
+    pinned: bool = False,
     account: str = None,
 ) -> str:
     """
@@ -4877,9 +4903,7 @@ async def add_chat_to_folder(
                 color=getattr(target_folder, "color", None),
             )
 
-        await cl(
-            functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter)
-        )
+        await cl(functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter))
 
         return (
             f"Chat {chat_id} added to folder {folder_id}" + (" (pinned)" if pinned else "") + "."
@@ -4901,7 +4925,9 @@ async def add_chat_to_folder(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
-async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str], account: str = None) -> str:
+async def remove_chat_from_folder(
+    folder_id: int, chat_id: Union[int, str], account: str = None
+) -> str:
     """
     Remove a chat from a folder.
 
@@ -4985,9 +5011,7 @@ async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str], acco
                 color=getattr(target_folder, "color", None),
             )
 
-        await cl(
-            functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter)
-        )
+        await cl(functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter))
 
         return f"Chat {chat_id} removed from folder {folder_id}."
     except Exception as e:

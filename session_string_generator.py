@@ -111,9 +111,11 @@ def main() -> None:
         "\nYour credentials will NOT be stored on any server and are only used for local authentication.\n"
     )
 
-    label = input(
-        "Account label (optional, e.g. 'work', 'personal'; leave empty for default): "
-    ).strip().lower()
+    label = (
+        input("Account label (optional, e.g. 'work', 'personal'; leave empty for default): ")
+        .strip()
+        .lower()
+    )
 
     print("\nChoose login method:")
     print("  1) QR code login (recommended -- scan from your Telegram app)")
