@@ -2352,7 +2352,12 @@ async def download_media(
         if path_error:
             return path_error
 
-        downloaded = await cl.download_media(msg, file=str(out_path))
+        # Strip user-supplied extension so Telethon auto-detects the real media type.
+        # If a path with extension is passed (e.g. ticket.jpg), Telethon writes to that
+        # exact path even if the file is actually a PDF. Stripping the suffix lets
+        # Telethon append the correct extension based on the actual file content.
+        out_path_for_dl = out_path.with_suffix("")
+        downloaded = await cl.download_media(msg, file=str(out_path_for_dl))
         if not downloaded:
             return f"Download failed for message {message_id}."
 
