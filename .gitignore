@@ -189,7 +189,6 @@ claude_desktop_config.json
 
 # Test files
 .cursor/
-tests/
 test.py
 extract_test_issues.py
 *.tmp

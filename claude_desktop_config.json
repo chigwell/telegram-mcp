@@ -6,7 +6,7 @@
                 "--directory",
                 "/PATH-TO/telegram-mcp",
                 "run",
-                "main.py"
+                "telegram-mcp"
             ]
         }
     }
