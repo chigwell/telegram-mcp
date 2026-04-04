@@ -75,6 +75,24 @@ def get_entity_type(entity: Any) -> str:
     return type(entity).__name__
 
 
+def get_marked_id(entity: Any) -> int:
+    """Return Telethon-compatible marked ID for any entity.
+
+    Telethon's resolve_id expects:
+      - positive int -> PeerUser
+      - negative int (> -1000000000000) -> PeerChat
+      - negative int (< -1000000000000) -> PeerChannel (strip -100 prefix)
+
+    Using entity.id (unmarked) for channels/chats causes resolve_id
+    to misinterpret them as PeerUser, leading to ValueError.
+    """
+    if isinstance(entity, Channel):
+        return -1000000000000 - entity.id
+    if isinstance(entity, Chat):
+        return -entity.id
+    return entity.id
+
+
 def get_entity_filter_type(entity: Any) -> Optional[str]:
     """Return list_chats-compatible filter type: user/group/channel."""
     entity_type = get_entity_type(entity)
@@ -320,7 +338,7 @@ def validate_id(*param_names_to_validate):
 
 def format_entity(entity) -> Dict[str, Any]:
     """Helper function to format entity information consistently."""
-    result = {"id": entity.id}
+    result = {"id": get_marked_id(entity)}
 
     if hasattr(entity, "title"):
         result["name"] = entity.title
@@ -703,7 +721,7 @@ async def get_chats(page: int = 1, page_size: int = 20) -> str:
         lines = []
         for dialog in chats:
             entity = dialog.entity
-            chat_id = entity.id
+            chat_id = get_marked_id(entity)
             title = getattr(entity, "title", None) or getattr(entity, "first_name", "Unknown")
             lines.append(f"Chat ID: {chat_id}, Title: {title}")
         return "\n".join(lines)
@@ -1297,7 +1315,7 @@ async def list_chats(
                 continue
 
             # Format chat info
-            chat_info = f"Chat ID: {entity.id}"
+            chat_info = f"Chat ID: {get_marked_id(entity)}"
 
             if hasattr(entity, "title"):
                 chat_info += f", Title: {entity.title}"
@@ -1382,7 +1400,7 @@ async def get_chat(chat_id: Union[int, str]) -> str:
         entity = await resolve_entity(chat_id)
 
         result = []
-        result.append(f"ID: {entity.id}")
+        result.append(f"ID: {get_marked_id(entity)}")
 
         is_user = isinstance(entity, User)
 
@@ -1483,7 +1501,7 @@ async def get_direct_chat_by_contact(contact_query: str) -> str:
             )
             for dialog in dialogs:
                 if isinstance(dialog.entity, User) and dialog.entity.id == contact.id:
-                    chat_info = f"Chat ID: {dialog.entity.id}, Contact: {contact_name}"
+                    chat_info = f"Chat ID: {get_marked_id(dialog.entity)}, Contact: {contact_name}"
                     if getattr(contact, "username", ""):
                         chat_info += f", Username: @{contact.username}"
                     if dialog.unread_count:
@@ -1530,7 +1548,7 @@ async def get_contact_chats(contact_id: Union[int, str]) -> str:
         # Look for direct chat
         for dialog in dialogs:
             if isinstance(dialog.entity, User) and dialog.entity.id == contact_id:
-                chat_info = f"Direct Chat ID: {dialog.entity.id}, Type: Private"
+                chat_info = f"Direct Chat ID: {get_marked_id(dialog.entity)}, Type: Private"
                 if dialog.unread_count:
                     chat_info += f", Unread: {dialog.unread_count}"
                 results.append(chat_info)
@@ -1542,7 +1560,7 @@ async def get_contact_chats(contact_id: Union[int, str]) -> str:
             common = await client.get_common_chats(contact)
             for chat in common:
                 chat_type = get_entity_type(chat)
-                chat_info = f"Chat ID: {chat.id}, Title: {chat.title}, Type: {chat_type}"
+                chat_info = f"Chat ID: {get_marked_id(chat)}, Title: {chat.title}, Type: {chat_type}"
                 results.append(chat_info)
         except:
             results.append("Could not retrieve common groups.")
@@ -1904,9 +1922,9 @@ async def create_group(title: str, user_ids: List[Union[int, str]]) -> str:
             # Check what type of response we got
             if hasattr(result, "chats") and result.chats:
                 created_chat = result.chats[0]
-                return f"Group created with ID: {created_chat.id}"
+                return f"Group created with ID: {get_marked_id(created_chat)}"
             elif hasattr(result, "chat") and result.chat:
-                return f"Group created with ID: {result.chat.id}"
+                return f"Group created with ID: {get_marked_id(result.chat)}"
             elif hasattr(result, "chat_id"):
                 return f"Group created with ID: {result.chat_id}"
             else:
@@ -1916,7 +1934,7 @@ async def create_group(title: str, user_ids: List[Union[int, str]]) -> str:
                 dialogs = await client.get_dialogs(limit=5)  # Get recent dialogs
                 for dialog in dialogs:
                     if dialog.title == title:
-                        return f"Group created with ID: {dialog.id}"
+                        return f"Group created with ID: {get_marked_id(dialog.entity)}"
 
                 # If we still can't find it, at least return success
                 return f"Group created successfully. Please check your recent chats for '{title}'."
@@ -3629,7 +3647,7 @@ async def get_bot_info(bot_username: str) -> str:
             # Fallback if to_dict is not available
             info = {
                 "bot_info": {
-                    "id": entity.id,
+                    "id": get_marked_id(entity),
                     "username": entity.username,
                     "first_name": entity.first_name,
                     "last_name": getattr(entity, "last_name", ""),
@@ -4282,7 +4300,7 @@ async def get_folder(folder_id: int) -> str:
             try:
                 entity = await resolve_entity(peer)
                 chat_info = {
-                    "id": entity.id,
+                    "id": get_marked_id(entity),
                     "name": getattr(entity, "title", None)
                     or getattr(entity, "first_name", "Unknown"),
                     "type": get_entity_type(entity),
@@ -4299,7 +4317,7 @@ async def get_folder(folder_id: int) -> str:
             try:
                 entity = await resolve_entity(peer)
                 chat_info = {
-                    "id": entity.id,
+                    "id": get_marked_id(entity),
                     "name": getattr(entity, "title", None)
                     or getattr(entity, "first_name", "Unknown"),
                     "type": get_entity_type(entity),
@@ -4314,7 +4332,7 @@ async def get_folder(folder_id: int) -> str:
             try:
                 entity = await resolve_entity(peer)
                 chat_info = {
-                    "id": entity.id,
+                    "id": get_marked_id(entity),
                     "name": getattr(entity, "title", None)
                     or getattr(entity, "first_name", "Unknown"),
                     "type": get_entity_type(entity),
