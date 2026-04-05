@@ -4776,6 +4776,11 @@ async def _main() -> None:
                 file=sys.stderr,
             )
         sys.exit(1)
+    finally:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
 
 def main() -> None:
