@@ -25,9 +25,9 @@ from . import chats
 from . import messages
 from . import media
 from . import contacts
-from . import contacts as contacts_module
 from . import groups
 from . import folders
+from .dtos import CreateFolderPayload, ImportContactsPayload
 from .utils import validate_id
 
 
@@ -547,11 +547,11 @@ async def set_privacy_settings(
 @mcp.tool(
     annotations=ToolAnnotations(title="Import Contacts", openWorldHint=True, destructiveHint=True)
 )
-async def import_contacts(contacts: list) -> str:
+async def import_contacts(payload: ImportContactsPayload) -> str:
     """
-    Import a list of contacts. Each contact should be a dict with phone, first_name, last_name.
+    Import a list of contacts.
     """
-    return await contacts_module.import_contacts(contacts)
+    return await contacts.import_contacts(payload.contact_list)
 
 
 @mcp.tool(
@@ -1311,47 +1311,22 @@ async def get_folder(folder_id: int) -> str:
         title="Create Folder", openWorldHint=True, destructiveHint=True, idempotentHint=False
     )
 )
-async def create_folder(
-    title: str,
-    emoticon: Optional[str] = None,
-    chat_ids: Optional[List[Union[int, str]]] = None,
-    contacts: bool = False,
-    non_contacts: bool = False,
-    groups: bool = False,
-    broadcasts: bool = False,
-    bots: bool = False,
-    exclude_muted: bool = False,
-    exclude_read: bool = False,
-    exclude_archived: bool = True,
-) -> str:
+async def create_folder(payload: CreateFolderPayload) -> str:
     """
     Create a new dialog folder.
-
-    Args:
-        title: Folder name (required)
-        emoticon: Folder emoji (optional, e.g., "📁", "🏠", "💼")
-        chat_ids: List of chat IDs or usernames to include (optional)
-        contacts: Include all contacts
-        non_contacts: Include all non-contacts
-        groups: Include all groups
-        broadcasts: Include all channels
-        bots: Include all bots
-        exclude_muted: Exclude muted chats
-        exclude_read: Exclude read chats
-        exclude_archived: Exclude archived chats (default True)
     """
     return await folders.create_folder(
-        title,
-        emoticon,
-        chat_ids,
-        contacts,
-        non_contacts,
-        groups,
-        broadcasts,
-        bots,
-        exclude_muted,
-        exclude_read,
-        exclude_archived,
+        payload.title,
+        payload.emoticon,
+        payload.chat_ids,
+        payload.include_contacts,
+        payload.include_non_contacts,
+        payload.include_groups,
+        payload.include_broadcasts,
+        payload.include_bots,
+        payload.exclude_muted,
+        payload.exclude_read,
+        payload.exclude_archived,
     )
 
 
