@@ -37,12 +37,12 @@ dependencies = [
 "Homepage" = "https://github.com/chigwell/telegram-mcp"
 "Bug Tracker" = "https://github.com/chigwell/telegram-mcp/issues"
 
-[tool.setuptools]
-py-modules = ["main", "session_string_generator"]
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [project.scripts]
-telegram-mcp = "main:main"
-telegram-mcp-generate-session = "session_string_generator:main"
+telegram-mcp = "telegram_mcp.mcp_server:main"
+telegram-mcp-generate-session = "telegram_mcp.session_generator:main"
 
 [tool.black]
 line-length = 99

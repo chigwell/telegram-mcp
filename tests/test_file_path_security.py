@@ -9,7 +9,7 @@ from mcp.types import ErrorData
 os.environ.setdefault("TELEGRAM_API_ID", "12345")
 os.environ.setdefault("TELEGRAM_API_HASH", "dummy_hash")
 
-import main
+import telegram_mcp.security as main
 
 
 class _DummySession:

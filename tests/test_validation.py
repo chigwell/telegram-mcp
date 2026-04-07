@@ -3,7 +3,7 @@ import os
 
 os.environ["TELEGRAM_API_ID"] = "12345"
 os.environ["TELEGRAM_API_HASH"] = "dummy_hash"
-from main import validate_id, ValidationError, log_and_format_error
+from telegram_mcp.utils import validate_id, ValidationError, log_and_format_error
 from functools import wraps
 import asyncio
 from typing import Union, List, Optional

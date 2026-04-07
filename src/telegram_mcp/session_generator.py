@@ -90,26 +90,31 @@ def _phone_login(client: TelegramClient) -> None:
 
 
 def main() -> None:
-    API_ID = os.getenv("TELEGRAM_API_ID")
-    API_HASH = os.getenv("TELEGRAM_API_HASH")
-
-    if not API_ID or not API_HASH:
-        print("Error: TELEGRAM_API_ID and TELEGRAM_API_HASH must be set in .env file")
-        print("Create an .env file with your credentials from https://my.telegram.org/apps")
-        sys.exit(1)
-
-    try:
-        API_ID = int(API_ID)
-    except ValueError:
-        print("Error: TELEGRAM_API_ID must be an integer")
-        sys.exit(1)
-
     print("\n----- Telegram Session String Generator -----\n")
     print("This script will generate a session string for your Telegram account.")
     print("The generated session string can be added to your .env file.")
     print(
         "\nYour credentials will NOT be stored on any server and are only used for local authentication.\n"
     )
+
+    API_ID_str = os.getenv("TELEGRAM_API_ID")
+    API_HASH = os.getenv("TELEGRAM_API_HASH")
+
+    if not API_ID_str or not API_HASH:
+        print("API credentials not found in environment.")
+        print("You can get your API ID and Hash from https://my.telegram.org/apps\n")
+        API_ID_str = input("Enter your TELEGRAM_API_ID: ").strip()
+        API_HASH = input("Enter your TELEGRAM_API_HASH: ").strip()
+
+    if not API_ID_str or not API_HASH:
+        print("Error: TELEGRAM_API_ID and TELEGRAM_API_HASH are absolutely required.")
+        sys.exit(1)
+
+    try:
+        API_ID = int(API_ID_str)
+    except ValueError:
+        print("Error: TELEGRAM_API_ID must be an integer")
+        sys.exit(1)
 
     print("Choose login method:")
     print("  1) QR code login (recommended -- scan from your Telegram app)")
@@ -136,27 +141,34 @@ def main() -> None:
         print("\nIMPORTANT: Keep this string private and never share it with anyone!")
 
         choice = input(
-            "\nWould you like to automatically update your .env file with this session string? (y/N): "
+            "\nWould you like to automatically create/update your .env file with these credentials? (y/N): "
         )
         if choice.lower() == "y":
             try:
-                with open(".env", "r") as file:
-                    env_contents = file.readlines()
+                env_contents = []
+                if os.path.exists(".env"):
+                    with open(".env", "r") as file:
+                        env_contents = file.readlines()
 
-                session_string_line_found = False
-                for i, line in enumerate(env_contents):
-                    if line.startswith("TELEGRAM_SESSION_STRING="):
-                        env_contents[i] = f"TELEGRAM_SESSION_STRING={session_string}\n"
-                        session_string_line_found = True
-                        break
+                def update_or_append(contents, key, value):
+                    found = False
+                    for i, line in enumerate(contents):
+                        if line.startswith(f"{key}="):
+                            contents[i] = f"{key}={value}\n"
+                            found = True
+                            break
+                    if not found:
+                        contents.append(f"{key}={value}\n")
 
-                if not session_string_line_found:
-                    env_contents.append(f"TELEGRAM_SESSION_STRING={session_string}\n")
+                update_or_append(env_contents, "TELEGRAM_API_ID", str(API_ID))
+                update_or_append(env_contents, "TELEGRAM_API_HASH", API_HASH)
+                update_or_append(env_contents, "TELEGRAM_SESSION_STRING", session_string)
 
                 with open(".env", "w") as file:
                     file.writelines(env_contents)
 
-                print("\n.env file updated successfully!")
+                os.chmod(".env", 0o600)
+                print("\n.env file updated successfully and secured with 600 permissions!")
             except Exception as e:
                 print(f"\nError updating .env file: {e}")
                 print("Please manually add the session string to your .env file.")
