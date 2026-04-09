@@ -816,6 +816,22 @@ async def list_inline_buttons(
                 return "message_id must be an integer."
 
         entity = await resolve_entity(chat_id)
+
+        def _has_inline(msg):
+            if getattr(msg, "buttons", None):
+                return True
+            rm = getattr(msg, "reply_markup", None)
+            return bool(rm and hasattr(rm, "rows"))
+
+        def _flat_buttons(msg):
+            btns = getattr(msg, "buttons", None)
+            if btns:
+                return [btn for row in btns for btn in row]
+            rm = getattr(msg, "reply_markup", None)
+            if rm and hasattr(rm, "rows"):
+                return [btn for row in rm.rows for btn in row.buttons]
+            return []
+
         target_message = None
 
         if message_id is not None:
@@ -824,18 +840,12 @@ async def list_inline_buttons(
                 target_message = target_message[0] if target_message else None
         else:
             recent_messages = await client.get_messages(entity, limit=limit)
-            target_message = next(
-                (msg for msg in recent_messages if getattr(msg, "buttons", None)), None
-            )
+            target_message = next((msg for msg in recent_messages if _has_inline(msg)), None)
 
         if not target_message:
             return "No message with inline buttons found."
 
-        buttons_attr = getattr(target_message, "buttons", None)
-        if not buttons_attr:
-            return f"Message {target_message.id} does not contain inline buttons."
-
-        buttons = [btn for row in buttons_attr for btn in row]
+        buttons = _flat_buttons(target_message)
         if not buttons:
             return f"Message {target_message.id} does not contain inline buttons."
 
@@ -843,9 +853,8 @@ async def list_inline_buttons(
             f"Buttons for message {target_message.id} (date {target_message.date}):",
         ]
         for idx, btn in enumerate(buttons):
-            raw_button = getattr(btn, "button", None)
             text = getattr(btn, "text", "") or "<no text>"
-            url = getattr(raw_button, "url", None) if raw_button else None
+            url = getattr(btn, "url", None)
             has_callback = bool(getattr(btn, "data", None))
             parts = [f"[{idx}] text='{text}'"]
             parts.append("callback=yes" if has_callback else "callback=no")
@@ -904,25 +913,49 @@ async def press_inline_button(
 
         entity = await resolve_entity(chat_id)
 
+        def _has_inline_buttons(msg):
+            """Check if a message has inline buttons via buttons property or reply_markup."""
+            if getattr(msg, "buttons", None):
+                return True
+            rm = getattr(msg, "reply_markup", None)
+            return bool(rm and hasattr(rm, "rows"))
+
+        def _extract_buttons(msg):
+            """Extract flat list of buttons from buttons property or reply_markup fallback."""
+            btns = getattr(msg, "buttons", None)
+            if btns:
+                return [btn for row in btns for btn in row]
+            rm = getattr(msg, "reply_markup", None)
+            if rm and hasattr(rm, "rows"):
+                return [btn for row in rm.rows for btn in row.buttons]
+            return []
+
         target_message = None
         if message_id is not None:
+            # Fetch by ID first, then fall back to recent-message search if
+            # reply_markup is missing (Telethon sometimes omits it for ID fetches).
             target_message = await client.get_messages(entity, ids=message_id)
             if isinstance(target_message, list):
                 target_message = target_message[0] if target_message else None
+            if target_message and not _has_inline_buttons(target_message):
+                # Fallback: search recent messages for the same ID with markup
+                recent = await client.get_messages(entity, limit=30)
+                fallback = next(
+                    (m for m in recent if m.id == target_message.id and _has_inline_buttons(m)),
+                    None,
+                )
+                if fallback:
+                    target_message = fallback
         else:
             recent_messages = await client.get_messages(entity, limit=20)
             target_message = next(
-                (msg for msg in recent_messages if getattr(msg, "buttons", None)), None
+                (msg for msg in recent_messages if _has_inline_buttons(msg)), None
             )
 
         if not target_message:
             return "No message with inline buttons found. Specify message_id to target a specific message."
 
-        buttons_attr = getattr(target_message, "buttons", None)
-        if not buttons_attr:
-            return f"Message {target_message.id} does not contain inline buttons."
-
-        buttons = [btn for row in buttons_attr for btn in row]
+        buttons = _extract_buttons(target_message)
         if not buttons:
             return f"Message {target_message.id} does not contain inline buttons."
 
@@ -950,16 +983,16 @@ async def press_inline_button(
             )
             return f"Button not found. Available buttons: {available}"
 
-        if not getattr(target_button, "data", None):
-            raw_button = getattr(target_button, "button", None)
-            url = getattr(raw_button, "url", None) if raw_button else None
+        btn_data = getattr(target_button, "data", None)
+        if not btn_data:
+            url = getattr(target_button, "url", None)
             if url:
                 return f"Selected button opens a URL instead of sending a callback: {url}"
             return "Selected button does not provide callback data to press."
 
         callback_result = await client(
             functions.messages.GetBotCallbackAnswerRequest(
-                peer=entity, msg_id=target_message.id, data=target_button.data
+                peer=entity, msg_id=target_message.id, data=btn_data
             )
         )
 
