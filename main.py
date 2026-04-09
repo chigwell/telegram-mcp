@@ -3643,6 +3643,49 @@ async def send_gif(chat_id: Union[int, str], gif_id: int) -> str:
         return log_and_format_error("send_gif", e, chat_id=chat_id, gif_id=gif_id)
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(title="Send Contact", openWorldHint=True, destructiveHint=True)
+)
+@validate_id("chat_id")
+async def send_contact(
+    chat_id: Union[int, str],
+    phone_number: str,
+    first_name: str,
+    last_name: str = "",
+    vcard: str = "",
+) -> str:
+    """
+    Send a contact to a chat.
+    Args:
+        chat_id: The chat ID or username.
+        phone_number: Contact's phone number.
+        first_name: Contact's first name.
+        last_name: Contact's last name (optional).
+        vcard: Additional vCard data (optional).
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+        from telethon.tl.types import InputMediaContact
+        import random
+
+        await client(
+            functions.messages.SendMediaRequest(
+                peer=entity,
+                media=InputMediaContact(
+                    phone_number=phone_number,
+                    first_name=first_name,
+                    last_name=last_name,
+                    vcard=vcard,
+                ),
+                message="",
+                random_id=random.randint(0, 2**63 - 1),
+            )
+        )
+        return f"Contact sent to chat {chat_id}."
+    except Exception as e:
+        return log_and_format_error("send_contact", e, chat_id=chat_id, phone_number=phone_number)
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Get Bot Info", openWorldHint=True, readOnlyHint=True))
 async def get_bot_info(bot_username: str) -> str:
     """
