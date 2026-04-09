@@ -839,9 +839,7 @@ async def list_inline_buttons(
                 target_message = target_message[0] if target_message else None
         else:
             recent_messages = await client.get_messages(entity, limit=limit)
-            target_message = next(
-                (msg for msg in recent_messages if _has_inline(msg)), None
-            )
+            target_message = next((msg for msg in recent_messages if _has_inline(msg)), None)
 
         if not target_message:
             return "No message with inline buttons found."
