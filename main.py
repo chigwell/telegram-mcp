@@ -3609,7 +3609,9 @@ async def send_gif(chat_id: Union[int, str], gif_id: int) -> str:
         return log_and_format_error("send_gif", e, chat_id=chat_id, gif_id=gif_id)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Send Contact", openWorldHint=True, destructiveHint=True))
+@mcp.tool(
+    annotations=ToolAnnotations(title="Send Contact", openWorldHint=True, destructiveHint=True)
+)
 @validate_id("chat_id")
 async def send_contact(
     chat_id: Union[int, str],
@@ -3647,9 +3649,7 @@ async def send_contact(
         )
         return f"Contact sent to chat {chat_id}."
     except Exception as e:
-        return log_and_format_error(
-            "send_contact", e, chat_id=chat_id, phone_number=phone_number
-        )
+        return log_and_format_error("send_contact", e, chat_id=chat_id, phone_number=phone_number)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Bot Info", openWorldHint=True, readOnlyHint=True))
