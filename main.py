@@ -341,27 +341,81 @@ def format_entity(entity) -> Dict[str, Any]:
     return result
 
 
+def _marked_id_candidates(identifier: Union[int, str]) -> list:
+    """Return alternative marked IDs to try when a positive int fails to resolve.
+
+    Telethon's get_entity(int) uses resolve_id() internally, which maps:
+      positive int -> PeerUser
+      -100XXXXXXXXXX -> PeerChannel
+      -XXXXXXXXXX -> PeerChat
+
+    Callers (LLMs, other tools) often pass unmarked channel/chat IDs as
+    bare positive integers. When get_entity fails on a positive int, we
+    try the marked variants before giving up.
+    """
+    if not isinstance(identifier, int) or identifier <= 0:
+        return []
+    return [
+        -1000000000000 - identifier,  # PeerChannel (most common: channels, supergroups)
+        -identifier,                   # PeerChat (legacy groups)
+    ]
+
+
 async def resolve_entity(identifier: Union[int, str]) -> Any:
-    """Resolve entity with automatic cache warming on miss.
+    """Resolve entity with automatic cache warming and unmarked ID fallback.
 
     StringSession has no persistent entity cache. If get_entity() fails
     because the cache is cold (ValueError on PeerUser lookup for group IDs),
     warm the cache via get_dialogs() and retry.
+
+    If that still fails and identifier is a positive int, try marked
+    variants (-100X for channels, -X for chats) before raising.
     """
     try:
         return await client.get_entity(identifier)
     except ValueError:
         await client.get_dialogs()
-        return await client.get_entity(identifier)
+        try:
+            return await client.get_entity(identifier)
+        except ValueError:
+            pass
+
+    for candidate in _marked_id_candidates(identifier):
+        try:
+            return await client.get_entity(candidate)
+        except ValueError:
+            continue
+
+    raise ValueError(
+        f"Could not resolve entity for {identifier!r}, "
+        f"including marked variants {_marked_id_candidates(identifier)}"
+    )
 
 
 async def resolve_input_entity(identifier: Union[int, str]) -> Any:
-    """Like resolve_entity() but returns an InputPeer."""
+    """Like resolve_entity() but returns an InputPeer.
+
+    Same fallback logic: cache warming, then marked ID variants.
+    """
     try:
         return await client.get_input_entity(identifier)
     except ValueError:
         await client.get_dialogs()
-        return await client.get_input_entity(identifier)
+        try:
+            return await client.get_input_entity(identifier)
+        except ValueError:
+            pass
+
+    for candidate in _marked_id_candidates(identifier):
+        try:
+            return await client.get_input_entity(candidate)
+        except ValueError:
+            continue
+
+    raise ValueError(
+        f"Could not resolve input entity for {identifier!r}, "
+        f"including marked variants {_marked_id_candidates(identifier)}"
+    )
 
 
 def format_message(message) -> Dict[str, Any]:
