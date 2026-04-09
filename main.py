@@ -735,9 +735,10 @@ async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int =
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
 
             engagement_info = get_engagement_info(msg)
+            safe_text = (msg.message or "").replace("\n", "\\n")
 
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info} | Message: {msg.message}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info} | Message: {safe_text}"
             )
         return "\n".join(lines)
     except Exception as e:
