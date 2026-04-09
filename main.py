@@ -727,19 +727,34 @@ async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int =
         messages = await client.get_messages(entity, limit=page_size, add_offset=offset)
         if not messages:
             return "No messages found for this page."
-        lines = []
+        result = []
         for msg in messages:
             sender_name = get_sender_name(msg)
-            reply_info = ""
+            entry = {
+                "id": msg.id,
+                "sender": sender_name,
+                "date": str(msg.date),
+                "text": msg.message,
+            }
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
-                reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
-
-            engagement_info = get_engagement_info(msg)
-
-            lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info} | Message: {msg.message}"
-            )
-        return "\n".join(lines)
+                entry["reply_to"] = msg.reply_to.reply_to_msg_id
+            # Engagement metrics (views, forwards, reactions)
+            engagement = {}
+            views = getattr(msg, "views", None)
+            if views is not None:
+                engagement["views"] = views
+            forwards = getattr(msg, "forwards", None)
+            if forwards is not None:
+                engagement["forwards"] = forwards
+            reactions = getattr(msg, "reactions", None)
+            if reactions is not None:
+                results = getattr(reactions, "results", None)
+                if results:
+                    engagement["reactions"] = sum(getattr(r, "count", 0) or 0 for r in results)
+            if engagement:
+                entry["engagement"] = engagement
+            result.append(entry)
+        return json.dumps(result, ensure_ascii=False, default=json_serializer)
     except Exception as e:
         return log_and_format_error(
             "get_messages", e, chat_id=chat_id, page=page, page_size=page_size
