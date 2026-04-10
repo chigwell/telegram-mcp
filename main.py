@@ -105,6 +105,24 @@ else:
     # Use file-based session
     client = TelegramClient(TELEGRAM_SESSION_NAME, TELEGRAM_API_ID, TELEGRAM_API_HASH)
 
+
+async def ensure_connected():
+    """Reconnect Telethon client if disconnected.
+
+    When the underlying connection drops, Telethon sets _user_connected=False
+    and all subsequent requests fail with ConnectionError. This function
+    detects the state and re-establishes the connection.
+    """
+    if not client.is_connected():
+        reconnect_logger = logging.getLogger("telegram_mcp")
+        reconnect_logger.warning("Client disconnected, reconnecting...")
+        await client.connect()
+        if not await client.is_user_authorized():
+            reconnect_logger.warning("Client not authorized after reconnect, calling start()...")
+            await client.start()
+        reconnect_logger.warning("Client reconnected successfully")
+
+
 # Setup robust logging with both file and console output
 logger = logging.getLogger("telegram_mcp")
 logger.setLevel(logging.ERROR)  # Set to ERROR for production, INFO for debugging
@@ -342,26 +360,49 @@ def format_entity(entity) -> Dict[str, Any]:
 
 
 async def resolve_entity(identifier: Union[int, str]) -> Any:
-    """Resolve entity with automatic cache warming on miss.
+    """Resolve entity with automatic cache warming and auto-reconnect.
 
     StringSession has no persistent entity cache. If get_entity() fails
     because the cache is cold (ValueError on PeerUser lookup for group IDs),
     warm the cache via get_dialogs() and retry.
+
+    On ConnectionError, reconnects and retries once.
     """
+    await ensure_connected()
     try:
-        return await client.get_entity(identifier)
-    except ValueError:
-        await client.get_dialogs()
-        return await client.get_entity(identifier)
+        try:
+            return await client.get_entity(identifier)
+        except ValueError:
+            await client.get_dialogs()
+            return await client.get_entity(identifier)
+    except ConnectionError:
+        await ensure_connected()
+        try:
+            return await client.get_entity(identifier)
+        except ValueError:
+            await client.get_dialogs()
+            return await client.get_entity(identifier)
 
 
 async def resolve_input_entity(identifier: Union[int, str]) -> Any:
-    """Like resolve_entity() but returns an InputPeer."""
+    """Like resolve_entity() but returns an InputPeer.
+
+    On ConnectionError, reconnects and retries once.
+    """
+    await ensure_connected()
     try:
-        return await client.get_input_entity(identifier)
-    except ValueError:
-        await client.get_dialogs()
-        return await client.get_input_entity(identifier)
+        try:
+            return await client.get_input_entity(identifier)
+        except ValueError:
+            await client.get_dialogs()
+            return await client.get_input_entity(identifier)
+    except ConnectionError:
+        await ensure_connected()
+        try:
+            return await client.get_input_entity(identifier)
+        except ValueError:
+            await client.get_dialogs()
+            return await client.get_input_entity(identifier)
 
 
 def format_message(message) -> Dict[str, Any]:
@@ -694,6 +735,7 @@ async def get_chats(page: int = 1, page_size: int = 20) -> str:
         page_size: Number of chats per page.
     """
     try:
+        await ensure_connected()
         dialogs = await client.get_dialogs()
         start = (page - 1) * page_size
         end = start + page_size
@@ -1024,6 +1066,7 @@ async def list_contacts() -> str:
     List all contacts in your Telegram account.
     """
     try:
+        await ensure_connected()
         result = await client(functions.contacts.GetContactsRequest(hash=0))
         users = result.users
         if not users:
@@ -1318,6 +1361,7 @@ async def list_chats(
         unmuted_only: If True, only return unmuted chats.
     """
     try:
+        await ensure_connected()
         dialogs = await client.get_dialogs(limit=limit)
 
         results = []
@@ -2448,6 +2492,7 @@ async def export_contacts() -> str:
     Export all contacts as a JSON string.
     """
     try:
+        await ensure_connected()
         result = await client(functions.contacts.GetContactsRequest(hash=0))
         users = result.users
         return json.dumps([format_entity(u) for u in users], indent=2)
@@ -3346,6 +3391,7 @@ async def search_global(query: str, page: int = 1, page_size: int = 20) -> str:
     Search for messages across all public chats and channels by text content.
     """
     try:
+        await ensure_connected()
         offset = (page - 1) * page_size
         messages = await client.get_messages(
             None, limit=page_size, search=query, add_offset=offset
@@ -4182,6 +4228,7 @@ async def get_drafts() -> str:
     Returns a list of drafts with their chat info and message content.
     """
     try:
+        await ensure_connected()
         result = await client(functions.messages.GetAllDraftsRequest())
 
         # The result contains updates with draft info
@@ -4274,6 +4321,7 @@ async def list_folders() -> str:
     Returns a list of folders that can be used with other folder tools.
     """
     try:
+        await ensure_connected()
         result = await client(functions.messages.GetDialogFiltersRequest())
 
         folders = []
@@ -4839,10 +4887,10 @@ async def _main() -> None:
 
         # Warm entity cache — StringSession has no persistent cache,
         # so fetch all dialogs once to populate it
-        print("Warming entity cache...")
+        print("Warming entity cache...", file=sys.stderr)
         await client.get_dialogs()
 
-        print("Telegram client started. Running MCP server...")
+        print("Telegram client started. Running MCP server...", file=sys.stderr)
         # Use the asynchronous entrypoint instead of mcp.run()
         await mcp.run_stdio_async()
     except Exception as e:
