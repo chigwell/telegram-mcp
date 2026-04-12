@@ -106,21 +106,54 @@ else:
     client = TelegramClient(TELEGRAM_SESSION_NAME, TELEGRAM_API_ID, TELEGRAM_API_HASH)
 
 
-async def ensure_connected():
-    """Reconnect Telethon client if disconnected.
+_last_conn_verified: float = 0.0
+_CONN_VERIFY_INTERVAL: float = 30.0  # seconds between live pings
 
-    When the underlying connection drops, Telethon sets _user_connected=False
-    and all subsequent requests fail with ConnectionError. This function
-    detects the state and re-establishes the connection.
+
+async def _force_reconnect():
+    """Force disconnect + reconnect regardless of is_connected() state."""
+    global _last_conn_verified
+    reconnect_logger = logging.getLogger("telegram_mcp")
+    reconnect_logger.warning("Forcing reconnect...")
+    try:
+        await client.disconnect()
+    except Exception:
+        pass
+    await client.connect()
+    if not await client.is_user_authorized():
+        reconnect_logger.warning("Client not authorized after reconnect, calling start()...")
+        await client.start()
+    _last_conn_verified = time.time()
+    reconnect_logger.warning("Forced reconnect successful")
+
+
+async def ensure_connected():
+    """Verify Telegram connection is alive, reconnect if needed.
+
+    is_connected() can return True when the underlying TCP socket is dead.
+    We periodically send a lightweight request to verify the connection
+    actually works, and force-reconnect on any failure.
     """
+    global _last_conn_verified
+
     if not client.is_connected():
-        reconnect_logger = logging.getLogger("telegram_mcp")
-        reconnect_logger.warning("Client disconnected, reconnecting...")
-        await client.connect()
-        if not await client.is_user_authorized():
-            reconnect_logger.warning("Client not authorized after reconnect, calling start()...")
-            await client.start()
-        reconnect_logger.warning("Client reconnected successfully")
+        await _force_reconnect()
+        return
+
+    # Skip verification if recently confirmed alive
+    now = time.time()
+    if now - _last_conn_verified < _CONN_VERIFY_INTERVAL:
+        return
+
+    # Verify with a lightweight Telegram API call
+    try:
+        await asyncio.wait_for(
+            client(functions.help.GetNearestDcRequest()),
+            timeout=5.0,
+        )
+        _last_conn_verified = now
+    except (ConnectionError, OSError, asyncio.TimeoutError, Exception):
+        await _force_reconnect()
 
 
 # Setup robust logging with both file and console output
@@ -1097,6 +1130,7 @@ async def search_contacts(query: str) -> str:
         query: The search term to look for in contact names, usernames, or phone numbers.
     """
     try:
+        await ensure_connected()
         result = await client(functions.contacts.SearchRequest(q=query, limit=50))
         users = result.users
         if not users:
@@ -1125,6 +1159,7 @@ async def get_contact_ids() -> str:
     Get all contact IDs in your Telegram account.
     """
     try:
+        await ensure_connected()
         result = await client(functions.contacts.GetContactIDsRequest(hash=0))
         if not result:
             return "No contact IDs found."
@@ -1532,6 +1567,7 @@ async def get_direct_chat_by_contact(contact_query: str) -> str:
         contact_query: Name, username, or phone number to search for.
     """
     try:
+        await ensure_connected()
         # Fetch all contacts using the correct Telethon method
         result = await client(functions.contacts.GetContactsRequest(hash=0))
         contacts = result.users
@@ -1766,6 +1802,7 @@ async def add_contact(
     and add the contact using contacts.addContact API (which supports adding contacts without phone numbers).
     """
     try:
+        await ensure_connected()
         # Normalize None to empty string for easier checking
         phone = phone or ""
         username = username or ""
@@ -1942,6 +1979,7 @@ async def get_me() -> str:
     Get your own user information.
     """
     try:
+        await ensure_connected()
         me = await client.get_me()
         return json.dumps(format_entity(me), indent=2)
     except Exception as e:
@@ -2159,6 +2197,7 @@ async def get_participants(chat_id: Union[int, str]) -> str:
         chat_id: The group or channel ID or username.
     """
     try:
+        await ensure_connected()
         participants = await client.get_participants(chat_id)
         lines = [
             f"ID: {p.id}, Name: {getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}"
@@ -2272,6 +2311,7 @@ async def update_profile(first_name: str = None, last_name: str = None, about: s
     Update your profile information (name, bio).
     """
     try:
+        await ensure_connected()
         await client(
             functions.account.UpdateProfileRequest(
                 first_name=first_name, last_name=last_name, about=about
@@ -2294,6 +2334,7 @@ async def set_profile_photo(file_path: str, ctx: Optional[Context] = None) -> st
     Set a new profile photo.
     """
     try:
+        await ensure_connected()
         safe_path, path_error = await _resolve_readable_file_path(
             raw_path=file_path,
             ctx=ctx,
@@ -2321,6 +2362,7 @@ async def delete_profile_photo() -> str:
     Delete your current profile photo.
     """
     try:
+        await ensure_connected()
         photos = await client(
             functions.photos.GetUserPhotosRequest(user_id="me", offset=0, max_id=0, limit=1)
         )
@@ -2342,6 +2384,7 @@ async def get_privacy_settings() -> str:
     Get your privacy settings for last seen status.
     """
     try:
+        await ensure_connected()
         # Import needed types directly
         from telethon.tl.types import InputPrivacyKeyStatusTimestamp
 
@@ -2469,6 +2512,7 @@ async def import_contacts(contacts: list) -> str:
     Import a list of contacts. Each contact should be a dict with phone, first_name, last_name.
     """
     try:
+        await ensure_connected()
         input_contacts = [
             functions.contacts.InputPhoneContact(
                 client_id=i,
@@ -2508,6 +2552,7 @@ async def get_blocked_users() -> str:
     Get a list of blocked users.
     """
     try:
+        await ensure_connected()
         result = await client(functions.contacts.GetBlockedRequest(offset=0, limit=100))
         return json.dumps([format_entity(u) for u in result.users], indent=2)
     except Exception as e:
@@ -2522,6 +2567,7 @@ async def create_channel(title: str, about: str = "", megagroup: bool = False) -
     Create a new channel or supergroup.
     """
     try:
+        await ensure_connected()
         result = await client(
             functions.channels.CreateChannelRequest(title=title, about=about, megagroup=megagroup)
         )
@@ -2867,6 +2913,7 @@ async def get_admins(chat_id: Union[int, str]) -> str:
     Get all admins in a group or channel.
     """
     try:
+        await ensure_connected()
         # Fix: Use the correct filter type ChannelParticipantsAdmins
         participants = await client.get_participants(chat_id, filter=ChannelParticipantsAdmins())
         lines = [
@@ -2888,6 +2935,7 @@ async def get_banned_users(chat_id: Union[int, str]) -> str:
     Get all banned users in a group or channel.
     """
     try:
+        await ensure_connected()
         # Fix: Use the correct filter type ChannelParticipantsKicked
         participants = await client.get_participants(
             chat_id, filter=ChannelParticipantsKicked(q="")
@@ -2958,6 +3006,7 @@ async def join_chat_by_link(link: str) -> str:
     Join a chat by invite link.
     """
     try:
+        await ensure_connected()
         # Extract the hash from the invite link
         if "/" in link:
             hash_part = link.split("/")[-1]
@@ -3043,6 +3092,7 @@ async def import_chat_invite(hash: str) -> str:
     Import a chat invite by hash.
     """
     try:
+        await ensure_connected()
         # Remove any prefixes like '+' if present
         if hash.startswith("+"):
             hash = hash[1:]
@@ -3148,6 +3198,7 @@ async def upload_file(file_path: str, ctx: Optional[Context] = None) -> str:
         file_path: Absolute or relative path under allowed roots.
     """
     try:
+        await ensure_connected()
         safe_path, path_error = await _resolve_readable_file_path(
             raw_path=file_path,
             ctx=ctx,
@@ -3344,6 +3395,7 @@ async def search_public_chats(query: str, limit: int = 20) -> str:
     Search for public chats, channels, or bots by username or title.
     """
     try:
+        await ensure_connected()
         result = await client(functions.contacts.SearchRequest(q=query, limit=limit))
         entities = [format_entity(e) for e in result.chats + result.users]
         return json.dumps(entities, indent=2)
@@ -3427,6 +3479,7 @@ async def resolve_username(username: str) -> str:
     Resolve a username to a user or chat ID.
     """
     try:
+        await ensure_connected()
         result = await client(functions.contacts.ResolveUsernameRequest(username=username))
         return str(result)
     except Exception as e:
@@ -3573,6 +3626,7 @@ async def get_sticker_sets() -> str:
     Get all sticker sets.
     """
     try:
+        await ensure_connected()
         result = await client(functions.messages.GetAllStickersRequest(hash=0))
         return json.dumps([s.title for s in result.sets], indent=2)
     except Exception as e:
@@ -3623,6 +3677,7 @@ async def get_gif_search(query: str, limit: int = 10) -> str:
         limit: Max number of GIFs to return.
     """
     try:
+        await ensure_connected()
         # Try approach 1: SearchGifsRequest
         try:
             result = await client(
@@ -3885,6 +3940,7 @@ async def get_recent_actions(chat_id: Union[int, str]) -> str:
     Get recent admin actions (admin log) in a group or channel.
     """
     try:
+        await ensure_connected()
         result = await client(
             functions.channels.GetAdminLogRequest(
                 channel=chat_id,
@@ -4806,6 +4862,7 @@ async def delete_folder(folder_id: int) -> str:
         folder_id: The folder ID to delete (get from list_folders)
     """
     try:
+        await ensure_connected()
         # System folders (id < 2) cannot be deleted
         if folder_id < 2:
             return f"Cannot delete system folder (ID {folder_id}). Only custom folders can be deleted."
@@ -4850,6 +4907,7 @@ async def reorder_folders(folder_ids: List[int]) -> str:
         folder_ids: List of folder IDs in the desired order
     """
     try:
+        await ensure_connected()
         # Get existing folders to validate
         result = await client(functions.messages.GetDialogFiltersRequest())
 
