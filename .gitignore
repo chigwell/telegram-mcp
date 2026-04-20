@@ -201,3 +201,6 @@ test_upload.txt
 test_voice.ogg
 sticker.webp
 two.png
+
+# Local scratch directories
+.local/

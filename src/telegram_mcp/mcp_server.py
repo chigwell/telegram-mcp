@@ -547,11 +547,11 @@ async def set_privacy_settings(
 @mcp.tool(
     annotations=ToolAnnotations(title="Import Contacts", openWorldHint=True, destructiveHint=True)
 )
-async def import_contacts(contacts: list) -> str:
+async def import_contacts(contacts_list: list) -> str:
     """
     Import a list of contacts. Each contact should be a dict with phone, first_name, last_name.
     """
-    return await contacts_module.import_contacts(contacts)
+    return await contacts_module.import_contacts(contacts_list)
 
 
 @mcp.tool(
@@ -1315,9 +1315,9 @@ async def create_folder(
     title: str,
     emoticon: Optional[str] = None,
     chat_ids: Optional[List[Union[int, str]]] = None,
-    contacts: bool = False,
+    include_contacts: bool = False,
     non_contacts: bool = False,
-    groups: bool = False,
+    include_groups: bool = False,
     broadcasts: bool = False,
     bots: bool = False,
     exclude_muted: bool = False,
@@ -1331,9 +1331,9 @@ async def create_folder(
         title: Folder name (required)
         emoticon: Folder emoji (optional, e.g., "📁", "🏠", "💼")
         chat_ids: List of chat IDs or usernames to include (optional)
-        contacts: Include all contacts
+        include_contacts: Include all contacts
         non_contacts: Include all non-contacts
-        groups: Include all groups
+        include_groups: Include all groups
         broadcasts: Include all channels
         bots: Include all bots
         exclude_muted: Exclude muted chats
@@ -1344,9 +1344,9 @@ async def create_folder(
         title,
         emoticon,
         chat_ids,
-        contacts,
+        include_contacts,
         non_contacts,
-        groups,
+        include_groups,
         broadcasts,
         bots,
         exclude_muted,
