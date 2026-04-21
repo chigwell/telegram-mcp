@@ -3487,6 +3487,88 @@ async def resolve_username(username: str) -> str:
 
 
 @mcp.tool(
+    annotations=ToolAnnotations(title="Get Full User", openWorldHint=True, readOnlyHint=True)
+)
+async def get_full_user(username: Union[int, str]) -> str:
+    """
+    Get full profile info of a Telegram user including bio/about text,
+    personal channel link, and other profile details.
+
+    Args:
+        username: The username (without @) or user ID to look up.
+    """
+    try:
+        await ensure_connected()
+        entity = await resolve_entity(username)
+        full = await client(functions.users.GetFullUserRequest(id=entity))
+
+        user = full.users[0] if full.users else None
+        full_user = full.full_user
+
+        personal_channel_id = getattr(full_user, "personal_channel_id", None)
+        personal_channel = None
+        if personal_channel_id:
+            try:
+                ch = await client.get_entity(personal_channel_id)
+                ch_username = getattr(ch, "username", None)
+                personal_channel = (
+                    f"https://t.me/{ch_username}" if ch_username else str(personal_channel_id)
+                )
+            except Exception:
+                personal_channel = str(personal_channel_id)
+
+        result = {
+            "id": user.id if user else None,
+            "first_name": getattr(user, "first_name", None) if user else None,
+            "last_name": getattr(user, "last_name", None) if user else None,
+            "username": getattr(user, "username", None) if user else None,
+            "phone": getattr(user, "phone", None) if user else None,
+            "bio": full_user.about or "",
+            "personal_channel": personal_channel,
+            "bot": getattr(user, "bot", False) if user else False,
+            "verified": getattr(user, "verified", False) if user else False,
+            "premium": getattr(user, "premium", False) if user else False,
+            "common_chats_count": getattr(full_user, "common_chats_count", None),
+        }
+
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        return log_and_format_error("get_full_user", e, username=username)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Get Full Chat", openWorldHint=True, readOnlyHint=True)
+)
+async def get_full_chat(chat_id: Union[int, str]) -> str:
+    """
+    Get full info of a channel or group including description/about text.
+
+    Args:
+        chat_id: The channel/group username (without @) or ID.
+    """
+    try:
+        await ensure_connected()
+        entity = await resolve_entity(chat_id)
+        full = await client(functions.channels.GetFullChannelRequest(channel=entity))
+
+        chat = full.chats[0] if full.chats else None
+        full_chat = full.full_chat
+
+        result = {
+            "id": chat.id if chat else None,
+            "title": getattr(chat, "title", None) if chat else None,
+            "username": getattr(chat, "username", None) if chat else None,
+            "about": full_chat.about or "",
+            "participants_count": getattr(full_chat, "participants_count", None),
+            "linked_chat_id": getattr(full_chat, "linked_chat_id", None),
+        }
+
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        return log_and_format_error("get_full_chat", e, chat_id=chat_id)
+
+
+@mcp.tool(
     annotations=ToolAnnotations(
         title="Mute Chat", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
