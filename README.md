@@ -55,6 +55,9 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **demote_admin(chat_id, user_id)**: Demote admin to user
 - **ban_user(chat_id, user_id)**: Ban user
 - **unban_user(chat_id, user_id)**: Unban user
+- **edit_admin_rights(chat_id, user_id, rank, ...rights)**: Set granular admin rights (extends promote_admin)
+- **set_default_chat_permissions(chat_id, ...perms, until_date)**: Set default member permissions (send, media, invite, pin, etc.)
+- **toggle_slow_mode(chat_id, seconds)**: Enable/disable slow mode in supergroups (0/10/30/60/300/900/3600s)
 - **get_invite_link(chat_id)**: Get invite link
 - **export_chat_invite(chat_id)**: Export invite link
 - **import_chat_invite(hash)**: Join chat by invite hash
