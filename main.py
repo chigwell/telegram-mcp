@@ -7,7 +7,7 @@ import asyncio
 import sqlite3
 import logging
 import mimetypes
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import List, Dict, Optional, Union, Any
 from pathlib import Path
@@ -844,6 +844,132 @@ async def send_message(
         return "Message sent successfully."
     except Exception as e:
         return log_and_format_error("send_message", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Send Scheduled Message",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=False,
+    )
+)
+@validate_id("chat_id")
+async def send_scheduled_message(
+    chat_id: Union[int, str], message: str, schedule_date: Union[str, int]
+) -> str:
+    """
+    Schedule a message to be sent at a future time.
+    Args:
+        chat_id: The ID or username of the chat.
+        message: The message content to send.
+        schedule_date: When to send the message. Either an ISO-8601 string
+            (e.g. "2026-05-01T14:30:00" or "2026-05-01T14:30:00Z") or a Unix
+            timestamp (int). Naive datetimes are treated as UTC.
+    """
+    try:
+        if isinstance(schedule_date, int):
+            dt = datetime.fromtimestamp(schedule_date, tz=timezone.utc)
+        else:
+            dt = datetime.fromisoformat(schedule_date.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+
+        if dt <= datetime.now(timezone.utc):
+            return (
+                f"schedule_date must be in the future (got {dt.isoformat()}, "
+                f"now {datetime.now(timezone.utc).isoformat()})."
+            )
+
+        entity = await resolve_entity(chat_id)
+        result = await client.send_message(entity, message, schedule=dt)
+        message_id = getattr(result, "id", None)
+        return f"Scheduled message {message_id} for {dt.isoformat()} in chat {chat_id}."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
+        return log_and_format_error(
+            "send_scheduled_message", e, chat_id=chat_id, schedule_date=str(schedule_date)
+        )
+    except telethon.errors.rpcerrorlist.ScheduleDateTooLateError as e:
+        return log_and_format_error(
+            "send_scheduled_message", e, chat_id=chat_id, schedule_date=str(schedule_date)
+        )
+    except telethon.errors.rpcerrorlist.ScheduleDateInvalidError as e:
+        return log_and_format_error(
+            "send_scheduled_message", e, chat_id=chat_id, schedule_date=str(schedule_date)
+        )
+    except Exception as e:
+        logger.exception(
+            f"send_scheduled_message failed (chat_id={chat_id}, schedule_date={schedule_date})"
+        )
+        return log_and_format_error(
+            "send_scheduled_message", e, chat_id=chat_id, schedule_date=str(schedule_date)
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Scheduled Messages", openWorldHint=True, readOnlyHint=True
+    )
+)
+@validate_id("chat_id")
+async def get_scheduled_messages(chat_id: Union[int, str]) -> str:
+    """
+    List all scheduled (pending) messages in a chat.
+    Args:
+        chat_id: The ID or username of the chat.
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+        result = await client(functions.messages.GetScheduledHistoryRequest(peer=entity, hash=0))
+        messages = getattr(result, "messages", []) or []
+        if not messages:
+            return f"No scheduled messages in chat {chat_id}."
+        lines = [f"Scheduled messages in chat {chat_id} ({len(messages)}):"]
+        for msg in messages:
+            text = getattr(msg, "message", "") or ""
+            preview = text[:100] + ("..." if len(text) > 100 else "")
+            date_iso = msg.date.isoformat() if getattr(msg, "date", None) else "unknown"
+            lines.append(f"ID: {msg.id} | Scheduled: {date_iso} | Text: {preview}")
+        return "\n".join(lines)
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
+        return log_and_format_error("get_scheduled_messages", e, chat_id=chat_id)
+    except Exception as e:
+        logger.exception(f"get_scheduled_messages failed (chat_id={chat_id})")
+        return log_and_format_error("get_scheduled_messages", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Delete Scheduled Message", openWorldHint=True, destructiveHint=True
+    )
+)
+@validate_id("chat_id")
+async def delete_scheduled_message(chat_id: Union[int, str], message_ids: List[int]) -> str:
+    """
+    Delete one or more scheduled (pending) messages from a chat.
+    Args:
+        chat_id: The ID or username of the chat.
+        message_ids: List of scheduled message IDs to delete.
+    """
+    try:
+        if not message_ids:
+            return "message_ids must be a non-empty list."
+        entity = await resolve_entity(chat_id)
+        await client(
+            functions.messages.DeleteScheduledMessagesRequest(peer=entity, id=message_ids)
+        )
+        return f"Deleted {len(message_ids)} scheduled message(s) from chat {chat_id}."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
+        return log_and_format_error(
+            "delete_scheduled_message", e, chat_id=chat_id, message_ids=message_ids
+        )
+    except Exception as e:
+        logger.exception(
+            f"delete_scheduled_message failed (chat_id={chat_id}, message_ids={message_ids})"
+        )
+        return log_and_format_error(
+            "delete_scheduled_message", e, chat_id=chat_id, message_ids=message_ids
+        )
 
 
 @mcp.tool(
