@@ -1510,7 +1510,11 @@ async def list_topics(
 
 @mcp.tool(annotations=ToolAnnotations(title="List Chats", openWorldHint=True, readOnlyHint=True))
 async def list_chats(
-    chat_type: str = None, limit: int = 20, unread_only: bool = False, unmuted_only: bool = False
+    chat_type: str = None,
+    limit: int = 20,
+    unread_only: bool = False,
+    unmuted_only: bool = False,
+    with_about: bool = False,
 ) -> str:
     """
     List available chats with metadata.
@@ -1520,6 +1524,12 @@ async def list_chats(
         limit: Maximum number of chats to retrieve from Telegram API (applied before filtering, so fewer results may be returned when filters are active).
         unread_only: If True, only return chats with unread messages.
         unmuted_only: If True, only return unmuted chats.
+        with_about: If True, fetch each chat's description/bio via an additional
+            API call per chat (slower — use only when needed for dispatch
+            disambiguation).
+
+    **Performance:** when `with_about=True`, makes one extra API call per chat
+    returned. Avoid large `limit` values.
     """
     try:
         await ensure_connected()
@@ -1591,6 +1601,36 @@ async def list_chats(
             if unread_mentions > 0:
                 chat_info += f", Unread mentions: {unread_mentions}"
 
+            # Optionally fetch per-chat description/bio. Each call is guarded
+            # so one failure (permissions, flood, etc.) doesn't abort the whole
+            # listing.
+            if with_about:
+                about_text = ""
+                try:
+                    if isinstance(entity, Channel):
+                        full = await client(
+                            functions.channels.GetFullChannelRequest(channel=entity)
+                        )
+                        about_text = getattr(full.full_chat, "about", "") or ""
+                    elif isinstance(entity, Chat):
+                        full = await client(
+                            functions.messages.GetFullChatRequest(chat_id=entity.id)
+                        )
+                        about_text = getattr(full.full_chat, "about", "") or ""
+                    elif isinstance(entity, User):
+                        full = await client(functions.users.GetFullUserRequest(id=entity))
+                        about_text = getattr(full.full_user, "about", "") or ""
+                except Exception as about_err:
+                    logger.warning(
+                        f"list_chats: failed to fetch about for {entity.id}: {about_err}"
+                    )
+                    about_text = "<error fetching description>"
+
+                if len(about_text) > 200:
+                    about_text = about_text[:200] + "..."
+
+                chat_info += f', About: "{about_text}"'
+
             results.append(chat_info)
 
         if not results:
@@ -1605,6 +1645,7 @@ async def list_chats(
             limit=limit,
             unread_only=unread_only,
             unmuted_only=unmuted_only,
+            with_about=with_about,
         )
 
 
