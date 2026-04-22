@@ -70,9 +70,12 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **reply_to_message(chat_id, message_id, text)**: Reply to a message
 - **edit_message(chat_id, message_id, new_text)**: Edit your message
 - **delete_message(chat_id, message_id)**: Delete a message
+- **delete_messages_bulk(chat_id, message_ids, revoke=True)**: Delete multiple messages in one call
+- **delete_chat_history(chat_id, max_id=0, revoke=False)**: Clear the full message history of a chat
 - **forward_message(from_chat_id, message_id, to_chat_id)**: Forward a message
 - **pin_message(chat_id, message_id)**: Pin a message
 - **unpin_message(chat_id, message_id)**: Unpin a message
+- **unpin_all_messages(chat_id)**: Unpin all pinned messages in a chat
 - **mark_as_read(chat_id)**: Mark all as read
 - **get_message_context(chat_id, message_id, context_size)**: Context around a message
 - **get_history(chat_id, limit)**: Full chat history

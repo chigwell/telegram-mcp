@@ -3316,6 +3316,96 @@ async def delete_message(chat_id: Union[int, str], message_id: int) -> str:
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        title="Delete Chat History",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=False,
+    )
+)
+@validate_id("chat_id")
+async def delete_chat_history(
+    chat_id: Union[int, str], max_id: int = 0, revoke: bool = False
+) -> str:
+    """
+    Clear the full message history of a chat.
+
+    Args:
+        chat_id: Chat ID or username.
+        max_id: Delete messages up to this ID; 0 deletes all messages (default).
+        revoke: If True, delete for both parties (default False = only for you).
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+        result = await client(
+            functions.messages.DeleteHistoryRequest(peer=entity, max_id=max_id, revoke=revoke)
+        )
+        pts_count = getattr(result, "pts_count", 0)
+        offset = getattr(result, "offset", 0)
+        scope = "for both parties" if revoke else "for you"
+        return (
+            f"Chat {chat_id} history cleared {scope}: "
+            f"{pts_count} messages deleted (offset={offset})."
+        )
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Cannot delete chat history: admin privileges are required."
+    except Exception as e:
+        return log_and_format_error(
+            "delete_chat_history",
+            e,
+            chat_id=chat_id,
+            max_id=max_id,
+            revoke=revoke,
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Delete Messages Bulk",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@validate_id("chat_id")
+async def delete_messages_bulk(
+    chat_id: Union[int, str], message_ids: List[int], revoke: bool = True
+) -> str:
+    """
+    Delete multiple messages in a single call.
+
+    Args:
+        chat_id: Chat ID or username.
+        message_ids: List of message IDs to delete.
+        revoke: If True, delete for both parties (default True). Ignored for channels.
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+        if isinstance(entity, Channel):
+            result = await client(
+                functions.channels.DeleteMessagesRequest(channel=entity, id=message_ids)
+            )
+        else:
+            result = await client(
+                functions.messages.DeleteMessagesRequest(id=message_ids, revoke=revoke)
+            )
+        pts_count = getattr(result, "pts_count", 0)
+        return f"Deleted {pts_count} of {len(message_ids)} messages from chat {chat_id}."
+    except telethon.errors.rpcerrorlist.MessageIdInvalidError:
+        return "Cannot delete messages: one or more message IDs are invalid."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Cannot delete messages: admin privileges are required."
+    except Exception as e:
+        return log_and_format_error(
+            "delete_messages_bulk",
+            e,
+            chat_id=chat_id,
+            message_ids=message_ids,
+            revoke=revoke,
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         title="Pin Message", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
@@ -3348,6 +3438,32 @@ async def unpin_message(chat_id: Union[int, str], message_id: int) -> str:
         return f"Message {message_id} unpinned in chat {chat_id}."
     except Exception as e:
         return log_and_format_error("unpin_message", e, chat_id=chat_id, message_id=message_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Unpin All Messages",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@validate_id("chat_id")
+async def unpin_all_messages(chat_id: Union[int, str]) -> str:
+    """
+    Unpin all pinned messages in a chat.
+
+    Args:
+        chat_id: Chat ID or username.
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+        await client(functions.messages.UnpinAllMessagesRequest(peer=entity))
+        return f"All messages unpinned in chat {chat_id}."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Cannot unpin messages: admin privileges are required."
+    except Exception as e:
+        return log_and_format_error("unpin_all_messages", e, chat_id=chat_id)
 
 
 @mcp.tool(
