@@ -83,6 +83,9 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 -  **send_reaction(chat_id, message_id, emoji, big=False)**: Add a reaction to a message
 -  **remove_reaction(chat_id, message_id)**: Remove a reaction from a message
 -  **get_message_reactions(chat_id, message_id, limit=50)**: Get all reactions on a message
+- **send_scheduled_message(chat_id, message, schedule_date)**: Schedule a message for future delivery (ISO-8601 or Unix timestamp)
+- **get_scheduled_messages(chat_id)**: List all pending scheduled messages in a chat
+- **delete_scheduled_message(chat_id, message_ids)**: Delete one or more scheduled messages
 
 ### Contact Management
 - **list_contacts()**: List all contacts
