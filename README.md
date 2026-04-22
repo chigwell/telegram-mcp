@@ -40,7 +40,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 
 ### Chat & Group Management
 - **get_chats(page, page_size)**: Paginated list of chats
-- **list_chats(chat_type, limit)**: List chats with metadata and filtering
+- **list_chats(chat_type, limit, unread_only, unmuted_only, with_about)**: List chats with metadata and filtering; `with_about=True` enriches output with each chat's description (slower).
 - **get_chat(chat_id)**: Detailed info about a chat
 - **create_group(title, user_ids)**: Create a new group
 - **invite_to_group(group_id, user_ids)**: Invite users to a group or channel
