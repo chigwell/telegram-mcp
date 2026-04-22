@@ -64,6 +64,8 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **import_chat_invite(hash)**: Join chat by invite hash
 - **join_chat_by_link(link)**: Join chat by invite link
 - **subscribe_public_channel(channel)**: Subscribe to a public channel or supergroup by username or ID
+- **get_common_chats(user_id, limit=100, max_id=0)**: List chats shared with a specific user
+- **get_message_read_by(chat_id, message_id)**: List users who have read a message (small groups/supergroups with read receipts enabled)
 
 ### Messaging
 - **get_messages(chat_id, page, page_size)**: Paginated messages
@@ -93,6 +95,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **send_scheduled_message(chat_id, message, schedule_date)**: Schedule a message for future delivery (ISO-8601 or Unix timestamp)
 - **get_scheduled_messages(chat_id)**: List all pending scheduled messages in a chat
 - **delete_scheduled_message(chat_id, message_ids)**: Delete one or more scheduled messages
+- **get_message_link(chat_id, message_id, thread=False)**: Export a t.me/... link to a message (channels/supergroups only)
 
 ### Contact Management
 - **list_contacts()**: List all contacts
