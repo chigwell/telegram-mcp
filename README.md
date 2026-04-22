@@ -60,6 +60,8 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **import_chat_invite(hash)**: Join chat by invite hash
 - **join_chat_by_link(link)**: Join chat by invite link
 - **subscribe_public_channel(channel)**: Subscribe to a public channel or supergroup by username or ID
+- **get_common_chats(user_id, limit=100, max_id=0)**: List chats shared with a specific user
+- **get_message_read_by(chat_id, message_id)**: List users who have read a message (small groups/supergroups with read receipts enabled)
 
 ### Messaging
 - **get_messages(chat_id, page, page_size)**: Paginated messages
@@ -83,6 +85,7 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 -  **send_reaction(chat_id, message_id, emoji, big=False)**: Add a reaction to a message
 -  **remove_reaction(chat_id, message_id)**: Remove a reaction from a message
 -  **get_message_reactions(chat_id, message_id, limit=50)**: Get all reactions on a message
+- **get_message_link(chat_id, message_id, thread=False)**: Export a t.me/... link to a message (channels/supergroups only)
 
 ### Contact Management
 - **list_contacts()**: List all contacts
