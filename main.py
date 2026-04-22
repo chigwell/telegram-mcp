@@ -3064,6 +3064,198 @@ async def unban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
         return log_and_format_error("unban_user", e, chat_id=chat_id, user_id=user_id)
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Set Default Chat Permissions",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@validate_id("chat_id")
+async def set_default_chat_permissions(
+    chat_id: Union[int, str],
+    send_messages: bool = True,
+    send_media: bool = True,
+    send_stickers: bool = True,
+    send_gifs: bool = True,
+    send_games: bool = True,
+    send_inline: bool = True,
+    embed_links: bool = True,
+    send_polls: bool = True,
+    change_info: bool = False,
+    invite_users: bool = True,
+    pin_messages: bool = False,
+    until_date: int = 0,
+) -> str:
+    """
+    Set default member permissions for a group, supergroup, or channel.
+
+    Pass True to allow, False to restrict. (Internally inverted to match
+    Telegram's ChatBannedRights semantics where True means "banned".)
+
+    Args:
+        chat_id: ID or username of the chat.
+        send_messages: allow sending text messages
+        send_media: allow sending media (photos, videos, docs, audio)
+        send_stickers: allow sending stickers
+        send_gifs: allow sending GIFs
+        send_games: allow sending games
+        send_inline: allow using inline bots
+        embed_links: allow link previews
+        send_polls: allow sending polls
+        change_info: allow members to change group info (title, photo, description)
+        invite_users: allow members to invite others
+        pin_messages: allow members to pin messages
+        until_date: restriction expiry as Unix timestamp, 0 = permanent (default)
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+        banned_rights = ChatBannedRights(
+            until_date=until_date if until_date else None,
+            send_messages=not send_messages,
+            send_media=not send_media,
+            send_stickers=not send_stickers,
+            send_gifs=not send_gifs,
+            send_games=not send_games,
+            send_inline=not send_inline,
+            embed_links=not embed_links,
+            send_polls=not send_polls,
+            change_info=not change_info,
+            invite_users=not invite_users,
+            pin_messages=not pin_messages,
+        )
+        await client(
+            functions.messages.EditChatDefaultBannedRightsRequest(
+                peer=entity, banned_rights=banned_rights
+            )
+        )
+        return f"Default permissions for chat {chat_id} updated."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: admin rights required to change default permissions."
+    except telethon.errors.rpcerrorlist.ChatNotModifiedError:
+        return f"Chat {chat_id} default permissions unchanged (already matched)."
+    except Exception as e:
+        logger.exception(f"set_default_chat_permissions failed (chat_id={chat_id})")
+        return log_and_format_error("set_default_chat_permissions", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Toggle Slow Mode",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@validate_id("chat_id")
+async def toggle_slow_mode(chat_id: Union[int, str], seconds: int = 0) -> str:
+    """
+    Enable or disable slow mode for a supergroup.
+
+    Only works on supergroups (not basic groups or regular channels). Telegram
+    accepts seconds in {0, 10, 30, 60, 300, 900, 3600}. 0 disables slow mode.
+
+    Args:
+        chat_id: ID or username of the supergroup.
+        seconds: interval between messages per user. 0 = disabled (default).
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+        if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
+            return "Error: slow mode is only supported for supergroups."
+        await client(functions.channels.ToggleSlowModeRequest(channel=entity, seconds=seconds))
+        if seconds == 0:
+            return f"Slow mode disabled for chat {chat_id}."
+        return f"Slow mode enabled for chat {chat_id} (interval: {seconds}s)."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: admin rights required to toggle slow mode."
+    except Exception as e:
+        logger.exception(f"toggle_slow_mode failed (chat_id={chat_id}, seconds={seconds})")
+        return log_and_format_error("toggle_slow_mode", e, chat_id=chat_id, seconds=seconds)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Edit Admin Rights",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@validate_id("chat_id", "user_id")
+async def edit_admin_rights(
+    chat_id: Union[int, str],
+    user_id: Union[int, str],
+    rank: str = "",
+    change_info: bool = False,
+    post_messages: bool = False,
+    edit_messages: bool = False,
+    delete_messages: bool = False,
+    ban_users: bool = False,
+    invite_users: bool = False,
+    pin_messages: bool = False,
+    add_admins: bool = False,
+    anonymous: bool = False,
+    manage_call: bool = False,
+    other: bool = False,
+) -> str:
+    """
+    Set granular admin rights for a user in a supergroup or channel.
+
+    Extends `promote_admin` (which uses a default set) by letting each right
+    be specified individually. Pass True to grant, False to revoke. Passing
+    all False revokes admin status (equivalent to `demote_admin`).
+
+    Args:
+        chat_id: ID or username of the supergroup/channel.
+        user_id: User ID or username.
+        rank: Custom admin title (max 16 chars). Empty = no custom title.
+        change_info: can change chat info (title, photo, description)
+        post_messages: can post in channel (channel-only)
+        edit_messages: can edit other users' messages
+        delete_messages: can delete messages
+        ban_users: can restrict/ban members
+        invite_users: can invite new members
+        pin_messages: can pin messages
+        add_admins: can add new admins with their own rights
+        anonymous: admin actions appear anonymous
+        manage_call: can manage voice/video chats
+        other: reserved for future rights
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+        user = await resolve_entity(user_id)
+        admin_rights = ChatAdminRights(
+            change_info=change_info,
+            post_messages=post_messages,
+            edit_messages=edit_messages,
+            delete_messages=delete_messages,
+            ban_users=ban_users,
+            invite_users=invite_users,
+            pin_messages=pin_messages,
+            add_admins=add_admins,
+            anonymous=anonymous,
+            manage_call=manage_call,
+            other=other,
+        )
+        await client(
+            functions.channels.EditAdminRequest(
+                channel=entity, user_id=user, admin_rights=admin_rights, rank=rank
+            )
+        )
+        return f"Admin rights updated for user {user_id} in chat {chat_id}."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: you need admin rights (with 'add_admins') to modify admin rights."
+    except telethon.errors.rpcerrorlist.UserAdminInvalidError:
+        return "Error: cannot modify admin rights for this user (you may need to have promoted them originally)."
+    except telethon.errors.rpcerrorlist.RightForbiddenError:
+        return "Error: some of the requested rights are not allowed for your account or for this chat."
+    except Exception as e:
+        logger.exception(f"edit_admin_rights failed (chat_id={chat_id}, user_id={user_id})")
+        return log_and_format_error("edit_admin_rights", e, chat_id=chat_id, user_id=user_id)
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Get Admins", openWorldHint=True, readOnlyHint=True))
 @validate_id("chat_id")
 async def get_admins(chat_id: Union[int, str]) -> str:
