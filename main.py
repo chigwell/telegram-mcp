@@ -2649,6 +2649,38 @@ async def edit_chat_photo(
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        title="Edit Chat About",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@validate_id("chat_id")
+async def edit_chat_about(chat_id: Union[int, str], about: str) -> str:
+    """
+    Edit the description ("About") of a chat, group, or channel.
+
+    Args:
+        chat_id: The ID or username of the chat.
+        about: New description text. Telegram limits About to 255 characters.
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+        await client(functions.messages.EditChatAboutRequest(peer=entity, about=about))
+        return f"Chat {chat_id} description updated."
+    except telethon.errors.rpcerrorlist.ChatAboutNotModifiedError:
+        return f"Chat {chat_id} description is already set to the requested value."
+    except telethon.errors.rpcerrorlist.ChatAboutTooLongError:
+        return "Error: description exceeds Telegram's 255 character limit."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: admin rights required to edit the chat description."
+    except Exception as e:
+        logger.exception(f"edit_chat_about failed (chat_id={chat_id})")
+        return log_and_format_error("edit_chat_about", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         title="Delete Chat Photo", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
