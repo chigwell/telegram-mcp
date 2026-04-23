@@ -153,6 +153,14 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **get_drafts()**: Get all draft messages across all chats
 - **clear_draft(chat_id)**: Clear/delete a draft from a specific chat
 
+### Multi-Account
+- **list_accounts()**: List all configured accounts with profile info
+
+All tools accept an optional `account` parameter to target a specific account. In multi-account mode:
+- **Read-only tools** (e.g., `get_chats`, `list_messages`) query all accounts when `account` is omitted, returning results prefixed with `[label]`.
+- **Write tools** (e.g., `send_message`, `mark_as_read`) require an explicit `account` value.
+- **Single-account setups** work exactly as before — the `account` parameter is optional everywhere.
+
 ### Input Validation
 
 To improve robustness, all functions accepting `chat_id` or `user_id` parameters now include input validation. You can use any of the following formats for these IDs:
@@ -216,18 +224,29 @@ uv sync
 ```bash
 uv run session_string_generator.py
 ```
-Follow the prompts to authenticate and update your `.env` file.
+Follow the prompts to authenticate. You'll be asked for an optional account label (e.g., `work`, `personal`) — leave empty for a single-account setup.
 
 ### 4. Configure .env
 
-Copy `.env.example` to `.env` and fill in your values:
+Copy `.env.example` to `.env` and fill in your values.
 
+**Single account:**
 ```
 TELEGRAM_API_ID=your_api_id_here
 TELEGRAM_API_HASH=your_api_hash_here
-TELEGRAM_SESSION_NAME=anon
 TELEGRAM_SESSION_STRING=your_session_string_here
 ```
+
+**Multiple accounts:**
+```
+TELEGRAM_API_ID=your_api_id_here
+TELEGRAM_API_HASH=your_api_hash_here
+TELEGRAM_SESSION_STRING_WORK=session_string_for_work_account
+TELEGRAM_SESSION_STRING_PERSONAL=session_string_for_personal_account
+```
+
+Add `_<LABEL>` suffix to `TELEGRAM_SESSION_STRING` for each account. Labels become account identifiers used in tool calls. A shared `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are used for all accounts.
+
 Get your API credentials at [my.telegram.org/apps](https://my.telegram.org/apps).
 
 ---
@@ -272,6 +291,7 @@ docker run -it --rm \
   telegram-mcp:latest
 ```
 *   Replace placeholders with your actual credentials.
+*   For multiple accounts, use `-e TELEGRAM_SESSION_STRING_WORK="..."` `-e TELEGRAM_SESSION_STRING_PERSONAL="..."` instead.
 *   Use `-e TELEGRAM_SESSION_NAME=your_session_file_name` instead of `TELEGRAM_SESSION_STRING` if you prefer file-based sessions (requires volume mounting, see `docker-compose.yml` for an example).
 *   The `-it` flags are crucial for interacting with the server.
 
@@ -306,37 +326,29 @@ Below are examples of the most commonly used tools with their implementation and
 
 ```python
 @mcp.tool()
-async def get_chats(page: int = 1, page_size: int = 20) -> str:
+@with_account(readonly=True)
+async def get_chats(account: str = None, page: int = 1, page_size: int = 20) -> str:
     """
     Get a paginated list of chats.
     Args:
+        account: Account label (optional in single-account mode).
         page: Page number (1-indexed).
         page_size: Number of chats per page.
     """
     try:
-        dialogs = await client.get_dialogs()
-        start = (page - 1) * page_size
-        end = start + page_size
-        if start >= len(dialogs):
-            return "Page out of range."
-        chats = dialogs[start:end]
-        lines = []
-        for dialog in chats:
-            entity = dialog.entity
-            chat_id = entity.id
-            title = getattr(entity, "title", None) or getattr(entity, "first_name", "Unknown")
-            lines.append(f"Chat ID: {chat_id}, Title: {title}")
-        return "\n".join(lines)
-    except Exception as e:
-        logger.exception(f"get_chats failed (page={page}, page_size={page_size})")
-        return "An error occurred (code: GETCHATS-ERR-001). Check mcp_errors.log for details."
+        cl = get_client(account)
+        dialogs = await cl.get_dialogs()
+        ...
 ```
 
-Example output:
+Example output (multi-account, no `account` specified):
 ```
-Chat ID: 123456789, Title: John Doe
+[work]
 Chat ID: -100987654321, Title: My Project Group
 Chat ID: 111223344, Title: Jane Smith
+
+[personal]
+Chat ID: 123456789, Title: John Doe
 Chat ID: -200123456789, Title: News Channel
 ```
 
@@ -344,20 +356,21 @@ Chat ID: -200123456789, Title: News Channel
 
 ```python
 @mcp.tool()
-async def send_message(chat_id: int, message: str) -> str:
+@with_account(readonly=False)
+async def send_message(chat_id: Union[int, str], message: str, account: str = None) -> str:
     """
     Send a message to a specific chat.
     Args:
         chat_id: The ID of the chat.
         message: The message content to send.
+        account: Account label (required in multi-account mode).
     """
     try:
-        entity = await client.get_entity(chat_id)
-        await client.send_message(entity, message)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        await cl.send_message(entity, message)
         return "Message sent successfully."
-    except Exception as e:
-        logger.exception(f"send_message failed (chat_id={chat_id})")
-        return "An error occurred (code: SENDMSG-ERR-001). Check mcp_errors.log for details."
+    ...
 ```
 
 Example output:
@@ -369,10 +382,12 @@ Message sent successfully.
 
 ```python
 @mcp.tool()
+@with_account(readonly=True)
 async def list_inline_buttons(
     chat_id: Union[int, str],
     message_id: Optional[int] = None,
     limit: int = 20,
+    account: str = None,
 ) -> str:
     """
     Discover inline keyboard layout, including button indices, callback availability, and URLs.
@@ -396,11 +411,13 @@ Buttons for message 42 (date 2025-01-01 12:00:00+00:00):
 
 ```python
 @mcp.tool()
+@with_account(readonly=False)
 async def press_inline_button(
     chat_id: Union[int, str],
     message_id: Optional[int] = None,
     button_text: Optional[str] = None,
     button_index: Optional[int] = None,
+    account: str = None,
 ) -> str:
     """
     Press an inline keyboard button by label or zero-based index.
@@ -421,7 +438,8 @@ to quickly list options or call `list_inline_buttons` directly. Once you know th
 
 ```python
 @mcp.tool()
-async def subscribe_public_channel(channel: Union[int, str]) -> str:
+@with_account(readonly=False)
+async def subscribe_public_channel(channel: Union[int, str], account: str = None) -> str:
     """
     Join a public channel or supergroup by username (e.g., "@examplechannel") or ID.
     """
@@ -441,49 +459,17 @@ The `get_invite_link` function is particularly robust with multiple fallback met
 
 ```python
 @mcp.tool()
-async def get_invite_link(chat_id: int) -> str:
+@with_account(readonly=True)
+async def get_invite_link(chat_id: int, account: str = None) -> str:
     """
     Get the invite link for a group or channel.
     """
     try:
-        entity = await client.get_entity(chat_id)
-        
-        # Try using ExportChatInviteRequest first
-        try:
-            from telethon.tl import functions
-            result = await client(functions.messages.ExportChatInviteRequest(
-                peer=entity
-            ))
-            return result.link
-        except AttributeError:
-            # If the function doesn't exist in the current Telethon version
-            logger.warning("ExportChatInviteRequest not available, using alternative method")
-        except Exception as e1:
-            # If that fails, log and try alternative approach
-            logger.warning(f"ExportChatInviteRequest failed: {e1}")
-            
-        # Alternative approach using client.export_chat_invite_link
-        try:
-            invite_link = await client.export_chat_invite_link(entity)
-            return invite_link
-        except Exception as e2:
-            logger.warning(f"export_chat_invite_link failed: {e2}")
-            
-        # Last resort: Try directly fetching chat info
-        try:
-            if isinstance(entity, (Chat, Channel)):
-                full_chat = await client(functions.messages.GetFullChatRequest(
-                    chat_id=entity.id
-                ))
-                if hasattr(full_chat, 'full_chat') and hasattr(full_chat.full_chat, 'invite_link'):
-                    return full_chat.full_chat.invite_link or "No invite link available."
-        except Exception as e3:
-            logger.warning(f"GetFullChatRequest failed: {e3}")
-            
-        return "Could not retrieve invite link for this chat."
-    except Exception as e:
-        logger.exception(f"get_invite_link failed (chat_id={chat_id})")
-        return f"Error getting invite link: {e}"
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        # Tries ExportChatInviteRequest, then export_chat_invite_link,
+        # then GetFullChatRequest as fallbacks
+        ...
 ```
 
 Example output:
@@ -495,47 +481,15 @@ https://t.me/+AbCdEfGhIjKlMnOp
 
 ```python
 @mcp.tool()
-async def join_chat_by_link(link: str) -> str:
+@with_account(readonly=False)
+async def join_chat_by_link(link: str, account: str = None) -> str:
     """
     Join a chat by invite link.
     """
     try:
-        # Extract the hash from the invite link
-        if '/' in link:
-            hash_part = link.split('/')[-1]
-            if hash_part.startswith('+'):
-                hash_part = hash_part[1:]  # Remove the '+' if present
-        else:
-            hash_part = link
-            
-        # Try checking the invite before joining
-        try:
-            # Try to check invite info first (will often fail if not a member)
-            invite_info = await client(functions.messages.CheckChatInviteRequest(hash=hash_part))
-            if hasattr(invite_info, 'chat') and invite_info.chat:
-                # If we got chat info, we're already a member
-                chat_title = getattr(invite_info.chat, 'title', 'Unknown Chat')
-                return f"You are already a member of this chat: {chat_title}"
-        except Exception:
-            # This often fails if not a member - just continue
-            pass
-            
-        # Join the chat using the hash
-        result = await client(functions.messages.ImportChatInviteRequest(hash=hash_part))
-        if result and hasattr(result, 'chats') and result.chats:
-            chat_title = getattr(result.chats[0], 'title', 'Unknown Chat')
-            return f"Successfully joined chat: {chat_title}"
-        return f"Joined chat via invite hash."
-    except Exception as e:
-        err_str = str(e).lower()
-        if "expired" in err_str:
-            return "The invite hash has expired and is no longer valid."
-        elif "invalid" in err_str:
-            return "The invite hash is invalid or malformed."
-        elif "already" in err_str and "participant" in err_str:
-            return "You are already a member of this chat."
-        logger.exception(f"join_chat_by_link failed (link={link})")
-        return f"Error joining chat: {e}"
+        cl = get_client(account)
+        # Extracts hash, checks membership, and joins via ImportChatInviteRequest
+        ...
 ```
 
 Example output:
@@ -547,16 +501,17 @@ Successfully joined chat: Developer Community
 
 ```python
 @mcp.tool()
-async def search_public_chats(query: str, limit: int = 20) -> str:
+@with_account(readonly=True)
+async def search_public_chats(query: str, limit: int = 20, account: str = None) -> str:
     """
     Search for public chats, channels, or bots by username or title.
     """
     try:
-        result = await client(functions.contacts.SearchRequest(q=query, limit=limit))
+        cl = get_client(account)
+        result = await cl(functions.contacts.SearchRequest(q=query, limit=limit))
         entities = [format_entity(e) for e in result.chats + result.users]
         return json.dumps(entities, indent=2)
-    except Exception as e:
-        return f"Error searching public chats: {e}"
+    ...
 ```
 
 Example output:
@@ -581,51 +536,19 @@ Example output:
 
 ```python
 @mcp.tool()
-async def get_direct_chat_by_contact(contact_query: str) -> str:
+@with_account(readonly=True)
+async def get_direct_chat_by_contact(contact_query: str, account: str = None) -> str:
     """
     Find a direct chat with a specific contact by name, username, or phone.
-    
+
     Args:
         contact_query: Name, username, or phone number to search for.
     """
     try:
-        # Fetch all contacts using the correct Telethon method
-        result = await client(functions.contacts.GetContactsRequest(hash=0))
-        contacts = result.users
-        found_contacts = []
-        for contact in contacts:
-            if not contact:
-                continue
-            name = f"{getattr(contact, 'first_name', '')} {getattr(contact, 'last_name', '')}".strip()
-            username = getattr(contact, 'username', '')
-            phone = getattr(contact, 'phone', '')
-            if (contact_query.lower() in name.lower() or 
-                (username and contact_query.lower() in username.lower()) or 
-                (phone and contact_query in phone)):
-                found_contacts.append(contact)
-        if not found_contacts:
-            return f"No contacts found matching '{contact_query}'."
-        # If we found contacts, look for direct chats with them
-        results = []
-        dialogs = await client.get_dialogs()
-        for contact in found_contacts:
-            contact_name = f"{getattr(contact, 'first_name', '')} {getattr(contact, 'last_name', '')}".strip()
-            for dialog in dialogs:
-                if isinstance(dialog.entity, User) and dialog.entity.id == contact.id:
-                    chat_info = f"Chat ID: {dialog.entity.id}, Contact: {contact_name}"
-                    if getattr(contact, 'username', ''):
-                        chat_info += f", Username: @{contact.username}"
-                    if dialog.unread_count:
-                        chat_info += f", Unread: {dialog.unread_count}"
-                    results.append(chat_info)
-                    break
-        
-        if not results:
-            return f"Found contacts matching '{contact_query}', but no direct chats with them."
-        
-        return "\n".join(results)
-    except Exception as e:
-        return f"Error searching for direct chat: {e}"
+        cl = get_client(account)
+        result = await cl(functions.contacts.GetContactsRequest(hash=0))
+        # Searches contacts, then matches against dialogs
+        ...
 ```
 
 Example output:
@@ -649,6 +572,11 @@ Chat ID: 123456789, Contact: John Smith, Username: @johnsmith, Unread: 3
 - "Send a sticker to my Saved Messages"
 - "Get all my sticker sets"
 
+**Multi-account examples:**
+- "Show unread messages from all accounts"
+- "Reply to John from my work account: see you at 3pm"
+- "List my accounts"
+
 You can use these tools via natural language in Claude, Cursor, or any MCP-compatible client.
 
 ---
@@ -657,6 +585,7 @@ You can use these tools via natural language in Claude, Cursor, or any MCP-compa
 
 This implementation includes comprehensive error handling:
 
+- **Multi-account support**: Run multiple Telegram accounts simultaneously with label-based configuration
 - **Session management**: Works with both file-based and string-based sessions
 - **Error reporting**: Detailed errors logged to `mcp_errors.log`
 - **Graceful degradation**: Multiple fallback approaches for critical functions

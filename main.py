@@ -91,69 +91,176 @@ load_dotenv()
 
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID"))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
-TELEGRAM_SESSION_NAME = os.getenv("TELEGRAM_SESSION_NAME")
-
-# Check if a string session exists in environment, otherwise use file-based session
-SESSION_STRING = os.getenv("TELEGRAM_SESSION_STRING")
 
 mcp = FastMCP("telegram")
 
-if SESSION_STRING:
-    # Use the string session if available
-    client = TelegramClient(StringSession(SESSION_STRING), TELEGRAM_API_ID, TELEGRAM_API_HASH)
-else:
-    # Use file-based session
-    client = TelegramClient(TELEGRAM_SESSION_NAME, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+
+# ---------------------------------------------------------------------------
+# Multi-account configuration
+# ---------------------------------------------------------------------------
 
 
-_last_conn_verified: float = 0.0
+def _discover_accounts() -> dict[str, TelegramClient]:
+    """Scan env vars to build account label -> TelegramClient mapping.
+
+    Detection rules:
+    - TELEGRAM_SESSION_STRING_<LABEL> / TELEGRAM_SESSION_NAME_<LABEL> -> multi-mode
+    - Unsuffixed TELEGRAM_SESSION_STRING / TELEGRAM_SESSION_NAME -> label "default"
+    - If both suffixed and unsuffixed exist -> unsuffixed becomes "default"
+    """
+    accounts: dict[str, TelegramClient] = {}
+
+    prefix_str = "TELEGRAM_SESSION_STRING_"
+    prefix_name = "TELEGRAM_SESSION_NAME_"
+
+    for key, value in os.environ.items():
+        if key.startswith(prefix_str) and value:
+            label = key[len(prefix_str) :].lower()
+            accounts[label] = TelegramClient(
+                StringSession(value), TELEGRAM_API_ID, TELEGRAM_API_HASH
+            )
+        elif key.startswith(prefix_name) and value:
+            label = key[len(prefix_name) :].lower()
+            accounts[label] = TelegramClient(value, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+
+    # Backward-compatible unsuffixed variables
+    session_string = os.getenv("TELEGRAM_SESSION_STRING")
+    session_name = os.getenv("TELEGRAM_SESSION_NAME")
+
+    if session_string and "default" not in accounts:
+        accounts["default"] = TelegramClient(
+            StringSession(session_string), TELEGRAM_API_ID, TELEGRAM_API_HASH
+        )
+    elif session_name and "default" not in accounts:
+        accounts["default"] = TelegramClient(session_name, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+
+    if not accounts:
+        print(
+            "Error: No Telegram session configured. "
+            "Set TELEGRAM_SESSION_STRING or TELEGRAM_SESSION_STRING_<LABEL> in .env",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    return accounts
+
+
+clients: dict[str, TelegramClient] = _discover_accounts()
+
+
+def get_client(account: str = None) -> TelegramClient:
+    """Resolve account label to TelegramClient."""
+    if account is None:
+        if len(clients) == 1:
+            return next(iter(clients.values()))
+        raise ValueError(f"Account is required. Available accounts: {', '.join(clients.keys())}")
+    label = account.lower()
+    if label not in clients:
+        raise ValueError(
+            f"Unknown account '{account}'. Available accounts: {', '.join(clients.keys())}"
+        )
+    return clients[label]
+
+
+def is_multi_mode() -> bool:
+    """Return True when more than one account is configured."""
+    return len(clients) > 1
+
+
+def with_account(readonly=False):
+    """Decorator that adds multi-account support to MCP tools.
+
+    - In single-mode: always uses the sole client, no output tagging.
+    - In multi-mode with explicit account: uses that account's client.
+    - In multi-mode without account + readonly: fans out to all accounts
+      concurrently, prefixes each result with [label], concatenates.
+    - In multi-mode without account + NOT readonly: returns an error.
+
+    The wrapped function must accept ``account: str = None`` and use
+    ``get_client(account)`` internally to obtain the TelegramClient.
+    """
+
+    def decorator(fn):
+        @wraps(fn)
+        async def wrapper(*args, **kwargs):
+            account = kwargs.get("account")
+
+            # Explicit account OR single-mode -> call once
+            if account is not None or not is_multi_mode():
+                return await fn(*args, **kwargs)
+
+            # account is None AND multi-mode
+            if not readonly:
+                labels = ", ".join(clients.keys())
+                return f"Error: 'account' is required. Available accounts: {labels}"
+
+            # Read-only fan-out to all accounts concurrently
+            async def _call_for(label):
+                kw = dict(kwargs)
+                kw["account"] = label
+                return label, await fn(*args, **kw)
+
+            results = await asyncio.gather(*(_call_for(label) for label in clients))
+            return "\n\n".join(f"[{label}]\n{result}" for label, result in results)
+
+        return wrapper
+
+    return decorator
+
+
+_last_conn_verified: dict[int, float] = {}
 _CONN_VERIFY_INTERVAL: float = 30.0  # seconds between live pings
 
 
-async def _force_reconnect():
+async def _force_reconnect(cl: TelegramClient):
     """Force disconnect + reconnect regardless of is_connected() state."""
-    global _last_conn_verified
     reconnect_logger = logging.getLogger("telegram_mcp")
     reconnect_logger.warning("Forcing reconnect...")
     try:
-        await client.disconnect()
+        await cl.disconnect()
     except Exception:
         pass
-    await client.connect()
-    if not await client.is_user_authorized():
+    await cl.connect()
+    if not await cl.is_user_authorized():
         reconnect_logger.warning("Client not authorized after reconnect, calling start()...")
-        await client.start()
-    _last_conn_verified = time.time()
+        await cl.start()
+    _last_conn_verified[id(cl)] = time.time()
     reconnect_logger.warning("Forced reconnect successful")
 
 
-async def ensure_connected():
+async def ensure_connected(cl: TelegramClient = None):
     """Verify Telegram connection is alive, reconnect if needed.
 
     is_connected() can return True when the underlying TCP socket is dead.
     We periodically send a lightweight request to verify the connection
     actually works, and force-reconnect on any failure.
-    """
-    global _last_conn_verified
 
-    if not client.is_connected():
-        await _force_reconnect()
+    Accepts an explicit client; falls back to the default single-account
+    client when called without one.
+    """
+    if cl is None:
+        cl = get_client()
+
+    key = id(cl)
+
+    if not cl.is_connected():
+        await _force_reconnect(cl)
         return
 
     # Skip verification if recently confirmed alive
     now = time.time()
-    if now - _last_conn_verified < _CONN_VERIFY_INTERVAL:
+    if now - _last_conn_verified.get(key, 0.0) < _CONN_VERIFY_INTERVAL:
         return
 
     # Verify with a lightweight Telegram API call
     try:
         await asyncio.wait_for(
-            client(functions.help.GetNearestDcRequest()),
+            cl(functions.help.GetNearestDcRequest()),
             timeout=5.0,
         )
-        _last_conn_verified = now
+        _last_conn_verified[key] = now
     except (ConnectionError, OSError, asyncio.TimeoutError, Exception):
-        await _force_reconnect()
+        await _force_reconnect(cl)
 
 
 # Setup robust logging with both file and console output
@@ -392,7 +499,7 @@ def format_entity(entity) -> Dict[str, Any]:
     return result
 
 
-async def resolve_entity(identifier: Union[int, str]) -> Any:
+async def resolve_entity(identifier: Union[int, str], client=None) -> Any:
     """Resolve entity with automatic cache warming and auto-reconnect.
 
     StringSession has no persistent entity cache. If get_entity() fails
@@ -401,7 +508,9 @@ async def resolve_entity(identifier: Union[int, str]) -> Any:
 
     On ConnectionError, reconnects and retries once.
     """
-    await ensure_connected()
+    if client is None:
+        client = get_client()
+    await ensure_connected(client)
     try:
         try:
             return await client.get_entity(identifier)
@@ -409,7 +518,7 @@ async def resolve_entity(identifier: Union[int, str]) -> Any:
             await client.get_dialogs()
             return await client.get_entity(identifier)
     except ConnectionError:
-        await ensure_connected()
+        await ensure_connected(client)
         try:
             return await client.get_entity(identifier)
         except ValueError:
@@ -417,12 +526,14 @@ async def resolve_entity(identifier: Union[int, str]) -> Any:
             return await client.get_entity(identifier)
 
 
-async def resolve_input_entity(identifier: Union[int, str]) -> Any:
+async def resolve_input_entity(identifier: Union[int, str], client=None) -> Any:
     """Like resolve_entity() but returns an InputPeer.
 
     On ConnectionError, reconnects and retries once.
     """
-    await ensure_connected()
+    if client is None:
+        client = get_client()
+    await ensure_connected(client)
     try:
         try:
             return await client.get_input_entity(identifier)
@@ -430,7 +541,7 @@ async def resolve_input_entity(identifier: Union[int, str]) -> Any:
             await client.get_dialogs()
             return await client.get_input_entity(identifier)
     except ConnectionError:
-        await ensure_connected()
+        await ensure_connected(client)
         try:
             return await client.get_input_entity(identifier)
         except ValueError:
@@ -759,8 +870,29 @@ def _configure_allowed_roots_from_cli(argv: Optional[List[str]] = None) -> None:
     SERVER_ALLOWED_ROOTS = _dedupe_paths(resolved_roots)
 
 
+@mcp.tool(annotations=ToolAnnotations(title="List Accounts", readOnlyHint=True))
+async def list_accounts() -> str:
+    """List all configured Telegram accounts with profile info."""
+    lines = []
+    for label, cl in clients.items():
+        try:
+            me = await cl.get_me()
+            name = f"{me.first_name or ''} {me.last_name or ''}".strip() or "Unknown"
+            phone = me.phone or "N/A"
+            status = getattr(me, "status", None)
+            if status:
+                status_str = type(status).__name__.replace("UserStatus", "").lower()
+            else:
+                status_str = "unknown"
+            lines.append(f"{label}: {name} (+{phone}) — {status_str}")
+        except Exception:
+            lines.append(f"{label}: (unable to fetch profile)")
+    return "\n".join(lines)
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Get Chats", openWorldHint=True, readOnlyHint=True))
-async def get_chats(page: int = 1, page_size: int = 20) -> str:
+@with_account(readonly=True)
+async def get_chats(account: str = None, page: int = 1, page_size: int = 20) -> str:
     """
     Get a paginated list of chats.
     Args:
@@ -768,8 +900,9 @@ async def get_chats(page: int = 1, page_size: int = 20) -> str:
         page_size: Number of chats per page.
     """
     try:
-        await ensure_connected()
-        dialogs = await client.get_dialogs()
+        cl = get_client(account)
+        await ensure_connected(cl)
+        dialogs = await cl.get_dialogs()
         start = (page - 1) * page_size
         end = start + page_size
         if start >= len(dialogs):
@@ -787,8 +920,11 @@ async def get_chats(page: int = 1, page_size: int = 20) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Messages", openWorldHint=True, readOnlyHint=True))
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int = 20) -> str:
+async def get_messages(
+    chat_id: Union[int, str], page: int = 1, page_size: int = 20, account: str = None
+) -> str:
     """
     Get paginated messages from a specific chat.
     Args:
@@ -797,9 +933,10 @@ async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int =
         page_size: Number of messages per page.
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
         offset = (page - 1) * page_size
-        messages = await client.get_messages(entity, limit=page_size, add_offset=offset)
+        messages = await cl.get_messages(entity, limit=page_size, add_offset=offset)
         if not messages:
             return "No messages found for this page."
         lines = []
@@ -825,9 +962,13 @@ async def get_messages(chat_id: Union[int, str], page: int = 1, page_size: int =
 @mcp.tool(
     annotations=ToolAnnotations(title="Send Message", openWorldHint=True, destructiveHint=True)
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def send_message(
-    chat_id: Union[int, str], message: str, parse_mode: Optional[str] = None
+    chat_id: Union[int, str],
+    message: str,
+    parse_mode: Optional[str] = None,
+    account: str = None,
 ) -> str:
     """
     Send a message to a specific chat.
@@ -839,8 +980,9 @@ async def send_message(
             ```pre```), or omit for plain text (no formatting).
     """
     try:
-        entity = await resolve_entity(chat_id)
-        await client.send_message(entity, message, parse_mode=parse_mode)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        await cl.send_message(entity, message, parse_mode=parse_mode)
         return "Message sent successfully."
     except Exception as e:
         return log_and_format_error("send_message", e, chat_id=chat_id)
@@ -854,9 +996,13 @@ async def send_message(
         idempotentHint=False,
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def send_scheduled_message(
-    chat_id: Union[int, str], message: str, schedule_date: Union[str, int]
+    chat_id: Union[int, str],
+    message: str,
+    schedule_date: Union[str, int],
+    account: str = None,
 ) -> str:
     """
     Schedule a message to be sent at a future time.
@@ -868,6 +1014,8 @@ async def send_scheduled_message(
             timestamp (int). Naive datetimes are treated as UTC.
     """
     try:
+        cl = get_client(account)
+        await ensure_connected(cl)
         if isinstance(schedule_date, int):
             dt = datetime.fromtimestamp(schedule_date, tz=timezone.utc)
         else:
@@ -881,8 +1029,8 @@ async def send_scheduled_message(
                 f"now {datetime.now(timezone.utc).isoformat()})."
             )
 
-        entity = await resolve_entity(chat_id)
-        result = await client.send_message(entity, message, schedule=dt)
+        entity = await resolve_entity(chat_id, cl)
+        result = await cl.send_message(entity, message, schedule=dt)
         message_id = getattr(result, "id", None)
         return f"Scheduled message {message_id} for {dt.isoformat()} in chat {chat_id}."
     except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
@@ -911,16 +1059,19 @@ async def send_scheduled_message(
         title="Get Scheduled Messages", openWorldHint=True, readOnlyHint=True
     )
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_scheduled_messages(chat_id: Union[int, str]) -> str:
+async def get_scheduled_messages(chat_id: Union[int, str], account: str = None) -> str:
     """
     List all scheduled (pending) messages in a chat.
     Args:
         chat_id: The ID or username of the chat.
     """
     try:
-        entity = await resolve_entity(chat_id)
-        result = await client(functions.messages.GetScheduledHistoryRequest(peer=entity, hash=0))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        result = await cl(functions.messages.GetScheduledHistoryRequest(peer=entity, hash=0))
         messages = getattr(result, "messages", []) or []
         if not messages:
             return f"No scheduled messages in chat {chat_id}."
@@ -943,8 +1094,11 @@ async def get_scheduled_messages(chat_id: Union[int, str]) -> str:
         title="Delete Scheduled Message", openWorldHint=True, destructiveHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def delete_scheduled_message(chat_id: Union[int, str], message_ids: List[int]) -> str:
+async def delete_scheduled_message(
+    chat_id: Union[int, str], message_ids: List[int], account: str = None
+) -> str:
     """
     Delete one or more scheduled (pending) messages from a chat.
     Args:
@@ -952,12 +1106,12 @@ async def delete_scheduled_message(chat_id: Union[int, str], message_ids: List[i
         message_ids: List of scheduled message IDs to delete.
     """
     try:
+        cl = get_client(account)
+        await ensure_connected(cl)
         if not message_ids:
             return "message_ids must be a non-empty list."
-        entity = await resolve_entity(chat_id)
-        await client(
-            functions.messages.DeleteScheduledMessagesRequest(peer=entity, id=message_ids)
-        )
+        entity = await resolve_entity(chat_id, cl)
+        await cl(functions.messages.DeleteScheduledMessagesRequest(peer=entity, id=message_ids))
         return f"Deleted {len(message_ids)} scheduled message(s) from chat {chat_id}."
     except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
         return log_and_format_error(
@@ -980,14 +1134,16 @@ async def delete_scheduled_message(chat_id: Union[int, str], message_ids: List[i
         idempotentHint=True,
     )
 )
+@with_account(readonly=False)
 @validate_id("channel")
-async def subscribe_public_channel(channel: Union[int, str]) -> str:
+async def subscribe_public_channel(channel: Union[int, str], account: str = None) -> str:
     """
     Subscribe (join) to a public channel or supergroup by username or ID.
     """
     try:
-        entity = await resolve_entity(channel)
-        await client(functions.channels.JoinChannelRequest(channel=entity))
+        cl = get_client(account)
+        entity = await resolve_entity(channel, cl)
+        await cl(functions.channels.JoinChannelRequest(channel=entity))
         title = getattr(entity, "title", getattr(entity, "username", "Unknown channel"))
         return f"Subscribed to {title}."
     except telethon.errors.rpcerrorlist.UserAlreadyParticipantError:
@@ -1002,21 +1158,27 @@ async def subscribe_public_channel(channel: Union[int, str]) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="List Inline Buttons", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
 async def list_inline_buttons(
-    chat_id: Union[int, str], message_id: Optional[Union[int, str]] = None, limit: int = 20
+    chat_id: Union[int, str],
+    message_id: Optional[Union[int, str]] = None,
+    limit: int = 20,
+    account: str = None,
 ) -> str:
     """
     Inspect inline buttons on a recent message to discover their indices/text/URLs.
     """
     try:
+        cl = get_client(account)
+        await ensure_connected(cl)
         if isinstance(message_id, str):
             if message_id.isdigit():
                 message_id = int(message_id)
             else:
                 return "message_id must be an integer."
 
-        entity = await resolve_entity(chat_id)
+        entity = await resolve_entity(chat_id, cl)
 
         def _has_inline(msg):
             if getattr(msg, "buttons", None):
@@ -1036,11 +1198,11 @@ async def list_inline_buttons(
         target_message = None
 
         if message_id is not None:
-            target_message = await client.get_messages(entity, ids=message_id)
+            target_message = await cl.get_messages(entity, ids=message_id)
             if isinstance(target_message, list):
                 target_message = target_message[0] if target_message else None
         else:
-            recent_messages = await client.get_messages(entity, limit=limit)
+            recent_messages = await cl.get_messages(entity, limit=limit)
             target_message = next((msg for msg in recent_messages if _has_inline(msg)), None)
 
         if not target_message:
@@ -1079,12 +1241,14 @@ async def list_inline_buttons(
         title="Press Inline Button", openWorldHint=True, destructiveHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def press_inline_button(
     chat_id: Union[int, str],
     message_id: Optional[Union[int, str]] = None,
     button_text: Optional[str] = None,
     button_index: Optional[int] = None,
+    account: str = None,
 ) -> str:
     """
     Press an inline button (callback) in a chat message.
@@ -1096,6 +1260,8 @@ async def press_inline_button(
         button_index: Zero-based index among all buttons if you prefer positional access.
     """
     try:
+        cl = get_client(account)
+        await ensure_connected(cl)
         if button_text is None and button_index is None:
             return "Provide button_text or button_index to choose a button."
 
@@ -1112,7 +1278,7 @@ async def press_inline_button(
             else:
                 return "button_index must be an integer."
 
-        entity = await resolve_entity(chat_id)
+        entity = await resolve_entity(chat_id, cl)
 
         def _has_inline_buttons(msg):
             """Check if a message has inline buttons via buttons property or reply_markup."""
@@ -1135,12 +1301,12 @@ async def press_inline_button(
         if message_id is not None:
             # Fetch by ID first, then fall back to recent-message search if
             # reply_markup is missing (Telethon sometimes omits it for ID fetches).
-            target_message = await client.get_messages(entity, ids=message_id)
+            target_message = await cl.get_messages(entity, ids=message_id)
             if isinstance(target_message, list):
                 target_message = target_message[0] if target_message else None
             if target_message and not _has_inline_buttons(target_message):
                 # Fallback: search recent messages for the same ID with markup
-                recent = await client.get_messages(entity, limit=30)
+                recent = await cl.get_messages(entity, limit=30)
                 fallback = next(
                     (m for m in recent if m.id == target_message.id and _has_inline_buttons(m)),
                     None,
@@ -1148,7 +1314,7 @@ async def press_inline_button(
                 if fallback:
                     target_message = fallback
         else:
-            recent_messages = await client.get_messages(entity, limit=20)
+            recent_messages = await cl.get_messages(entity, limit=20)
             target_message = next(
                 (msg for msg in recent_messages if _has_inline_buttons(msg)), None
             )
@@ -1191,7 +1357,7 @@ async def press_inline_button(
                 return f"Selected button opens a URL instead of sending a callback: {url}"
             return "Selected button does not provide callback data to press."
 
-        callback_result = await client(
+        callback_result = await cl(
             functions.messages.GetBotCallbackAnswerRequest(
                 peer=entity, msg_id=target_message.id, data=btn_data
             )
@@ -1220,13 +1386,15 @@ async def press_inline_button(
 @mcp.tool(
     annotations=ToolAnnotations(title="List Contacts", openWorldHint=True, readOnlyHint=True)
 )
-async def list_contacts() -> str:
+@with_account(readonly=True)
+async def list_contacts(account: str = None) -> str:
     """
     List all contacts in your Telegram account.
     """
     try:
-        await ensure_connected()
-        result = await client(functions.contacts.GetContactsRequest(hash=0))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(functions.contacts.GetContactsRequest(hash=0))
         users = result.users
         if not users:
             return "No contacts found."
@@ -1249,15 +1417,17 @@ async def list_contacts() -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Search Contacts", openWorldHint=True, readOnlyHint=True)
 )
-async def search_contacts(query: str) -> str:
+@with_account(readonly=True)
+async def search_contacts(query: str, account: str = None) -> str:
     """
     Search for contacts by name, username, or phone number using Telethon's SearchRequest.
     Args:
         query: The search term to look for in contact names, usernames, or phone numbers.
     """
     try:
-        await ensure_connected()
-        result = await client(functions.contacts.SearchRequest(q=query, limit=50))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(functions.contacts.SearchRequest(q=query, limit=50))
         users = result.users
         if not users:
             return f"No contacts found matching '{query}'."
@@ -1280,13 +1450,15 @@ async def search_contacts(query: str) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Contact Ids", openWorldHint=True, readOnlyHint=True)
 )
-async def get_contact_ids() -> str:
+@with_account(readonly=True)
+async def get_contact_ids(account: str = None) -> str:
     """
     Get all contact IDs in your Telegram account.
     """
     try:
-        await ensure_connected()
-        result = await client(functions.contacts.GetContactIDsRequest(hash=0))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(functions.contacts.GetContactIDsRequest(hash=0))
         if not result:
             return "No contact IDs found."
         return "Contact IDs: " + ", ".join(str(cid) for cid in result)
@@ -1297,6 +1469,7 @@ async def get_contact_ids() -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="List Messages", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
 async def list_messages(
     chat_id: Union[int, str],
@@ -1304,6 +1477,7 @@ async def list_messages(
     search_query: str = None,
     from_date: str = None,
     to_date: str = None,
+    account: str = None,
 ) -> str:
     """
     Retrieve messages with optional filters.
@@ -1316,7 +1490,8 @@ async def list_messages(
         to_date: Filter messages until this date (format: YYYY-MM-DD).
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
 
         # Parse date filters if provided
         from_date_obj = None
@@ -1360,7 +1535,7 @@ async def list_messages(
             # Use server-side search alone, then enforce date bounds client-side.
             params["search"] = search_query
             messages = []
-            async for msg in client.iter_messages(entity, **params):  # newest -> oldest
+            async for msg in cl.iter_messages(entity, **params):  # newest -> oldest
                 if to_date_obj and msg.date > to_date_obj:
                     continue
                 if from_date_obj and msg.date < from_date_obj:
@@ -1376,7 +1551,7 @@ async def list_messages(
                 messages = []
                 if from_date_obj:
                     # Walk forward from start date (oldest -> newest)
-                    async for msg in client.iter_messages(
+                    async for msg in cl.iter_messages(
                         entity, offset_date=from_date_obj, reverse=True
                     ):
                         if to_date_obj and msg.date > to_date_obj:
@@ -1388,7 +1563,7 @@ async def list_messages(
                             break
                 else:
                     # Only upper bound: walk backward from end bound
-                    async for msg in client.iter_messages(
+                    async for msg in cl.iter_messages(
                         # offset_date is exclusive; +1µs makes to_date inclusive
                         entity,
                         offset_date=to_date_obj + timedelta(microseconds=1),
@@ -1397,7 +1572,7 @@ async def list_messages(
                         if len(messages) >= limit:
                             break
             else:
-                messages = await client.get_messages(entity, limit=limit, **params)
+                messages = await cl.get_messages(entity, limit=limit, **params)
 
         if not messages:
             return "No messages found matching the criteria."
@@ -1422,11 +1597,13 @@ async def list_messages(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List Topics", openWorldHint=True, readOnlyHint=True))
+@with_account(readonly=True)
 async def list_topics(
     chat_id: int,
     limit: int = 200,
     offset_topic: int = 0,
     search_query: str = None,
+    account: str = None,
 ) -> str:
     """
     Retrieve forum topics from a supergroup with the forum feature enabled.
@@ -1441,7 +1618,8 @@ async def list_topics(
         search_query: Optional query to filter topics by title.
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
 
         if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
             return "The specified chat is not a supergroup."
@@ -1449,7 +1627,7 @@ async def list_topics(
         if not getattr(entity, "forum", False):
             return "The specified supergroup does not have forum topics enabled."
 
-        result = await client(
+        result = await cl(
             functions.channels.GetForumTopicsRequest(
                 channel=entity,
                 offset_date=0,
@@ -1509,7 +1687,9 @@ async def list_topics(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List Chats", openWorldHint=True, readOnlyHint=True))
+@with_account(readonly=True)
 async def list_chats(
+    account: str = None,
     chat_type: str = None,
     limit: int = 20,
     unread_only: bool = False,
@@ -1532,8 +1712,9 @@ async def list_chats(
     returned. Avoid large `limit` values.
     """
     try:
-        await ensure_connected()
-        dialogs = await client.get_dialogs(limit=limit)
+        cl = get_client(account)
+        await ensure_connected(cl)
+        dialogs = await cl.get_dialogs(limit=limit)
 
         results = []
         for dialog in dialogs:
@@ -1608,17 +1789,13 @@ async def list_chats(
                 about_text = ""
                 try:
                     if isinstance(entity, Channel):
-                        full = await client(
-                            functions.channels.GetFullChannelRequest(channel=entity)
-                        )
+                        full = await cl(functions.channels.GetFullChannelRequest(channel=entity))
                         about_text = getattr(full.full_chat, "about", "") or ""
                     elif isinstance(entity, Chat):
-                        full = await client(
-                            functions.messages.GetFullChatRequest(chat_id=entity.id)
-                        )
+                        full = await cl(functions.messages.GetFullChatRequest(chat_id=entity.id))
                         about_text = getattr(full.full_chat, "about", "") or ""
                     elif isinstance(entity, User):
-                        full = await client(functions.users.GetFullUserRequest(id=entity))
+                        full = await cl(functions.users.GetFullUserRequest(id=entity))
                         about_text = getattr(full.full_user, "about", "") or ""
                 except Exception as about_err:
                     logger.warning(
@@ -1650,8 +1827,9 @@ async def list_chats(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chat", openWorldHint=True, readOnlyHint=True))
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_chat(chat_id: Union[int, str]) -> str:
+async def get_chat(chat_id: Union[int, str], account: str = None) -> str:
     """
     Get detailed information about a specific chat.
 
@@ -1659,7 +1837,8 @@ async def get_chat(chat_id: Union[int, str]) -> str:
         chat_id: The ID or username of the chat.
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
 
         result = []
         result.append(f"ID: {entity.id}")
@@ -1674,7 +1853,7 @@ async def get_chat(chat_id: Union[int, str]) -> str:
 
             # Fetch participants count reliably
             try:
-                participants_count = (await client.get_participants(entity, limit=0)).total
+                participants_count = (await cl.get_participants(entity, limit=0)).total
                 result.append(f"Participants: {participants_count}")
             except Exception as pe:
                 result.append(f"Participants: Error fetching ({pe})")
@@ -1696,7 +1875,7 @@ async def get_chat(chat_id: Union[int, str]) -> str:
         try:
             # Using get_dialogs might be slow if there are many dialogs
             # Alternative: Get entity again via get_dialogs if needed for unread count
-            dialog = await client.get_dialogs(limit=1, offset_id=0, offset_peer=entity)
+            dialog = await cl.get_dialogs(limit=1, offset_id=0, offset_peer=entity)
             if dialog:
                 dialog = dialog[0]
                 result.append(f"Unread Messages: {dialog.unread_count}")
@@ -1726,7 +1905,8 @@ async def get_chat(chat_id: Union[int, str]) -> str:
         title="Get Direct Chat By Contact", openWorldHint=True, readOnlyHint=True
     )
 )
-async def get_direct_chat_by_contact(contact_query: str) -> str:
+@with_account(readonly=True)
+async def get_direct_chat_by_contact(contact_query: str, account: str = None) -> str:
     """
     Find a direct chat with a specific contact by name, username, or phone.
 
@@ -1734,9 +1914,10 @@ async def get_direct_chat_by_contact(contact_query: str) -> str:
         contact_query: Name, username, or phone number to search for.
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         # Fetch all contacts using the correct Telethon method
-        result = await client(functions.contacts.GetContactsRequest(hash=0))
+        result = await cl(functions.contacts.GetContactsRequest(hash=0))
         contacts = result.users
         found_contacts = []
         for contact in contacts:
@@ -1757,7 +1938,7 @@ async def get_direct_chat_by_contact(contact_query: str) -> str:
             return f"No contacts found matching '{contact_query}'."
         # If we found contacts, look for direct chats with them
         results = []
-        dialogs = await client.get_dialogs()
+        dialogs = await cl.get_dialogs()
         for contact in found_contacts:
             contact_name = (
                 f"{getattr(contact, 'first_name', '')} {getattr(contact, 'last_name', '')}".strip()
@@ -1784,8 +1965,9 @@ async def get_direct_chat_by_contact(contact_query: str) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Contact Chats", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("contact_id")
-async def get_contact_chats(contact_id: Union[int, str]) -> str:
+async def get_contact_chats(contact_id: Union[int, str], account: str = None) -> str:
     """
     List all chats involving a specific contact.
 
@@ -1793,8 +1975,9 @@ async def get_contact_chats(contact_id: Union[int, str]) -> str:
         contact_id: The ID or username of the contact.
     """
     try:
+        cl = get_client(account)
         # Get contact info
-        contact = await resolve_entity(contact_id)
+        contact = await resolve_entity(contact_id, cl)
         if not isinstance(contact, User):
             return f"ID {contact_id} is not a user/contact."
 
@@ -1804,7 +1987,7 @@ async def get_contact_chats(contact_id: Union[int, str]) -> str:
 
         # Find direct chat
         direct_chat = None
-        dialogs = await client.get_dialogs()
+        dialogs = await cl.get_dialogs()
 
         results = []
 
@@ -1820,7 +2003,7 @@ async def get_contact_chats(contact_id: Union[int, str]) -> str:
         # Look for common groups/channels
         common_chats = []
         try:
-            common = await client.get_common_chats(contact)
+            common = await cl.get_common_chats(contact)
             for chat in common:
                 chat_type = get_entity_type(chat)
                 chat_info = f"Chat ID: {chat.id}, Title: {chat.title}, Type: {chat_type}"
@@ -1841,8 +2024,9 @@ async def get_contact_chats(contact_id: Union[int, str]) -> str:
         title="Get Last Interaction", openWorldHint=True, readOnlyHint=True
     )
 )
+@with_account(readonly=True)
 @validate_id("contact_id")
-async def get_last_interaction(contact_id: Union[int, str]) -> str:
+async def get_last_interaction(contact_id: Union[int, str], account: str = None) -> str:
     """
     Get the most recent message with a contact.
 
@@ -1850,8 +2034,9 @@ async def get_last_interaction(contact_id: Union[int, str]) -> str:
         contact_id: The ID or username of the contact.
     """
     try:
+        cl = get_client(account)
         # Get contact info
-        contact = await resolve_entity(contact_id)
+        contact = await resolve_entity(contact_id, cl)
         if not isinstance(contact, User):
             return f"ID {contact_id} is not a user/contact."
 
@@ -1860,7 +2045,7 @@ async def get_last_interaction(contact_id: Union[int, str]) -> str:
         )
 
         # Get the last few messages
-        messages = await client.get_messages(contact, limit=5)
+        messages = await cl.get_messages(contact, limit=5)
 
         if not messages:
             return f"No messages found with {contact_name} (ID: {contact_id})."
@@ -1880,9 +2065,13 @@ async def get_last_interaction(contact_id: Union[int, str]) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Message Context", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
 async def get_message_context(
-    chat_id: Union[int, str], message_id: int, context_size: int = 3
+    chat_id: Union[int, str],
+    message_id: int,
+    context_size: int = 3,
+    account: str = None,
 ) -> str:
     """
     Retrieve context around a specific message.
@@ -1893,16 +2082,17 @@ async def get_message_context(
         context_size: Number of messages before and after to include.
     """
     try:
-        chat = await resolve_entity(chat_id)
+        cl = get_client(account)
+        chat = await resolve_entity(chat_id, cl)
         # Get messages around the specified message
-        messages_before = await client.get_messages(chat, limit=context_size, max_id=message_id)
-        central_message = await client.get_messages(chat, ids=message_id)
+        messages_before = await cl.get_messages(chat, limit=context_size, max_id=message_id)
+        central_message = await cl.get_messages(chat, ids=message_id)
         # Fix: get_messages(ids=...) returns a single Message, not a list
         if central_message is not None and not isinstance(central_message, list):
             central_message = [central_message]
         elif central_message is None:
             central_message = []
-        messages_after = await client.get_messages(
+        messages_after = await cl.get_messages(
             chat, limit=context_size, min_id=message_id, reverse=True
         )
         if not central_message:
@@ -1919,7 +2109,7 @@ async def get_message_context(
             reply_content = ""
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
                 try:
-                    replied_msg = await client.get_messages(chat, ids=msg.reply_to.reply_to_msg_id)
+                    replied_msg = await cl.get_messages(chat, ids=msg.reply_to.reply_to_msg_id)
                     if replied_msg:
                         replied_sender = "Unknown"
                         if replied_msg.sender:
@@ -1951,7 +2141,9 @@ async def get_message_context(
         title="Add Contact", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 async def add_contact(
+    account: str = None,
     phone: Optional[str] = None,
     first_name: str = "",
     last_name: str = "",
@@ -1969,7 +2161,8 @@ async def add_contact(
     and add the contact using contacts.addContact API (which supports adding contacts without phone numbers).
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         # Normalize None to empty string for easier checking
         phone = phone or ""
         username = username or ""
@@ -1987,7 +2180,7 @@ async def add_contact(
 
             # Resolve username to get user information
             try:
-                resolve_result = await client(
+                resolve_result = await cl(
                     functions.contacts.ResolveUsernameRequest(username=username_clean)
                 )
 
@@ -2005,7 +2198,7 @@ async def add_contact(
                 # Use contacts.addContact to add the contact by user ID
                 from telethon.tl.types import InputUser
 
-                result = await client(
+                result = await cl(
                     functions.contacts.AddContactRequest(
                         id=InputUser(user_id=user_id, access_hash=access_hash),
                         first_name=first_name,
@@ -2031,7 +2224,7 @@ async def add_contact(
             # Original phone-based contact addition
             from telethon.tl.types import InputPhoneContact
 
-            result = await client(
+            result = await cl(
                 functions.contacts.ImportContactsRequest(
                     contacts=[
                         InputPhoneContact(
@@ -2053,7 +2246,7 @@ async def add_contact(
         # Try alternative approach using raw API (only for phone-based)
         if phone and not username:
             try:
-                result = await client(
+                result = await cl(
                     functions.contacts.ImportContactsRequest(
                         contacts=[
                             {
@@ -2085,16 +2278,18 @@ async def add_contact(
         title="Delete Contact", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("user_id")
-async def delete_contact(user_id: Union[int, str]) -> str:
+async def delete_contact(user_id: Union[int, str], account: str = None) -> str:
     """
     Delete a contact by user ID.
     Args:
         user_id: The Telegram user ID or username of the contact to delete.
     """
     try:
-        user = await resolve_entity(user_id)
-        await client(functions.contacts.DeleteContactsRequest(id=[user]))
+        cl = get_client(account)
+        user = await resolve_entity(user_id, cl)
+        await cl(functions.contacts.DeleteContactsRequest(id=[user]))
         return f"Contact with user ID {user_id} deleted."
     except Exception as e:
         return log_and_format_error("delete_contact", e, user_id=user_id)
@@ -2105,16 +2300,18 @@ async def delete_contact(user_id: Union[int, str]) -> str:
         title="Block User", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("user_id")
-async def block_user(user_id: Union[int, str]) -> str:
+async def block_user(user_id: Union[int, str], account: str = None) -> str:
     """
     Block a user by user ID.
     Args:
         user_id: The Telegram user ID or username to block.
     """
     try:
-        user = await resolve_entity(user_id)
-        await client(functions.contacts.BlockRequest(id=user))
+        cl = get_client(account)
+        user = await resolve_entity(user_id, cl)
+        await cl(functions.contacts.BlockRequest(id=user))
         return f"User {user_id} blocked."
     except Exception as e:
         return log_and_format_error("block_user", e, user_id=user_id)
@@ -2125,29 +2322,33 @@ async def block_user(user_id: Union[int, str]) -> str:
         title="Unblock User", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("user_id")
-async def unblock_user(user_id: Union[int, str]) -> str:
+async def unblock_user(user_id: Union[int, str], account: str = None) -> str:
     """
     Unblock a user by user ID.
     Args:
         user_id: The Telegram user ID or username to unblock.
     """
     try:
-        user = await resolve_entity(user_id)
-        await client(functions.contacts.UnblockRequest(id=user))
+        cl = get_client(account)
+        user = await resolve_entity(user_id, cl)
+        await cl(functions.contacts.UnblockRequest(id=user))
         return f"User {user_id} unblocked."
     except Exception as e:
         return log_and_format_error("unblock_user", e, user_id=user_id)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Me", openWorldHint=True, readOnlyHint=True))
-async def get_me() -> str:
+@with_account(readonly=True)
+async def get_me(account: str = None) -> str:
     """
     Get your own user information.
     """
     try:
-        await ensure_connected()
-        me = await client.get_me()
+        cl = get_client(account)
+        await ensure_connected(cl)
+        me = await cl.get_me()
         return json.dumps(format_entity(me), indent=2)
     except Exception as e:
         return log_and_format_error("get_me", e)
@@ -2156,8 +2357,9 @@ async def get_me() -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Create Group", openWorldHint=True, destructiveHint=True)
 )
+@with_account(readonly=False)
 @validate_id("user_ids")
-async def create_group(title: str, user_ids: List[Union[int, str]]) -> str:
+async def create_group(title: str, user_ids: List[Union[int, str]], account: str = None) -> str:
     """
     Create a new group or supergroup and add users.
 
@@ -2166,11 +2368,12 @@ async def create_group(title: str, user_ids: List[Union[int, str]]) -> str:
         user_ids: List of user IDs or usernames to add to the group
     """
     try:
+        cl = get_client(account)
         # Convert user IDs to entities
         users = []
         for user_id in user_ids:
             try:
-                user = await resolve_entity(user_id)
+                user = await resolve_entity(user_id, cl)
                 users.append(user)
             except Exception as e:
                 logger.error(f"Failed to get entity for user ID {user_id}: {e}")
@@ -2182,7 +2385,7 @@ async def create_group(title: str, user_ids: List[Union[int, str]]) -> str:
         # Create the group with the users
         try:
             # Create a new chat with selected users
-            result = await client(functions.messages.CreateChatRequest(users=users, title=title))
+            result = await cl(functions.messages.CreateChatRequest(users=users, title=title))
 
             # Check what type of response we got
             if hasattr(result, "chats") and result.chats:
@@ -2196,7 +2399,7 @@ async def create_group(title: str, user_ids: List[Union[int, str]]) -> str:
                 # If we can't determine the chat ID directly from the result
                 # Try to find it in recent dialogs
                 await asyncio.sleep(1)  # Give Telegram a moment to register the new group
-                dialogs = await client.get_dialogs(limit=5)  # Get recent dialogs
+                dialogs = await cl.get_dialogs(limit=5)  # Get recent dialogs
                 for dialog in dialogs:
                     if dialog.title == title:
                         return f"Group created with ID: {dialog.id}"
@@ -2219,8 +2422,11 @@ async def create_group(title: str, user_ids: List[Union[int, str]]) -> str:
         title="Invite To Group", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("group_id", "user_ids")
-async def invite_to_group(group_id: Union[int, str], user_ids: List[Union[int, str]]) -> str:
+async def invite_to_group(
+    group_id: Union[int, str], user_ids: List[Union[int, str]], account: str = None
+) -> str:
     """
     Invite users to a group or channel.
 
@@ -2229,18 +2435,19 @@ async def invite_to_group(group_id: Union[int, str], user_ids: List[Union[int, s
         user_ids: List of user IDs or usernames to invite.
     """
     try:
-        entity = await resolve_entity(group_id)
+        cl = get_client(account)
+        entity = await resolve_entity(group_id, cl)
         users_to_add = []
 
         for user_id in user_ids:
             try:
-                user = await resolve_entity(user_id)
+                user = await resolve_entity(user_id, cl)
                 users_to_add.append(user)
             except ValueError as e:
                 return f"Error: User with ID {user_id} could not be found. {e}"
 
         try:
-            result = await client(
+            result = await cl(
                 functions.channels.InviteToChannelRequest(channel=entity, users=users_to_add)
             )
 
@@ -2273,8 +2480,9 @@ async def invite_to_group(group_id: Union[int, str], user_ids: List[Union[int, s
         title="Leave Chat", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def leave_chat(chat_id: Union[int, str]) -> str:
+async def leave_chat(chat_id: Union[int, str], account: str = None) -> str:
     """
     Leave a group or channel by chat ID.
 
@@ -2282,13 +2490,14 @@ async def leave_chat(chat_id: Union[int, str]) -> str:
         chat_id: The chat ID or username to leave.
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
 
         # Check the entity type carefully
         if isinstance(entity, Channel):
             # Handle both channels and supergroups (which are also channels in Telegram)
             try:
-                await client(functions.channels.LeaveChannelRequest(channel=entity))
+                await cl(functions.channels.LeaveChannelRequest(channel=entity))
                 chat_name = getattr(entity, "title", str(chat_id))
                 return f"Left channel/supergroup {chat_name} (ID: {chat_id})."
             except Exception as chan_err:
@@ -2298,8 +2507,8 @@ async def leave_chat(chat_id: Union[int, str]) -> str:
             # Traditional basic groups (not supergroups)
             try:
                 # First try with InputPeerUser
-                me = await client.get_me(input_peer=True)
-                await client(
+                me = await cl.get_me(input_peer=True)
+                await cl(
                     functions.messages.DeleteChatUserRequest(
                         chat_id=entity.id,
                         user_id=me,  # Use the entity ID directly
@@ -2315,8 +2524,8 @@ async def leave_chat(chat_id: Union[int, str]) -> str:
 
                 try:
                     # Alternative approach - sometimes this works better
-                    me_full = await client.get_me()
-                    await client(
+                    me_full = await cl.get_me()
+                    await cl(
                         functions.messages.DeleteChatUserRequest(
                             chat_id=entity.id, user_id=me_full.id
                         )
@@ -2356,16 +2565,18 @@ async def leave_chat(chat_id: Union[int, str]) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Participants", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_participants(chat_id: Union[int, str]) -> str:
+async def get_participants(chat_id: Union[int, str], account: str = None) -> str:
     """
     List all participants in a group or channel.
     Args:
         chat_id: The group or channel ID or username.
     """
     try:
-        await ensure_connected()
-        participants = await client.get_participants(chat_id)
+        cl = get_client(account)
+        await ensure_connected(cl)
+        participants = await cl.get_participants(chat_id)
         lines = [
             f"ID: {p.id}, Name: {getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}"
             for p in participants
@@ -2376,12 +2587,14 @@ async def get_participants(chat_id: Union[int, str]) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Send File", openWorldHint=True, destructiveHint=True))
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def send_file(
     chat_id: Union[int, str],
     file_path: str,
     caption: str = None,
     ctx: Optional[Context] = None,
+    account: str = None,
 ) -> str:
     """
     Send a file to a chat.
@@ -2391,6 +2604,7 @@ async def send_file(
         caption: Optional caption for the file.
     """
     try:
+        cl = get_client(account)
         safe_path, path_error = await _resolve_readable_file_path(
             raw_path=file_path,
             ctx=ctx,
@@ -2398,8 +2612,8 @@ async def send_file(
         )
         if path_error:
             return path_error
-        entity = await resolve_entity(chat_id)
-        await client.send_file(entity, str(safe_path), caption=caption)
+        entity = await resolve_entity(chat_id, cl)
+        await cl.send_file(entity, str(safe_path), caption=caption)
         return f"File sent to chat {chat_id} from {safe_path}."
     except Exception as e:
         return log_and_format_error(
@@ -2410,12 +2624,14 @@ async def send_file(
 @mcp.tool(
     annotations=ToolAnnotations(title="Download Media", openWorldHint=True, destructiveHint=True)
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def download_media(
     chat_id: Union[int, str],
     message_id: int,
     file_path: Optional[str] = None,
     ctx: Optional[Context] = None,
+    account: str = None,
 ) -> str:
     """
     Download media from a message in a chat.
@@ -2426,8 +2642,9 @@ async def download_media(
             If omitted, saves into `<first_root>/downloads/`.
     """
     try:
-        entity = await resolve_entity(chat_id)
-        msg = await client.get_messages(entity, ids=message_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        msg = await cl.get_messages(entity, ids=message_id)
         if not msg or not msg.media:
             return "No media found in the specified message."
 
@@ -2446,7 +2663,7 @@ async def download_media(
         # exact path even if the file is actually a PDF. Stripping the suffix lets
         # Telethon append the correct extension based on the actual file content.
         out_path_for_dl = out_path.with_suffix("")
-        downloaded = await client.download_media(msg, file=str(out_path_for_dl))
+        downloaded = await cl.download_media(msg, file=str(out_path_for_dl))
         if not downloaded:
             return f"Download failed for message {message_id}."
 
@@ -2473,13 +2690,17 @@ async def download_media(
         title="Update Profile", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
-async def update_profile(first_name: str = None, last_name: str = None, about: str = None) -> str:
+@with_account(readonly=False)
+async def update_profile(
+    account: str = None, first_name: str = None, last_name: str = None, about: str = None
+) -> str:
     """
     Update your profile information (name, bio).
     """
     try:
-        await ensure_connected()
-        await client(
+        cl = get_client(account)
+        await ensure_connected(cl)
+        await cl(
             functions.account.UpdateProfileRequest(
                 first_name=first_name, last_name=last_name, about=about
             )
@@ -2496,12 +2717,16 @@ async def update_profile(first_name: str = None, last_name: str = None, about: s
         title="Set Profile Photo", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
-async def set_profile_photo(file_path: str, ctx: Optional[Context] = None) -> str:
+@with_account(readonly=False)
+async def set_profile_photo(
+    file_path: str, ctx: Optional[Context] = None, account: str = None
+) -> str:
     """
     Set a new profile photo.
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         safe_path, path_error = await _resolve_readable_file_path(
             raw_path=file_path,
             ctx=ctx,
@@ -2509,10 +2734,8 @@ async def set_profile_photo(file_path: str, ctx: Optional[Context] = None) -> st
         )
         if path_error:
             return path_error
-        await client(
-            functions.photos.UploadProfilePhotoRequest(
-                file=await client.upload_file(str(safe_path))
-            )
+        await cl(
+            functions.photos.UploadProfilePhotoRequest(file=await cl.upload_file(str(safe_path)))
         )
         return f"Profile photo updated from {safe_path}."
     except Exception as e:
@@ -2524,18 +2747,20 @@ async def set_profile_photo(file_path: str, ctx: Optional[Context] = None) -> st
         title="Delete Profile Photo", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
-async def delete_profile_photo() -> str:
+@with_account(readonly=False)
+async def delete_profile_photo(account: str = None) -> str:
     """
     Delete your current profile photo.
     """
     try:
-        await ensure_connected()
-        photos = await client(
+        cl = get_client(account)
+        await ensure_connected(cl)
+        photos = await cl(
             functions.photos.GetUserPhotosRequest(user_id="me", offset=0, max_id=0, limit=1)
         )
         if not photos.photos:
             return "No profile photo to delete."
-        await client(functions.photos.DeletePhotosRequest(id=[photos.photos[0]]))
+        await cl(functions.photos.DeletePhotosRequest(id=[photos.photos[0]]))
         return "Profile photo deleted."
     except Exception as e:
         return log_and_format_error("delete_profile_photo", e)
@@ -2546,17 +2771,19 @@ async def delete_profile_photo() -> str:
         title="Get Privacy Settings", openWorldHint=True, readOnlyHint=True
     )
 )
-async def get_privacy_settings() -> str:
+@with_account(readonly=True)
+async def get_privacy_settings(account: str = None) -> str:
     """
     Get your privacy settings for last seen status.
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         # Import needed types directly
         from telethon.tl.types import InputPrivacyKeyStatusTimestamp
 
         try:
-            settings = await client(
+            settings = await cl(
                 functions.account.GetPrivacyRequest(key=InputPrivacyKeyStatusTimestamp())
             )
             return str(settings)
@@ -2575,11 +2802,13 @@ async def get_privacy_settings() -> str:
         title="Set Privacy Settings", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("allow_users", "disallow_users")
 async def set_privacy_settings(
     key: str,
     allow_users: Optional[List[Union[int, str]]] = None,
     disallow_users: Optional[List[Union[int, str]]] = None,
+    account: str = None,
 ) -> str:
     """
     Set privacy settings (e.g., last seen, phone, etc.).
@@ -2590,6 +2819,7 @@ async def set_privacy_settings(
         disallow_users: List of user IDs or usernames to disallow
     """
     try:
+        cl = get_client(account)
         # Import needed types
         from telethon.tl.types import (
             InputPrivacyKeyStatusTimestamp,
@@ -2627,7 +2857,7 @@ async def set_privacy_settings(
                 allow_entities = []
                 for user_id in allow_users:
                     try:
-                        user = await resolve_entity(user_id)
+                        user = await resolve_entity(user_id, cl)
                         allow_entities.append(user)
                     except Exception as user_err:
                         logger.warning(f"Could not get entity for user ID {user_id}: {user_err}")
@@ -2644,7 +2874,7 @@ async def set_privacy_settings(
                 disallow_entities = []
                 for user_id in disallow_users:
                     try:
-                        user = await resolve_entity(user_id)
+                        user = await resolve_entity(user_id, cl)
                         disallow_entities.append(user)
                     except Exception as user_err:
                         logger.warning(f"Could not get entity for user ID {user_id}: {user_err}")
@@ -2657,9 +2887,7 @@ async def set_privacy_settings(
 
         # Apply the privacy settings
         try:
-            result = await client(
-                functions.account.SetPrivacyRequest(key=privacy_key, rules=rules)
-            )
+            result = await cl(functions.account.SetPrivacyRequest(key=privacy_key, rules=rules))
             return f"Privacy settings for {key} updated successfully."
         except TypeError as type_err:
             if "TLObject was expected" in str(type_err):
@@ -2674,12 +2902,14 @@ async def set_privacy_settings(
 @mcp.tool(
     annotations=ToolAnnotations(title="Import Contacts", openWorldHint=True, destructiveHint=True)
 )
-async def import_contacts(contacts: list) -> str:
+@with_account(readonly=False)
+async def import_contacts(contacts: list, account: str = None) -> str:
     """
     Import a list of contacts. Each contact should be a dict with phone, first_name, last_name.
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         input_contacts = [
             functions.contacts.InputPhoneContact(
                 client_id=i,
@@ -2689,7 +2919,7 @@ async def import_contacts(contacts: list) -> str:
             )
             for i, c in enumerate(contacts)
         ]
-        result = await client(functions.contacts.ImportContactsRequest(contacts=input_contacts))
+        result = await cl(functions.contacts.ImportContactsRequest(contacts=input_contacts))
         return f"Imported {len(result.imported)} contacts."
     except Exception as e:
         return log_and_format_error("import_contacts", e, contacts=contacts)
@@ -2698,13 +2928,15 @@ async def import_contacts(contacts: list) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Export Contacts", openWorldHint=True, readOnlyHint=True)
 )
-async def export_contacts() -> str:
+@with_account(readonly=True)
+async def export_contacts(account: str = None) -> str:
     """
     Export all contacts as a JSON string.
     """
     try:
-        await ensure_connected()
-        result = await client(functions.contacts.GetContactsRequest(hash=0))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(functions.contacts.GetContactsRequest(hash=0))
         users = result.users
         return json.dumps([format_entity(u) for u in users], indent=2)
     except Exception as e:
@@ -2714,13 +2946,15 @@ async def export_contacts() -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Blocked Users", openWorldHint=True, readOnlyHint=True)
 )
-async def get_blocked_users() -> str:
+@with_account(readonly=True)
+async def get_blocked_users(account: str = None) -> str:
     """
     Get a list of blocked users.
     """
     try:
-        await ensure_connected()
-        result = await client(functions.contacts.GetBlockedRequest(offset=0, limit=100))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(functions.contacts.GetBlockedRequest(offset=0, limit=100))
         return json.dumps([format_entity(u) for u in result.users], indent=2)
     except Exception as e:
         return log_and_format_error("get_blocked_users", e)
@@ -2729,13 +2963,17 @@ async def get_blocked_users() -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Create Channel", openWorldHint=True, destructiveHint=True)
 )
-async def create_channel(title: str, about: str = "", megagroup: bool = False) -> str:
+@with_account(readonly=False)
+async def create_channel(
+    title: str, about: str = "", megagroup: bool = False, account: str = None
+) -> str:
     """
     Create a new channel or supergroup.
     """
     try:
-        await ensure_connected()
-        result = await client(
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(
             functions.channels.CreateChannelRequest(title=title, about=about, megagroup=megagroup)
         )
         return f"Channel '{title}' created with ID: {result.chats[0].id}"
@@ -2750,17 +2988,19 @@ async def create_channel(title: str, about: str = "", megagroup: bool = False) -
         title="Edit Chat Title", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def edit_chat_title(chat_id: Union[int, str], title: str) -> str:
+async def edit_chat_title(chat_id: Union[int, str], title: str, account: str = None) -> str:
     """
     Edit the title of a chat, group, or channel.
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
         if isinstance(entity, Channel):
-            await client(functions.channels.EditTitleRequest(channel=entity, title=title))
+            await cl(functions.channels.EditTitleRequest(channel=entity, title=title))
         elif isinstance(entity, Chat):
-            await client(functions.messages.EditChatTitleRequest(chat_id=chat_id, title=title))
+            await cl(functions.messages.EditChatTitleRequest(chat_id=chat_id, title=title))
         else:
             return f"Cannot edit title for this entity type ({type(entity)})."
         return f"Chat {chat_id} title updated to '{title}'."
@@ -2774,16 +3014,19 @@ async def edit_chat_title(chat_id: Union[int, str], title: str) -> str:
         title="Edit Chat Photo", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def edit_chat_photo(
     chat_id: Union[int, str],
     file_path: str,
     ctx: Optional[Context] = None,
+    account: str = None,
 ) -> str:
     """
     Edit the photo of a chat, group, or channel. Requires a file path to an image.
     """
     try:
+        cl = get_client(account)
         safe_path, path_error = await _resolve_readable_file_path(
             raw_path=file_path,
             ctx=ctx,
@@ -2792,19 +3035,17 @@ async def edit_chat_photo(
         if path_error:
             return path_error
 
-        entity = await resolve_entity(chat_id)
-        uploaded_file = await client.upload_file(str(safe_path))
+        entity = await resolve_entity(chat_id, cl)
+        uploaded_file = await cl.upload_file(str(safe_path))
 
         if isinstance(entity, Channel):
             # For channels/supergroups, use EditPhotoRequest with InputChatUploadedPhoto
             input_photo = InputChatUploadedPhoto(file=uploaded_file)
-            await client(functions.channels.EditPhotoRequest(channel=entity, photo=input_photo))
+            await cl(functions.channels.EditPhotoRequest(channel=entity, photo=input_photo))
         elif isinstance(entity, Chat):
             # For basic groups, use EditChatPhotoRequest with InputChatUploadedPhoto
             input_photo = InputChatUploadedPhoto(file=uploaded_file)
-            await client(
-                functions.messages.EditChatPhotoRequest(chat_id=chat_id, photo=input_photo)
-            )
+            await cl(functions.messages.EditChatPhotoRequest(chat_id=chat_id, photo=input_photo))
         else:
             return f"Cannot edit photo for this entity type ({type(entity)})."
 
@@ -2822,8 +3063,9 @@ async def edit_chat_photo(
         idempotentHint=True,
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def edit_chat_about(chat_id: Union[int, str], about: str) -> str:
+async def edit_chat_about(chat_id: Union[int, str], about: str, account: str = None) -> str:
     """
     Edit the description ("About") of a chat, group, or channel.
 
@@ -2832,8 +3074,10 @@ async def edit_chat_about(chat_id: Union[int, str], about: str) -> str:
         about: New description text. Telegram limits About to 255 characters.
     """
     try:
-        entity = await resolve_entity(chat_id)
-        await client(functions.messages.EditChatAboutRequest(peer=entity, about=about))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        await cl(functions.messages.EditChatAboutRequest(peer=entity, about=about))
         return f"Chat {chat_id} description updated."
     except telethon.errors.rpcerrorlist.ChatAboutNotModifiedError:
         return f"Chat {chat_id} description is already set to the requested value."
@@ -2851,21 +3095,23 @@ async def edit_chat_about(chat_id: Union[int, str], about: str) -> str:
         title="Delete Chat Photo", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def delete_chat_photo(chat_id: Union[int, str]) -> str:
+async def delete_chat_photo(chat_id: Union[int, str], account: str = None) -> str:
     """
     Delete the photo of a chat, group, or channel.
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
         if isinstance(entity, Channel):
             # Use InputChatPhotoEmpty for channels/supergroups
-            await client(
+            await cl(
                 functions.channels.EditPhotoRequest(channel=entity, photo=InputChatPhotoEmpty())
             )
         elif isinstance(entity, Chat):
             # Use None (or InputChatPhotoEmpty) for basic groups
-            await client(
+            await cl(
                 functions.messages.EditChatPhotoRequest(
                     chat_id=chat_id, photo=InputChatPhotoEmpty()
                 )
@@ -2884,9 +3130,13 @@ async def delete_chat_photo(chat_id: Union[int, str]) -> str:
         title="Promote Admin", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("group_id", "user_id")
 async def promote_admin(
-    group_id: Union[int, str], user_id: Union[int, str], rights: dict = None
+    group_id: Union[int, str],
+    user_id: Union[int, str],
+    rights: dict = None,
+    account: str = None,
 ) -> str:
     """
     Promote a user to admin in a group/channel.
@@ -2897,8 +3147,9 @@ async def promote_admin(
         rights: Admin rights to give (optional)
     """
     try:
-        chat = await resolve_entity(group_id)
-        user = await resolve_entity(user_id)
+        cl = get_client(account)
+        chat = await resolve_entity(group_id, cl)
+        user = await resolve_entity(user_id, cl)
 
         # Set default admin rights if not provided
         if not rights:
@@ -2931,7 +3182,7 @@ async def promote_admin(
         )
 
         try:
-            result = await client(
+            result = await cl(
                 functions.channels.EditAdminRequest(
                     channel=chat, user_id=user, admin_rights=admin_rights, rank="Admin"
                 )
@@ -2955,8 +3206,11 @@ async def promote_admin(
         title="Demote Admin", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("group_id", "user_id")
-async def demote_admin(group_id: Union[int, str], user_id: Union[int, str]) -> str:
+async def demote_admin(
+    group_id: Union[int, str], user_id: Union[int, str], account: str = None
+) -> str:
     """
     Demote a user from admin in a group/channel.
 
@@ -2965,8 +3219,9 @@ async def demote_admin(group_id: Union[int, str], user_id: Union[int, str]) -> s
         user_id: User ID or username to demote
     """
     try:
-        chat = await resolve_entity(group_id)
-        user = await resolve_entity(user_id)
+        cl = get_client(account)
+        chat = await resolve_entity(group_id, cl)
+        user = await resolve_entity(user_id, cl)
 
         # Create empty admin rights (regular user)
         admin_rights = ChatAdminRights(
@@ -2984,7 +3239,7 @@ async def demote_admin(group_id: Union[int, str], user_id: Union[int, str]) -> s
         )
 
         try:
-            result = await client(
+            result = await cl(
                 functions.channels.EditAdminRequest(
                     channel=chat, user_id=user, admin_rights=admin_rights, rank=""
                 )
@@ -3008,8 +3263,9 @@ async def demote_admin(group_id: Union[int, str], user_id: Union[int, str]) -> s
         title="Ban User", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id", "user_id")
-async def ban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
+async def ban_user(chat_id: Union[int, str], user_id: Union[int, str], account: str = None) -> str:
     """
     Ban a user from a group or channel.
 
@@ -3018,8 +3274,9 @@ async def ban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
         user_id: User ID or username to ban
     """
     try:
-        chat = await resolve_entity(chat_id)
-        user = await resolve_entity(user_id)
+        cl = get_client(account)
+        chat = await resolve_entity(chat_id, cl)
+        user = await resolve_entity(user_id, cl)
 
         # Create banned rights (all restrictions enabled)
         banned_rights = ChatBannedRights(
@@ -3039,7 +3296,7 @@ async def ban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
         )
 
         try:
-            await client(
+            await cl(
                 functions.channels.EditBannedRequest(
                     channel=chat, participant=user, banned_rights=banned_rights
                 )
@@ -3059,8 +3316,11 @@ async def ban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
         title="Unban User", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id", "user_id")
-async def unban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
+async def unban_user(
+    chat_id: Union[int, str], user_id: Union[int, str], account: str = None
+) -> str:
     """
     Unban a user from a group or channel.
 
@@ -3069,8 +3329,9 @@ async def unban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
         user_id: User ID or username to unban
     """
     try:
-        chat = await resolve_entity(chat_id)
-        user = await resolve_entity(user_id)
+        cl = get_client(account)
+        chat = await resolve_entity(chat_id, cl)
+        user = await resolve_entity(user_id, cl)
 
         # Create unbanned rights (no restrictions)
         unbanned_rights = ChatBannedRights(
@@ -3090,7 +3351,7 @@ async def unban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
         )
 
         try:
-            await client(
+            await cl(
                 functions.channels.EditBannedRequest(
                     channel=chat, participant=user, banned_rights=unbanned_rights
                 )
@@ -3113,6 +3374,7 @@ async def unban_user(chat_id: Union[int, str], user_id: Union[int, str]) -> str:
         idempotentHint=True,
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def set_default_chat_permissions(
     chat_id: Union[int, str],
@@ -3128,6 +3390,7 @@ async def set_default_chat_permissions(
     invite_users: bool = True,
     pin_messages: bool = False,
     until_date: int = 0,
+    account: str = None,
 ) -> str:
     """
     Set default member permissions for a group, supergroup, or channel.
@@ -3151,7 +3414,9 @@ async def set_default_chat_permissions(
         until_date: restriction expiry as Unix timestamp, 0 = permanent (default)
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
         banned_rights = ChatBannedRights(
             until_date=until_date if until_date else None,
             send_messages=not send_messages,
@@ -3166,7 +3431,7 @@ async def set_default_chat_permissions(
             invite_users=not invite_users,
             pin_messages=not pin_messages,
         )
-        await client(
+        await cl(
             functions.messages.EditChatDefaultBannedRightsRequest(
                 peer=entity, banned_rights=banned_rights
             )
@@ -3189,8 +3454,9 @@ async def set_default_chat_permissions(
         idempotentHint=True,
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def toggle_slow_mode(chat_id: Union[int, str], seconds: int = 0) -> str:
+async def toggle_slow_mode(chat_id: Union[int, str], seconds: int = 0, account: str = None) -> str:
     """
     Enable or disable slow mode for a supergroup.
 
@@ -3202,10 +3468,12 @@ async def toggle_slow_mode(chat_id: Union[int, str], seconds: int = 0) -> str:
         seconds: interval between messages per user. 0 = disabled (default).
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
         if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
             return "Error: slow mode is only supported for supergroups."
-        await client(functions.channels.ToggleSlowModeRequest(channel=entity, seconds=seconds))
+        await cl(functions.channels.ToggleSlowModeRequest(channel=entity, seconds=seconds))
         if seconds == 0:
             return f"Slow mode disabled for chat {chat_id}."
         return f"Slow mode enabled for chat {chat_id} (interval: {seconds}s)."
@@ -3224,6 +3492,7 @@ async def toggle_slow_mode(chat_id: Union[int, str], seconds: int = 0) -> str:
         idempotentHint=True,
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id", "user_id")
 async def edit_admin_rights(
     chat_id: Union[int, str],
@@ -3240,6 +3509,7 @@ async def edit_admin_rights(
     anonymous: bool = False,
     manage_call: bool = False,
     other: bool = False,
+    account: str = None,
 ) -> str:
     """
     Set granular admin rights for a user in a supergroup or channel.
@@ -3265,8 +3535,10 @@ async def edit_admin_rights(
         other: reserved for future rights
     """
     try:
-        entity = await resolve_entity(chat_id)
-        user = await resolve_entity(user_id)
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        user = await resolve_entity(user_id, cl)
         admin_rights = ChatAdminRights(
             change_info=change_info,
             post_messages=post_messages,
@@ -3280,7 +3552,7 @@ async def edit_admin_rights(
             manage_call=manage_call,
             other=other,
         )
-        await client(
+        await cl(
             functions.channels.EditAdminRequest(
                 channel=entity, user_id=user, admin_rights=admin_rights, rank=rank
             )
@@ -3298,15 +3570,17 @@ async def edit_admin_rights(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Admins", openWorldHint=True, readOnlyHint=True))
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_admins(chat_id: Union[int, str]) -> str:
+async def get_admins(chat_id: Union[int, str], account: str = None) -> str:
     """
     Get all admins in a group or channel.
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         # Fix: Use the correct filter type ChannelParticipantsAdmins
-        participants = await client.get_participants(chat_id, filter=ChannelParticipantsAdmins())
+        participants = await cl.get_participants(chat_id, filter=ChannelParticipantsAdmins())
         lines = [
             f"ID: {p.id}, Name: {getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
             for p in participants
@@ -3320,17 +3594,17 @@ async def get_admins(chat_id: Union[int, str]) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Banned Users", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_banned_users(chat_id: Union[int, str]) -> str:
+async def get_banned_users(chat_id: Union[int, str], account: str = None) -> str:
     """
     Get all banned users in a group or channel.
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         # Fix: Use the correct filter type ChannelParticipantsKicked
-        participants = await client.get_participants(
-            chat_id, filter=ChannelParticipantsKicked(q="")
-        )
+        participants = await cl.get_participants(chat_id, filter=ChannelParticipantsKicked(q=""))
         lines = [
             f"ID: {p.id}, Name: {getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
             for p in participants
@@ -3344,19 +3618,21 @@ async def get_banned_users(chat_id: Union[int, str]) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Invite Link", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_invite_link(chat_id: Union[int, str]) -> str:
+async def get_invite_link(chat_id: Union[int, str], account: str = None) -> str:
     """
     Get the invite link for a group or channel.
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
 
         # Try using ExportChatInviteRequest first
         try:
             from telethon.tl import functions
 
-            result = await client(functions.messages.ExportChatInviteRequest(peer=entity))
+            result = await cl(functions.messages.ExportChatInviteRequest(peer=entity))
             return result.link
         except AttributeError:
             # If the function doesn't exist in the current Telethon version
@@ -3365,9 +3641,9 @@ async def get_invite_link(chat_id: Union[int, str]) -> str:
             # If that fails, log and try alternative approach
             logger.warning(f"ExportChatInviteRequest failed: {e1}")
 
-        # Alternative approach using client.export_chat_invite_link
+        # Alternative approach using cl.export_chat_invite_link
         try:
-            invite_link = await client.export_chat_invite_link(entity)
+            invite_link = await cl.export_chat_invite_link(entity)
             return invite_link
         except Exception as e2:
             logger.warning(f"export_chat_invite_link failed: {e2}")
@@ -3375,7 +3651,7 @@ async def get_invite_link(chat_id: Union[int, str]) -> str:
         # Last resort: Try directly fetching chat info
         try:
             if isinstance(entity, (Chat, Channel)):
-                full_chat = await client(functions.messages.GetFullChatRequest(chat_id=entity.id))
+                full_chat = await cl(functions.messages.GetFullChatRequest(chat_id=entity.id))
                 if hasattr(full_chat, "full_chat") and hasattr(full_chat.full_chat, "invite_link"):
                     return full_chat.full_chat.invite_link or "No invite link available."
         except Exception as e3:
@@ -3392,12 +3668,14 @@ async def get_invite_link(chat_id: Union[int, str]) -> str:
         title="Join Chat By Link", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
-async def join_chat_by_link(link: str) -> str:
+@with_account(readonly=False)
+async def join_chat_by_link(link: str, account: str = None) -> str:
     """
     Join a chat by invite link.
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         # Extract the hash from the invite link
         if "/" in link:
             hash_part = link.split("/")[-1]
@@ -3409,7 +3687,7 @@ async def join_chat_by_link(link: str) -> str:
         # Try checking the invite before joining
         try:
             # Try to check invite info first (will often fail if not a member)
-            invite_info = await client(functions.messages.CheckChatInviteRequest(hash=hash_part))
+            invite_info = await cl(functions.messages.CheckChatInviteRequest(hash=hash_part))
             if hasattr(invite_info, "chat") and invite_info.chat:
                 # If we got chat info, we're already a member
                 chat_title = getattr(invite_info.chat, "title", "Unknown Chat")
@@ -3419,7 +3697,7 @@ async def join_chat_by_link(link: str) -> str:
             pass
 
         # Join the chat using the hash
-        result = await client(functions.messages.ImportChatInviteRequest(hash=hash_part))
+        result = await cl(functions.messages.ImportChatInviteRequest(hash=hash_part))
         if result and hasattr(result, "chats") and result.chats:
             chat_title = getattr(result.chats[0], "title", "Unknown Chat")
             return f"Successfully joined chat: {chat_title}"
@@ -3439,19 +3717,21 @@ async def join_chat_by_link(link: str) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Export Chat Invite", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def export_chat_invite(chat_id: Union[int, str]) -> str:
+async def export_chat_invite(chat_id: Union[int, str], account: str = None) -> str:
     """
     Export a chat invite link.
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
 
         # Try using ExportChatInviteRequest first
         try:
             from telethon.tl import functions
 
-            result = await client(functions.messages.ExportChatInviteRequest(peer=entity))
+            result = await cl(functions.messages.ExportChatInviteRequest(peer=entity))
             return result.link
         except AttributeError:
             # If the function doesn't exist in the current Telethon version
@@ -3460,9 +3740,9 @@ async def export_chat_invite(chat_id: Union[int, str]) -> str:
             # If that fails, log and try alternative approach
             logger.warning(f"ExportChatInviteRequest failed: {e1}")
 
-        # Alternative approach using client.export_chat_invite_link
+        # Alternative approach using cl.export_chat_invite_link
         try:
-            invite_link = await client.export_chat_invite_link(entity)
+            invite_link = await cl.export_chat_invite_link(entity)
             return invite_link
         except Exception as e2:
             logger.warning(f"export_chat_invite_link failed: {e2}")
@@ -3478,12 +3758,14 @@ async def export_chat_invite(chat_id: Union[int, str]) -> str:
         title="Import Chat Invite", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
-async def import_chat_invite(hash: str) -> str:
+@with_account(readonly=False)
+async def import_chat_invite(hash: str, account: str = None) -> str:
     """
     Import a chat invite by hash.
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         # Remove any prefixes like '+' if present
         if hash.startswith("+"):
             hash = hash[1:]
@@ -3499,7 +3781,7 @@ async def import_chat_invite(hash: str) -> str:
             )
 
             # Try to check invite info first (will often fail if not a member)
-            invite_info = await client(functions.messages.CheckChatInviteRequest(hash=hash))
+            invite_info = await cl(functions.messages.CheckChatInviteRequest(hash=hash))
             if hasattr(invite_info, "chat") and invite_info.chat:
                 # If we got chat info, we're already a member
                 chat_title = getattr(invite_info.chat, "title", "Unknown Chat")
@@ -3510,7 +3792,7 @@ async def import_chat_invite(hash: str) -> str:
 
         # Join the chat using the hash
         try:
-            result = await client(functions.messages.ImportChatInviteRequest(hash=hash))
+            result = await cl(functions.messages.ImportChatInviteRequest(hash=hash))
             if result and hasattr(result, "chats") and result.chats:
                 chat_title = getattr(result.chats[0], "title", "Unknown Chat")
                 return f"Successfully joined chat: {chat_title}"
@@ -3538,11 +3820,13 @@ async def import_chat_invite(hash: str) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Send Voice", openWorldHint=True, destructiveHint=True)
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def send_voice(
     chat_id: Union[int, str],
     file_path: str,
     ctx: Optional[Context] = None,
+    account: str = None,
 ) -> str:
     """
     Send a voice message to a chat. File must be an OGG/OPUS voice note.
@@ -3552,6 +3836,7 @@ async def send_voice(
         file_path: Absolute or relative path under allowed roots to the OGG/OPUS file.
     """
     try:
+        cl = get_client(account)
         safe_path, path_error = await _resolve_readable_file_path(
             raw_path=file_path,
             ctx=ctx,
@@ -3571,8 +3856,8 @@ async def send_voice(
         ):
             return "Voice file must be .ogg or .opus format."
 
-        entity = await resolve_entity(chat_id)
-        await client.send_file(entity, str(safe_path), voice_note=True)
+        entity = await resolve_entity(chat_id, cl)
+        await cl.send_file(entity, str(safe_path), voice_note=True)
         return f"Voice message sent to chat {chat_id} from {safe_path}."
     except Exception as e:
         return log_and_format_error("send_voice", e, chat_id=chat_id, file_path=file_path)
@@ -3581,7 +3866,8 @@ async def send_voice(
 @mcp.tool(
     annotations=ToolAnnotations(title="Upload File", openWorldHint=True, destructiveHint=True)
 )
-async def upload_file(file_path: str, ctx: Optional[Context] = None) -> str:
+@with_account(readonly=False)
+async def upload_file(file_path: str, ctx: Optional[Context] = None, account: str = None) -> str:
     """
     Upload a local file to Telegram and return upload metadata.
 
@@ -3589,7 +3875,8 @@ async def upload_file(file_path: str, ctx: Optional[Context] = None) -> str:
         file_path: Absolute or relative path under allowed roots.
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         safe_path, path_error = await _resolve_readable_file_path(
             raw_path=file_path,
             ctx=ctx,
@@ -3598,7 +3885,7 @@ async def upload_file(file_path: str, ctx: Optional[Context] = None) -> str:
         if path_error:
             return path_error
 
-        uploaded = await client.upload_file(str(safe_path))
+        uploaded = await cl.upload_file(str(safe_path))
         payload = {
             "path": str(safe_path),
             "name": getattr(uploaded, "name", safe_path.name),
@@ -3613,17 +3900,22 @@ async def upload_file(file_path: str, ctx: Optional[Context] = None) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Forward Message", openWorldHint=True, destructiveHint=True)
 )
+@with_account(readonly=False)
 @validate_id("from_chat_id", "to_chat_id")
 async def forward_message(
-    from_chat_id: Union[int, str], message_id: int, to_chat_id: Union[int, str]
+    from_chat_id: Union[int, str],
+    message_id: int,
+    to_chat_id: Union[int, str],
+    account: str = None,
 ) -> str:
     """
     Forward a message from one chat to another.
     """
     try:
-        from_entity = await resolve_entity(from_chat_id)
-        to_entity = await resolve_entity(to_chat_id)
-        await client.forward_messages(to_entity, message_id, from_entity)
+        cl = get_client(account)
+        from_entity = await resolve_entity(from_chat_id, cl)
+        to_entity = await resolve_entity(to_chat_id, cl)
+        await cl.forward_messages(to_entity, message_id, from_entity)
         return f"Message {message_id} forwarded from {from_chat_id} to {to_chat_id}."
     except Exception as e:
         return log_and_format_error(
@@ -3640,14 +3932,18 @@ async def forward_message(
         title="Edit Message", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def edit_message(chat_id: Union[int, str], message_id: int, new_text: str) -> str:
+async def edit_message(
+    chat_id: Union[int, str], message_id: int, new_text: str, account: str = None
+) -> str:
     """
     Edit a message you sent.
     """
     try:
-        entity = await resolve_entity(chat_id)
-        await client.edit_message(entity, message_id, new_text)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        await cl.edit_message(entity, message_id, new_text)
         return f"Message {message_id} edited."
     except Exception as e:
         return log_and_format_error(
@@ -3660,14 +3956,16 @@ async def edit_message(chat_id: Union[int, str], message_id: int, new_text: str)
         title="Delete Message", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def delete_message(chat_id: Union[int, str], message_id: int) -> str:
+async def delete_message(chat_id: Union[int, str], message_id: int, account: str = None) -> str:
     """
     Delete a message by ID.
     """
     try:
-        entity = await resolve_entity(chat_id)
-        await client.delete_messages(entity, message_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        await cl.delete_messages(entity, message_id)
         return f"Message {message_id} deleted."
     except Exception as e:
         return log_and_format_error("delete_message", e, chat_id=chat_id, message_id=message_id)
@@ -3681,9 +3979,10 @@ async def delete_message(chat_id: Union[int, str], message_id: int) -> str:
         idempotentHint=False,
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def delete_chat_history(
-    chat_id: Union[int, str], max_id: int = 0, revoke: bool = False
+    chat_id: Union[int, str], max_id: int = 0, revoke: bool = False, account: str = None
 ) -> str:
     """
     Clear the full message history of a chat.
@@ -3694,8 +3993,10 @@ async def delete_chat_history(
         revoke: If True, delete for both parties (default False = only for you).
     """
     try:
-        entity = await resolve_entity(chat_id)
-        result = await client(
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        result = await cl(
             functions.messages.DeleteHistoryRequest(peer=entity, max_id=max_id, revoke=revoke)
         )
         pts_count = getattr(result, "pts_count", 0)
@@ -3725,9 +4026,13 @@ async def delete_chat_history(
         idempotentHint=True,
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def delete_messages_bulk(
-    chat_id: Union[int, str], message_ids: List[int], revoke: bool = True
+    chat_id: Union[int, str],
+    message_ids: List[int],
+    revoke: bool = True,
+    account: str = None,
 ) -> str:
     """
     Delete multiple messages in a single call.
@@ -3738,13 +4043,15 @@ async def delete_messages_bulk(
         revoke: If True, delete for both parties (default True). Ignored for channels.
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
         if isinstance(entity, Channel):
-            result = await client(
+            result = await cl(
                 functions.channels.DeleteMessagesRequest(channel=entity, id=message_ids)
             )
         else:
-            result = await client(
+            result = await cl(
                 functions.messages.DeleteMessagesRequest(id=message_ids, revoke=revoke)
             )
         pts_count = getattr(result, "pts_count", 0)
@@ -3768,14 +4075,16 @@ async def delete_messages_bulk(
         title="Pin Message", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def pin_message(chat_id: Union[int, str], message_id: int) -> str:
+async def pin_message(chat_id: Union[int, str], message_id: int, account: str = None) -> str:
     """
     Pin a message in a chat.
     """
     try:
-        entity = await resolve_entity(chat_id)
-        await client.pin_message(entity, message_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        await cl.pin_message(entity, message_id)
         return f"Message {message_id} pinned in chat {chat_id}."
     except Exception as e:
         return log_and_format_error("pin_message", e, chat_id=chat_id, message_id=message_id)
@@ -3786,14 +4095,16 @@ async def pin_message(chat_id: Union[int, str], message_id: int) -> str:
         title="Unpin Message", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def unpin_message(chat_id: Union[int, str], message_id: int) -> str:
+async def unpin_message(chat_id: Union[int, str], message_id: int, account: str = None) -> str:
     """
     Unpin a message in a chat.
     """
     try:
-        entity = await resolve_entity(chat_id)
-        await client.unpin_message(entity, message_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        await cl.unpin_message(entity, message_id)
         return f"Message {message_id} unpinned in chat {chat_id}."
     except Exception as e:
         return log_and_format_error("unpin_message", e, chat_id=chat_id, message_id=message_id)
@@ -3807,8 +4118,9 @@ async def unpin_message(chat_id: Union[int, str], message_id: int) -> str:
         idempotentHint=True,
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def unpin_all_messages(chat_id: Union[int, str]) -> str:
+async def unpin_all_messages(chat_id: Union[int, str], account: str = None) -> str:
     """
     Unpin all pinned messages in a chat.
 
@@ -3816,8 +4128,10 @@ async def unpin_all_messages(chat_id: Union[int, str]) -> str:
         chat_id: Chat ID or username.
     """
     try:
-        entity = await resolve_entity(chat_id)
-        await client(functions.messages.UnpinAllMessagesRequest(peer=entity))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        await cl(functions.messages.UnpinAllMessagesRequest(peer=entity))
         return f"All messages unpinned in chat {chat_id}."
     except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
         return "Cannot unpin messages: admin privileges are required."
@@ -3830,14 +4144,16 @@ async def unpin_all_messages(chat_id: Union[int, str]) -> str:
         title="Mark As Read", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def mark_as_read(chat_id: Union[int, str]) -> str:
+async def mark_as_read(chat_id: Union[int, str], account: str = None) -> str:
     """
     Mark all messages as read in a chat.
     """
     try:
-        entity = await resolve_entity(chat_id)
-        await client.send_read_acknowledge(entity)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        await cl.send_read_acknowledge(entity)
         return f"Marked all messages as read in chat {chat_id}."
     except Exception as e:
         return log_and_format_error("mark_as_read", e, chat_id=chat_id)
@@ -3846,9 +4162,14 @@ async def mark_as_read(chat_id: Union[int, str]) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Reply To Message", openWorldHint=True, destructiveHint=True)
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def reply_to_message(
-    chat_id: Union[int, str], message_id: int, text: str, parse_mode: Optional[str] = None
+    chat_id: Union[int, str],
+    message_id: int,
+    text: str,
+    parse_mode: Optional[str] = None,
+    account: str = None,
 ) -> str:
     """
     Reply to a specific message in a chat.
@@ -3861,8 +4182,9 @@ async def reply_to_message(
             ```pre```), or omit for plain text (no formatting).
     """
     try:
-        entity = await resolve_entity(chat_id)
-        await client.send_message(entity, text, reply_to=message_id, parse_mode=parse_mode)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        await cl.send_message(entity, text, reply_to=message_id, parse_mode=parse_mode)
         return f"Replied to message {message_id} in chat {chat_id}."
     except Exception as e:
         return log_and_format_error(
@@ -3873,8 +4195,9 @@ async def reply_to_message(
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Media Info", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_media_info(chat_id: Union[int, str], message_id: int) -> str:
+async def get_media_info(chat_id: Union[int, str], message_id: int, account: str = None) -> str:
     """
     Get info about media in a message.
 
@@ -3883,8 +4206,9 @@ async def get_media_info(chat_id: Union[int, str], message_id: int) -> str:
         message_id: The message ID.
     """
     try:
-        entity = await resolve_entity(chat_id)
-        msg = await client.get_messages(entity, ids=message_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        msg = await cl.get_messages(entity, ids=message_id)
 
         if not msg or not msg.media:
             return "No media found in the specified message."
@@ -3897,13 +4221,15 @@ async def get_media_info(chat_id: Union[int, str], message_id: int) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Search Public Chats", openWorldHint=True, readOnlyHint=True)
 )
-async def search_public_chats(query: str, limit: int = 20) -> str:
+@with_account(readonly=True)
+async def search_public_chats(query: str, limit: int = 20, account: str = None) -> str:
     """
     Search for public chats, channels, or bots by username or title.
     """
     try:
-        await ensure_connected()
-        result = await client(functions.contacts.SearchRequest(q=query, limit=limit))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(functions.contacts.SearchRequest(q=query, limit=limit))
         entities = [format_entity(e) for e in result.chats + result.users]
         return json.dumps(entities, indent=2)
     except Exception as e:
@@ -3913,14 +4239,18 @@ async def search_public_chats(query: str, limit: int = 20) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Search Messages", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def search_messages(chat_id: Union[int, str], query: str, limit: int = 20) -> str:
+async def search_messages(
+    chat_id: Union[int, str], query: str, limit: int = 20, account: str = None
+) -> str:
     """
     Search for messages in a chat by text.
     """
     try:
-        entity = await resolve_entity(chat_id)
-        messages = await client.get_messages(entity, limit=limit, search=query)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        messages = await cl.get_messages(entity, limit=limit, search=query)
 
         lines = []
         for msg in messages:
@@ -3945,16 +4275,18 @@ async def search_messages(chat_id: Union[int, str], query: str, limit: int = 20)
         readOnlyHint=True,
     )
 )
-async def search_global(query: str, page: int = 1, page_size: int = 20) -> str:
+@with_account(readonly=True)
+async def search_global(
+    query: str, page: int = 1, page_size: int = 20, account: str = None
+) -> str:
     """
     Search for messages across all public chats and channels by text content.
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         offset = (page - 1) * page_size
-        messages = await client.get_messages(
-            None, limit=page_size, search=query, add_offset=offset
-        )
+        messages = await cl.get_messages(None, limit=page_size, search=query, add_offset=offset)
 
         if not messages:
             return "No messages found for this page."
@@ -3981,13 +4313,15 @@ async def search_global(query: str, page: int = 1, page_size: int = 20) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Resolve Username", openWorldHint=True, readOnlyHint=True)
 )
-async def resolve_username(username: str) -> str:
+@with_account(readonly=True)
+async def resolve_username(username: str, account: str = None) -> str:
     """
     Resolve a username to a user or chat ID.
     """
     try:
-        await ensure_connected()
-        result = await client(functions.contacts.ResolveUsernameRequest(username=username))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(functions.contacts.ResolveUsernameRequest(username=username))
         return str(result)
     except Exception as e:
         return log_and_format_error("resolve_username", e, username=username)
@@ -3996,7 +4330,8 @@ async def resolve_username(username: str) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Full User", openWorldHint=True, readOnlyHint=True)
 )
-async def get_full_user(username: Union[int, str]) -> str:
+@with_account(readonly=True)
+async def get_full_user(username: Union[int, str], account: str = None) -> str:
     """
     Get full profile info of a Telegram user including bio/about text,
     personal channel link, and other profile details.
@@ -4005,9 +4340,10 @@ async def get_full_user(username: Union[int, str]) -> str:
         username: The username (without @) or user ID to look up.
     """
     try:
-        await ensure_connected()
-        entity = await resolve_entity(username)
-        full = await client(functions.users.GetFullUserRequest(id=entity))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(username, cl)
+        full = await cl(functions.users.GetFullUserRequest(id=entity))
 
         user = full.users[0] if full.users else None
         full_user = full.full_user
@@ -4016,7 +4352,7 @@ async def get_full_user(username: Union[int, str]) -> str:
         personal_channel = None
         if personal_channel_id:
             try:
-                ch = await client.get_entity(personal_channel_id)
+                ch = await cl.get_entity(personal_channel_id)
                 ch_username = getattr(ch, "username", None)
                 personal_channel = (
                     f"https://t.me/{ch_username}" if ch_username else str(personal_channel_id)
@@ -4046,7 +4382,8 @@ async def get_full_user(username: Union[int, str]) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Full Chat", openWorldHint=True, readOnlyHint=True)
 )
-async def get_full_chat(chat_id: Union[int, str]) -> str:
+@with_account(readonly=True)
+async def get_full_chat(chat_id: Union[int, str], account: str = None) -> str:
     """
     Get full info of a channel or group including description/about text.
 
@@ -4054,9 +4391,10 @@ async def get_full_chat(chat_id: Union[int, str]) -> str:
         chat_id: The channel/group username (without @) or ID.
     """
     try:
-        await ensure_connected()
-        entity = await resolve_entity(chat_id)
-        full = await client(functions.channels.GetFullChannelRequest(channel=entity))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        full = await cl(functions.channels.GetFullChannelRequest(channel=entity))
 
         chat = full.chats[0] if full.chats else None
         full_chat = full.full_chat
@@ -4080,16 +4418,18 @@ async def get_full_chat(chat_id: Union[int, str]) -> str:
         title="Mute Chat", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def mute_chat(chat_id: Union[int, str]) -> str:
+async def mute_chat(chat_id: Union[int, str], account: str = None) -> str:
     """
     Mute notifications for a chat.
     """
     try:
+        cl = get_client(account)
         from telethon.tl.types import InputPeerNotifySettings
 
-        peer = await resolve_entity(chat_id)
-        await client(
+        peer = await resolve_entity(chat_id, cl)
+        await cl(
             functions.account.UpdateNotifySettingsRequest(
                 peer=peer, settings=InputPeerNotifySettings(mute_until=2**31 - 1)
             )
@@ -4098,8 +4438,8 @@ async def mute_chat(chat_id: Union[int, str]) -> str:
     except (ImportError, AttributeError) as type_err:
         try:
             # Alternative approach directly using raw API
-            peer = await resolve_input_entity(chat_id)
-            await client(
+            peer = await resolve_input_entity(chat_id, cl)
+            await cl(
                 functions.account.UpdateNotifySettingsRequest(
                     peer=peer,
                     settings={
@@ -4123,16 +4463,18 @@ async def mute_chat(chat_id: Union[int, str]) -> str:
         title="Unmute Chat", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def unmute_chat(chat_id: Union[int, str]) -> str:
+async def unmute_chat(chat_id: Union[int, str], account: str = None) -> str:
     """
     Unmute notifications for a chat.
     """
     try:
+        cl = get_client(account)
         from telethon.tl.types import InputPeerNotifySettings
 
-        peer = await resolve_entity(chat_id)
-        await client(
+        peer = await resolve_entity(chat_id, cl)
+        await cl(
             functions.account.UpdateNotifySettingsRequest(
                 peer=peer, settings=InputPeerNotifySettings(mute_until=0)
             )
@@ -4141,8 +4483,8 @@ async def unmute_chat(chat_id: Union[int, str]) -> str:
     except (ImportError, AttributeError) as type_err:
         try:
             # Alternative approach directly using raw API
-            peer = await resolve_input_entity(chat_id)
-            await client(
+            peer = await resolve_input_entity(chat_id, cl)
+            await cl(
                 functions.account.UpdateNotifySettingsRequest(
                     peer=peer,
                     settings={
@@ -4166,15 +4508,17 @@ async def unmute_chat(chat_id: Union[int, str]) -> str:
         title="Archive Chat", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def archive_chat(chat_id: Union[int, str]) -> str:
+async def archive_chat(chat_id: Union[int, str], account: str = None) -> str:
     """
     Archive a chat.
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
         peer = utils.get_input_peer(entity)
-        await client(
+        await cl(
             functions.folders.EditPeerFoldersRequest(
                 folder_peers=[types.InputFolderPeer(peer=peer, folder_id=1)]
             )
@@ -4189,15 +4533,17 @@ async def archive_chat(chat_id: Union[int, str]) -> str:
         title="Unarchive Chat", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def unarchive_chat(chat_id: Union[int, str]) -> str:
+async def unarchive_chat(chat_id: Union[int, str], account: str = None) -> str:
     """
     Unarchive a chat.
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
         peer = utils.get_input_peer(entity)
-        await client(
+        await cl(
             functions.folders.EditPeerFoldersRequest(
                 folder_peers=[types.InputFolderPeer(peer=peer, folder_id=0)]
             )
@@ -4210,13 +4556,15 @@ async def unarchive_chat(chat_id: Union[int, str]) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Sticker Sets", openWorldHint=True, readOnlyHint=True)
 )
-async def get_sticker_sets() -> str:
+@with_account(readonly=True)
+async def get_sticker_sets(account: str = None) -> str:
     """
     Get all sticker sets.
     """
     try:
-        await ensure_connected()
-        result = await client(functions.messages.GetAllStickersRequest(hash=0))
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(functions.messages.GetAllStickersRequest(hash=0))
         return json.dumps([s.title for s in result.sets], indent=2)
     except Exception as e:
         return log_and_format_error("get_sticker_sets", e)
@@ -4225,11 +4573,13 @@ async def get_sticker_sets() -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Send Sticker", openWorldHint=True, destructiveHint=True)
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def send_sticker(
     chat_id: Union[int, str],
     file_path: str,
     ctx: Optional[Context] = None,
+    account: str = None,
 ) -> str:
     """
     Send a sticker to a chat. File must be a valid .webp sticker file.
@@ -4239,6 +4589,7 @@ async def send_sticker(
         file_path: Absolute or relative path under allowed roots to the .webp sticker file.
     """
     try:
+        cl = get_client(account)
         safe_path, path_error = await _resolve_readable_file_path(
             raw_path=file_path,
             ctx=ctx,
@@ -4247,8 +4598,8 @@ async def send_sticker(
         if path_error:
             return path_error
 
-        entity = await resolve_entity(chat_id)
-        await client.send_file(entity, str(safe_path), force_document=False)
+        entity = await resolve_entity(chat_id, cl)
+        await cl.send_file(entity, str(safe_path), force_document=False)
         return f"Sticker sent to chat {chat_id} from {safe_path}."
     except Exception as e:
         return log_and_format_error("send_sticker", e, chat_id=chat_id, file_path=file_path)
@@ -4257,7 +4608,8 @@ async def send_sticker(
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Gif Search", openWorldHint=True, readOnlyHint=True)
 )
-async def get_gif_search(query: str, limit: int = 10) -> str:
+@with_account(readonly=True)
+async def get_gif_search(query: str, limit: int = 10, account: str = None) -> str:
     """
     Search for GIFs by query. Returns a list of Telegram document IDs (not file paths).
 
@@ -4266,10 +4618,11 @@ async def get_gif_search(query: str, limit: int = 10) -> str:
         limit: Max number of GIFs to return.
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         # Try approach 1: SearchGifsRequest
         try:
-            result = await client(
+            result = await cl(
                 functions.messages.SearchGifsRequest(q=query, offset_id=0, limit=limit)
             )
             if not result.gifs:
@@ -4282,7 +4635,7 @@ async def get_gif_search(query: str, limit: int = 10) -> str:
             try:
                 from telethon.tl.types import InputMessagesFilterGif
 
-                result = await client(
+                result = await cl(
                     functions.messages.SearchRequest(
                         peer="gif",
                         q=query,
@@ -4314,8 +4667,9 @@ async def get_gif_search(query: str, limit: int = 10) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Send Gif", openWorldHint=True, destructiveHint=True))
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def send_gif(chat_id: Union[int, str], gif_id: int) -> str:
+async def send_gif(chat_id: Union[int, str], gif_id: int, account: str = None) -> str:
     """
     Send a GIF to a chat by Telegram GIF document ID (not a file path).
 
@@ -4324,10 +4678,11 @@ async def send_gif(chat_id: Union[int, str], gif_id: int) -> str:
         gif_id: Telegram document ID for the GIF (from get_gif_search).
     """
     try:
+        cl = get_client(account)
         if not isinstance(gif_id, int):
             return "gif_id must be a Telegram document ID (integer), not a file path. Use get_gif_search to find IDs."
-        entity = await resolve_entity(chat_id)
-        await client.send_file(entity, gif_id)
+        entity = await resolve_entity(chat_id, cl)
+        await cl.send_file(entity, gif_id)
         return f"GIF sent to chat {chat_id}."
     except Exception as e:
         return log_and_format_error("send_gif", e, chat_id=chat_id, gif_id=gif_id)
@@ -4336,6 +4691,7 @@ async def send_gif(chat_id: Union[int, str], gif_id: int) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Send Contact", openWorldHint=True, destructiveHint=True)
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def send_contact(
     chat_id: Union[int, str],
@@ -4343,6 +4699,7 @@ async def send_contact(
     first_name: str,
     last_name: str = "",
     vcard: str = "",
+    account: str = None,
 ) -> str:
     """
     Send a contact to a chat.
@@ -4354,11 +4711,13 @@ async def send_contact(
         vcard: Additional vCard data (optional).
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
         from telethon.tl.types import InputMediaContact
         import random
 
-        await client(
+        await cl(
             functions.messages.SendMediaRequest(
                 peer=entity,
                 media=InputMediaContact(
@@ -4377,16 +4736,18 @@ async def send_contact(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Bot Info", openWorldHint=True, readOnlyHint=True))
-async def get_bot_info(bot_username: str) -> str:
+@with_account(readonly=True)
+async def get_bot_info(bot_username: str, account: str = None) -> str:
     """
     Get information about a bot by username.
     """
     try:
-        entity = await resolve_entity(bot_username)
+        cl = get_client(account)
+        entity = await resolve_entity(bot_username, cl)
         if not entity:
             return f"Bot with username {bot_username} not found."
 
-        result = await client(functions.users.GetFullUserRequest(id=entity))
+        result = await cl(functions.users.GetFullUserRequest(id=entity))
 
         # Create a more structured, serializable response
         if hasattr(result, "to_dict"):
@@ -4417,7 +4778,8 @@ async def get_bot_info(bot_username: str) -> str:
         title="Set Bot Commands", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
-async def set_bot_commands(bot_username: str, commands: list) -> str:
+@with_account(readonly=False)
+async def set_bot_commands(bot_username: str, commands: list, account: str = None) -> str:
     """
     Set bot commands for a bot you own.
     Note: This function can only be used if the Telegram client is a bot account.
@@ -4428,8 +4790,9 @@ async def set_bot_commands(bot_username: str, commands: list) -> str:
         commands: List of command dictionaries with 'command' and 'description' keys.
     """
     try:
+        cl = get_client(account)
         # First check if the current client is a bot
-        me = await client.get_me()
+        me = await cl.get_me()
         if not getattr(me, "bot", False):
             return "Error: This function can only be used by bot accounts. Your current Telegram account is a regular user account, not a bot."
 
@@ -4443,10 +4806,10 @@ async def set_bot_commands(bot_username: str, commands: list) -> str:
         ]
 
         # Get the bot entity
-        bot = await resolve_entity(bot_username)
+        bot = await resolve_entity(bot_username, cl)
 
         # Set the commands with proper scope
-        await client(
+        await cl(
             SetBotCommandsRequest(
                 scope=BotCommandScopeDefault(),
                 lang_code="en",  # Default language code
@@ -4464,14 +4827,16 @@ async def set_bot_commands(bot_username: str, commands: list) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get History", openWorldHint=True, readOnlyHint=True))
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_history(chat_id: Union[int, str], limit: int = 100) -> str:
+async def get_history(chat_id: Union[int, str], limit: int = 100, account: str = None) -> str:
     """
     Get full chat history (up to limit).
     """
     try:
-        entity = await resolve_entity(chat_id)
-        messages = await client.get_messages(entity, limit=limit)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        messages = await cl.get_messages(entity, limit=limit)
 
         lines = []
         for msg in messages:
@@ -4490,14 +4855,16 @@ async def get_history(chat_id: Union[int, str], limit: int = 100) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get User Photos", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("user_id")
-async def get_user_photos(user_id: Union[int, str], limit: int = 10) -> str:
+async def get_user_photos(user_id: Union[int, str], limit: int = 10, account: str = None) -> str:
     """
     Get profile photos of a user.
     """
     try:
-        user = await resolve_entity(user_id)
-        photos = await client(
+        cl = get_client(account)
+        user = await resolve_entity(user_id, cl)
+        photos = await cl(
             functions.photos.GetUserPhotosRequest(user_id=user, offset=0, max_id=0, limit=limit)
         )
         return json.dumps([p.id for p in photos.photos], indent=2)
@@ -4508,13 +4875,15 @@ async def get_user_photos(user_id: Union[int, str], limit: int = 10) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get User Status", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("user_id")
-async def get_user_status(user_id: Union[int, str]) -> str:
+async def get_user_status(user_id: Union[int, str], account: str = None) -> str:
     """
     Get the online status of a user.
     """
     try:
-        user = await resolve_entity(user_id)
+        cl = get_client(account)
+        user = await resolve_entity(user_id, cl)
         return str(user.status)
     except Exception as e:
         return log_and_format_error("get_user_status", e, user_id=user_id)
@@ -4523,14 +4892,16 @@ async def get_user_status(user_id: Union[int, str]) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Recent Actions", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_recent_actions(chat_id: Union[int, str]) -> str:
+async def get_recent_actions(chat_id: Union[int, str], account: str = None) -> str:
     """
     Get recent admin actions (admin log) in a group or channel.
     """
     try:
-        await ensure_connected()
-        result = await client(
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(
             functions.channels.GetAdminLogRequest(
                 channel=chat_id,
                 q="",
@@ -4555,23 +4926,25 @@ async def get_recent_actions(chat_id: Union[int, str]) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Pinned Messages", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_pinned_messages(chat_id: Union[int, str]) -> str:
+async def get_pinned_messages(chat_id: Union[int, str], account: str = None) -> str:
     """
     Get all pinned messages in a chat.
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
 
         # Use correct filter based on Telethon version
         try:
             # Try newer Telethon approach
             from telethon.tl.types import InputMessagesFilterPinned
 
-            messages = await client.get_messages(entity, filter=InputMessagesFilterPinned())
+            messages = await cl.get_messages(entity, filter=InputMessagesFilterPinned())
         except (ImportError, AttributeError):
             # Fallback - try without filter and manually filter pinned
-            all_messages = await client.get_messages(entity, limit=50)
+            all_messages = await cl.get_messages(entity, limit=50)
             messages = [m for m in all_messages if getattr(m, "pinned", False)]
 
         if not messages:
@@ -4596,6 +4969,7 @@ async def get_pinned_messages(chat_id: Union[int, str]) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Create Poll", openWorldHint=True, destructiveHint=True)
 )
+@with_account(readonly=False)
 async def create_poll(
     chat_id: int,
     question: str,
@@ -4604,6 +4978,7 @@ async def create_poll(
     quiz_mode: bool = False,
     public_votes: bool = True,
     close_date: str = None,
+    account: str = None,
 ) -> str:
     """
     Create a poll in a chat using Telegram's native poll feature.
@@ -4618,7 +4993,8 @@ async def create_poll(
         close_date: Optional close date in ISO format (YYYY-MM-DD HH:MM:SS)
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
 
         # Validate options
         if len(options) < 2:
@@ -4651,7 +5027,7 @@ async def create_poll(
             close_date=close_date_obj,
         )
 
-        result = await client(
+        result = await cl(
             functions.messages.SendMediaRequest(
                 peer=entity,
                 media=InputMediaPoll(poll=poll),
@@ -4673,12 +5049,14 @@ async def create_poll(
         title="Send Reaction", openWorldHint=True, destructiveHint=False, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def send_reaction(
     chat_id: Union[int, str],
     message_id: int,
     emoji: str,
     big: bool = False,
+    account: str = None,
 ) -> str:
     """
     Send a reaction to a message.
@@ -4690,10 +5068,11 @@ async def send_reaction(
         big: Whether to show a big animation for the reaction (default: False)
     """
     try:
+        cl = get_client(account)
         from telethon.tl.types import ReactionEmoji
 
-        peer = await resolve_input_entity(chat_id)
-        await client(
+        peer = await resolve_input_entity(chat_id, cl)
+        await cl(
             functions.messages.SendReactionRequest(
                 peer=peer,
                 msg_id=message_id,
@@ -4716,10 +5095,12 @@ async def send_reaction(
         title="Remove Reaction", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def remove_reaction(
     chat_id: Union[int, str],
     message_id: int,
+    account: str = None,
 ) -> str:
     """
     Remove your reaction from a message.
@@ -4729,8 +5110,9 @@ async def remove_reaction(
         message_id: The message ID to remove reaction from
     """
     try:
-        peer = await resolve_input_entity(chat_id)
-        await client(
+        cl = get_client(account)
+        peer = await resolve_input_entity(chat_id, cl)
+        await cl(
             functions.messages.SendReactionRequest(
                 peer=peer,
                 msg_id=message_id,
@@ -4748,11 +5130,13 @@ async def remove_reaction(
         title="Get Message Reactions", openWorldHint=True, readOnlyHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
 async def get_message_reactions(
     chat_id: Union[int, str],
     message_id: int,
     limit: int = 50,
+    account: str = None,
 ) -> str:
     """
     Get the list of reactions on a message.
@@ -4763,11 +5147,12 @@ async def get_message_reactions(
         limit: Maximum number of users to return per reaction (default: 50)
     """
     try:
+        cl = get_client(account)
         from telethon.tl.types import ReactionEmoji, ReactionCustomEmoji
 
-        peer = await resolve_input_entity(chat_id)
+        peer = await resolve_input_entity(chat_id, cl)
 
-        result = await client(
+        result = await cl(
             functions.messages.GetMessageReactionsListRequest(
                 peer=peer,
                 id=message_id,
@@ -4824,12 +5209,14 @@ async def get_message_reactions(
         title="Save Draft", openWorldHint=True, destructiveHint=False, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def save_draft(
     chat_id: Union[int, str],
     message: str,
     reply_to_msg_id: Optional[int] = None,
     no_webpage: bool = False,
+    account: str = None,
 ) -> str:
     """
     Save a draft message to a chat or channel. The draft will appear in the Telegram
@@ -4842,7 +5229,8 @@ async def save_draft(
         no_webpage: If True, disable link preview in the draft
     """
     try:
-        peer = await resolve_input_entity(chat_id)
+        cl = get_client(account)
+        peer = await resolve_input_entity(chat_id, cl)
 
         # Build reply_to parameter if provided
         reply_to = None
@@ -4851,7 +5239,7 @@ async def save_draft(
 
             reply_to = InputReplyToMessage(reply_to_msg_id=reply_to_msg_id)
 
-        await client(
+        await cl(
             functions.messages.SaveDraftRequest(
                 peer=peer,
                 message=message,
@@ -4867,14 +5255,16 @@ async def save_draft(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Drafts", openWorldHint=True, readOnlyHint=True))
-async def get_drafts() -> str:
+@with_account(readonly=True)
+async def get_drafts(account: str = None) -> str:
     """
     Get all draft messages across all chats.
     Returns a list of drafts with their chat info and message content.
     """
     try:
-        await ensure_connected()
-        result = await client(functions.messages.GetAllDraftsRequest())
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(functions.messages.GetAllDraftsRequest())
 
         # The result contains updates with draft info
         drafts_info = []
@@ -4929,8 +5319,9 @@ async def get_drafts() -> str:
         title="Clear Draft", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def clear_draft(chat_id: Union[int, str]) -> str:
+async def clear_draft(chat_id: Union[int, str], account: str = None) -> str:
     """
     Clear/delete a draft from a specific chat.
 
@@ -4938,10 +5329,11 @@ async def clear_draft(chat_id: Union[int, str]) -> str:
         chat_id: The chat ID or username to clear the draft from
     """
     try:
-        peer = await resolve_input_entity(chat_id)
+        cl = get_client(account)
+        peer = await resolve_input_entity(chat_id, cl)
 
         # Saving an empty message clears the draft
-        await client(
+        await cl(
             functions.messages.SaveDraftRequest(
                 peer=peer,
                 message="",
@@ -4960,14 +5352,16 @@ async def clear_draft(chat_id: Union[int, str]) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List Folders", openWorldHint=True, readOnlyHint=True))
-async def list_folders() -> str:
+@with_account(readonly=True)
+async def list_folders(account: str = None) -> str:
     """
     Get all dialog folders (filters) with their IDs, names, and emoji.
     Returns a list of folders that can be used with other folder tools.
     """
     try:
-        await ensure_connected()
-        result = await client(functions.messages.GetDialogFiltersRequest())
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(functions.messages.GetDialogFiltersRequest())
 
         folders = []
         for f in result.filters:
@@ -5025,7 +5419,8 @@ async def list_folders() -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Folder", openWorldHint=True, readOnlyHint=True))
-async def get_folder(folder_id: int) -> str:
+@with_account(readonly=True)
+async def get_folder(folder_id: int, account: str = None) -> str:
     """
     Get detailed information about a specific folder including all included chats.
 
@@ -5033,7 +5428,8 @@ async def get_folder(folder_id: int) -> str:
         folder_id: The folder ID (get from list_folders)
     """
     try:
-        result = await client(functions.messages.GetDialogFiltersRequest())
+        cl = get_client(account)
+        result = await cl(functions.messages.GetDialogFiltersRequest())
 
         target_folder = None
         for f in result.filters:
@@ -5050,7 +5446,7 @@ async def get_folder(folder_id: int) -> str:
         included_chats = []
         for peer in getattr(target_folder, "include_peers", []):
             try:
-                entity = await resolve_entity(peer)
+                entity = await resolve_entity(peer, cl)
                 chat_info = {
                     "id": entity.id,
                     "name": getattr(entity, "title", None)
@@ -5067,7 +5463,7 @@ async def get_folder(folder_id: int) -> str:
         excluded_chats = []
         for peer in getattr(target_folder, "exclude_peers", []):
             try:
-                entity = await resolve_entity(peer)
+                entity = await resolve_entity(peer, cl)
                 chat_info = {
                     "id": entity.id,
                     "name": getattr(entity, "title", None)
@@ -5082,7 +5478,7 @@ async def get_folder(folder_id: int) -> str:
         pinned_chats = []
         for peer in getattr(target_folder, "pinned_peers", []):
             try:
-                entity = await resolve_entity(peer)
+                entity = await resolve_entity(peer, cl)
                 chat_info = {
                     "id": entity.id,
                     "name": getattr(entity, "title", None)
@@ -5132,6 +5528,7 @@ async def get_folder(folder_id: int) -> str:
         title="Create Folder", openWorldHint=True, destructiveHint=True, idempotentHint=False
     )
 )
+@with_account(readonly=False)
 async def create_folder(
     title: str,
     emoticon: Optional[str] = None,
@@ -5144,6 +5541,7 @@ async def create_folder(
     exclude_muted: bool = False,
     exclude_read: bool = False,
     exclude_archived: bool = True,
+    account: str = None,
 ) -> str:
     """
     Create a new dialog folder.
@@ -5162,8 +5560,9 @@ async def create_folder(
         exclude_archived: Exclude archived chats (default True)
     """
     try:
+        cl = get_client(account)
         # Get existing folders to check count and find next ID
-        result = await client(functions.messages.GetDialogFiltersRequest())
+        result = await cl(functions.messages.GetDialogFiltersRequest())
 
         existing_ids = set()
         folder_count = 0
@@ -5186,7 +5585,7 @@ async def create_folder(
         if chat_ids:
             for chat_id in chat_ids:
                 try:
-                    peer = await resolve_input_entity(chat_id)
+                    peer = await resolve_input_entity(chat_id, cl)
                     include_peers.append(peer)
                 except Exception as e:
                     return f"Failed to resolve chat '{chat_id}': {str(e)}"
@@ -5210,7 +5609,7 @@ async def create_folder(
             exclude_archived=exclude_archived,
         )
 
-        await client(functions.messages.UpdateDialogFilterRequest(id=new_id, filter=new_filter))
+        await cl(functions.messages.UpdateDialogFilterRequest(id=new_id, filter=new_filter))
 
         return json.dumps(
             {
@@ -5232,9 +5631,13 @@ async def create_folder(
         title="Add Chat to Folder", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
 async def add_chat_to_folder(
-    folder_id: int, chat_id: Union[int, str], pinned: bool = False
+    folder_id: int,
+    chat_id: Union[int, str],
+    pinned: bool = False,
+    account: str = None,
 ) -> str:
     """
     Add a chat to an existing folder.
@@ -5245,8 +5648,9 @@ async def add_chat_to_folder(
         pinned: Pin the chat in this folder (default False)
     """
     try:
+        cl = get_client(account)
         # Get the folder
-        result = await client(functions.messages.GetDialogFiltersRequest())
+        result = await cl(functions.messages.GetDialogFiltersRequest())
 
         target_folder = None
         for f in result.filters:
@@ -5261,7 +5665,7 @@ async def add_chat_to_folder(
 
         # Resolve chat to input peer
         try:
-            peer = await resolve_input_entity(chat_id)
+            peer = await resolve_input_entity(chat_id, cl)
         except Exception as e:
             return f"Failed to resolve chat '{chat_id}': {str(e)}"
 
@@ -5314,9 +5718,7 @@ async def add_chat_to_folder(
                 color=getattr(target_folder, "color", None),
             )
 
-        await client(
-            functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter)
-        )
+        await cl(functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter))
 
         return (
             f"Chat {chat_id} added to folder {folder_id}" + (" (pinned)" if pinned else "") + "."
@@ -5336,8 +5738,11 @@ async def add_chat_to_folder(
         idempotentHint=True,
     )
 )
+@with_account(readonly=False)
 @validate_id("chat_id")
-async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str]) -> str:
+async def remove_chat_from_folder(
+    folder_id: int, chat_id: Union[int, str], account: str = None
+) -> str:
     """
     Remove a chat from a folder.
 
@@ -5346,8 +5751,9 @@ async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str]) -> s
         chat_id: Chat ID or username to remove
     """
     try:
+        cl = get_client(account)
         # Get the folder
-        result = await client(functions.messages.GetDialogFiltersRequest())
+        result = await cl(functions.messages.GetDialogFiltersRequest())
 
         target_folder = None
         for f in result.filters:
@@ -5362,7 +5768,7 @@ async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str]) -> s
 
         # Resolve chat to get peer ID
         try:
-            peer = await resolve_input_entity(chat_id)
+            peer = await resolve_input_entity(chat_id, cl)
             peer_id = utils.get_peer_id(peer)
         except Exception as e:
             return f"Failed to resolve chat '{chat_id}': {str(e)}"
@@ -5420,9 +5826,7 @@ async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str]) -> s
                 color=getattr(target_folder, "color", None),
             )
 
-        await client(
-            functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter)
-        )
+        await cl(functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter))
 
         return f"Chat {chat_id} removed from folder {folder_id}."
     except Exception as e:
@@ -5443,7 +5847,8 @@ async def remove_chat_from_folder(folder_id: int, chat_id: Union[int, str]) -> s
         title="Delete Folder", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
-async def delete_folder(folder_id: int) -> str:
+@with_account(readonly=False)
+async def delete_folder(folder_id: int, account: str = None) -> str:
     """
     Delete a folder. Chats in the folder are preserved, only the folder is removed.
 
@@ -5451,13 +5856,14 @@ async def delete_folder(folder_id: int) -> str:
         folder_id: The folder ID to delete (get from list_folders)
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         # System folders (id < 2) cannot be deleted
         if folder_id < 2:
             return f"Cannot delete system folder (ID {folder_id}). Only custom folders can be deleted."
 
         # Check if folder exists
-        result = await client(functions.messages.GetDialogFiltersRequest())
+        result = await cl(functions.messages.GetDialogFiltersRequest())
 
         folder_exists = False
         folder_title = None
@@ -5475,7 +5881,7 @@ async def delete_folder(folder_id: int) -> str:
             return f"Folder with ID {folder_id} not found (may already be deleted)."
 
         # Delete by passing None as filter
-        await client(functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=None))
+        await cl(functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=None))
 
         return f"Folder '{folder_title}' (ID {folder_id}) deleted. Chats are preserved."
     except Exception as e:
@@ -5488,7 +5894,8 @@ async def delete_folder(folder_id: int) -> str:
         title="Reorder Folders", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
-async def reorder_folders(folder_ids: List[int]) -> str:
+@with_account(readonly=False)
+async def reorder_folders(folder_ids: List[int], account: str = None) -> str:
     """
     Change the order of folders in the folder list.
 
@@ -5496,9 +5903,10 @@ async def reorder_folders(folder_ids: List[int]) -> str:
         folder_ids: List of folder IDs in the desired order
     """
     try:
-        await ensure_connected()
+        cl = get_client(account)
+        await ensure_connected(cl)
         # Get existing folders to validate
-        result = await client(functions.messages.GetDialogFiltersRequest())
+        result = await cl(functions.messages.GetDialogFiltersRequest())
 
         existing_ids = set()
         for f in result.filters:
@@ -5516,7 +5924,7 @@ async def reorder_folders(folder_ids: List[int]) -> str:
             return f"All folder IDs must be included. Missing: {missing}"
 
         # Reorder
-        await client(functions.messages.UpdateDialogFiltersOrderRequest(order=folder_ids))
+        await cl(functions.messages.UpdateDialogFiltersOrderRequest(order=folder_ids))
 
         return f"Folders reordered: {folder_ids}"
     except Exception as e:
@@ -5534,8 +5942,11 @@ async def reorder_folders(folder_ids: List[int]) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Common Chats", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("user_id")
-async def get_common_chats(user_id: Union[int, str], limit: int = 100, max_id: int = 0) -> str:
+async def get_common_chats(
+    user_id: Union[int, str], limit: int = 100, max_id: int = 0, account: str = None
+) -> str:
     """
     List chats shared with a specific user.
 
@@ -5546,14 +5957,16 @@ async def get_common_chats(user_id: Union[int, str], limit: int = 100, max_id: i
             page to fetch older shared chats. Use 0 (default) for the first page.
     """
     try:
+        cl = get_client(account)
+        await ensure_connected(cl)
         # Telegram caps the limit at 100
         if limit > 100:
             limit = 100
         if limit < 1:
             limit = 1
 
-        user_entity = await resolve_entity(user_id)
-        result = await client(
+        user_entity = await resolve_entity(user_id, cl)
+        result = await cl(
             functions.messages.GetCommonChatsRequest(
                 user_id=user_entity, max_id=max_id, limit=limit
             )
@@ -5586,8 +5999,11 @@ async def get_common_chats(user_id: Union[int, str], limit: int = 100, max_id: i
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Message Read By", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_message_read_by(chat_id: Union[int, str], message_id: int) -> str:
+async def get_message_read_by(
+    chat_id: Union[int, str], message_id: int, account: str = None
+) -> str:
     """
     List user IDs who have read a specific message.
 
@@ -5600,6 +6016,8 @@ async def get_message_read_by(chat_id: Union[int, str], message_id: int) -> str:
         message_id: The message ID to check read receipts for.
     """
     try:
+        cl = get_client(account)
+        await ensure_connected(cl)
         from telethon.errors.rpcerrorlist import (
             ChatAdminRequiredError,
             UserNotParticipantError,
@@ -5607,9 +6025,9 @@ async def get_message_read_by(chat_id: Union[int, str], message_id: int) -> str:
             PeerIdInvalidError,
         )
 
-        entity = await resolve_entity(chat_id)
+        entity = await resolve_entity(chat_id, cl)
         try:
-            result = await client(
+            result = await cl(
                 functions.messages.GetMessageReadParticipantsRequest(
                     peer=entity, msg_id=message_id
                 )
@@ -5672,8 +6090,11 @@ async def get_message_read_by(chat_id: Union[int, str], message_id: int) -> str:
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Message Link", openWorldHint=True, readOnlyHint=True)
 )
+@with_account(readonly=True)
 @validate_id("chat_id")
-async def get_message_link(chat_id: Union[int, str], message_id: int, thread: bool = False) -> str:
+async def get_message_link(
+    chat_id: Union[int, str], message_id: int, thread: bool = False, account: str = None
+) -> str:
     """
     Export a t.me/... link for a specific message.
 
@@ -5688,7 +6109,9 @@ async def get_message_link(chat_id: Union[int, str], message_id: int, thread: bo
             discussion).
     """
     try:
-        entity = await resolve_entity(chat_id)
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
         if not isinstance(entity, Channel):
             return (
                 f"Cannot export message link for this entity type "
@@ -5696,7 +6119,7 @@ async def get_message_link(chat_id: Union[int, str], message_id: int, thread: bo
                 f"for channels and supergroups."
             )
 
-        result = await client(
+        result = await cl(
             functions.channels.ExportMessageLinkRequest(
                 channel=entity, id=message_id, grouped=False, thread=thread
             )
@@ -5727,16 +6150,16 @@ async def get_message_link(chat_id: Union[int, str], message_id: int, thread: bo
 
 async def _main() -> None:
     try:
-        # Start the Telethon client non-interactively
-        print("Starting Telegram client...", file=sys.stderr)
-        await client.start()
+        labels = ", ".join(clients.keys())
+        print(f"Starting {len(clients)} Telegram client(s) ({labels})...", file=sys.stderr)
+        await asyncio.gather(*(cl.start() for cl in clients.values()))
 
-        # Warm entity cache — StringSession has no persistent cache,
-        # so fetch all dialogs once to populate it
-        print("Warming entity cache...", file=sys.stderr)
-        await client.get_dialogs()
+        # Warm entity caches — StringSession has no persistent cache,
+        # so fetch all dialogs once per client to populate them
+        print("Warming entity caches...", file=sys.stderr)
+        await asyncio.gather(*(cl.get_dialogs() for cl in clients.values()))
 
-        print("Telegram client started. Running MCP server...", file=sys.stderr)
+        print(f"Telegram client(s) started ({labels}). Running MCP server...", file=sys.stderr)
         # Use the asynchronous entrypoint instead of mcp.run()
         await mcp.run_stdio_async()
     except Exception as e:
@@ -5749,7 +6172,9 @@ async def _main() -> None:
         sys.exit(1)
     finally:
         try:
-            await client.disconnect()
+            await asyncio.gather(
+                *(cl.disconnect() for cl in clients.values()), return_exceptions=True
+            )
         except Exception:
             pass
 

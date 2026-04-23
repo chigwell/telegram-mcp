@@ -111,7 +111,13 @@ def main() -> None:
         "\nYour credentials will NOT be stored on any server and are only used for local authentication.\n"
     )
 
-    print("Choose login method:")
+    label = (
+        input("Account label (optional, e.g. 'work', 'personal'; leave empty for default): ")
+        .strip()
+        .lower()
+    )
+
+    print("\nChoose login method:")
     print("  1) QR code login (recommended -- scan from your Telegram app)")
     print("  2) Phone number + verification code")
     method = input("\nEnter 1 or 2 [default: 1]: ").strip() or "1"
@@ -128,11 +134,16 @@ def main() -> None:
 
         session_string = StringSession.save(client.session)
 
+        if label:
+            env_var = f"TELEGRAM_SESSION_STRING_{label.upper()}"
+        else:
+            env_var = "TELEGRAM_SESSION_STRING"
+
         print("\nAuthentication successful!")
         print("\n----- Your Session String -----")
         print(f"\n{session_string}\n")
         print("Add this to your .env file as:")
-        print(f"TELEGRAM_SESSION_STRING={session_string}")
+        print(f"{env_var}={session_string}")
         print("\nIMPORTANT: Keep this string private and never share it with anyone!")
 
         choice = input(
@@ -145,13 +156,13 @@ def main() -> None:
 
                 session_string_line_found = False
                 for i, line in enumerate(env_contents):
-                    if line.startswith("TELEGRAM_SESSION_STRING="):
-                        env_contents[i] = f"TELEGRAM_SESSION_STRING={session_string}\n"
+                    if line.startswith(f"{env_var}="):
+                        env_contents[i] = f"{env_var}={session_string}\n"
                         session_string_line_found = True
                         break
 
                 if not session_string_line_found:
-                    env_contents.append(f"TELEGRAM_SESSION_STRING={session_string}\n")
+                    env_contents.append(f"{env_var}={session_string}\n")
 
                 with open(".env", "w") as file:
                     file.writelines(env_contents)
