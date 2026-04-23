@@ -98,6 +98,20 @@ SESSION_STRING = os.getenv("TELEGRAM_SESSION_STRING")
 
 mcp = FastMCP("telegram")
 
+allowed_tools_env = os.getenv("ALLOWED_TOOLS")
+if allowed_tools_env:
+    allowed_tools_list = [t.strip() for t in allowed_tools_env.split(",")]
+    original_tool = mcp.tool
+
+    def filtered_tool(*args, **kwargs):
+        def decorator(func):
+            if func.__name__ in allowed_tools_list:
+                return original_tool(*args, **kwargs)(func)
+            return func
+        return decorator
+
+    mcp.tool = filtered_tool
+
 if SESSION_STRING:
     # Use the string session if available
     client = TelegramClient(StringSession(SESSION_STRING), TELEGRAM_API_ID, TELEGRAM_API_HASH)
@@ -3833,11 +3847,43 @@ async def unpin_all_messages(chat_id: Union[int, str]) -> str:
 @validate_id("chat_id")
 async def mark_as_read(chat_id: Union[int, str]) -> str:
     """
-    Mark all messages as read in a chat.
+    Mark all messages as read in a chat, including forum topics if applicable.
     """
     try:
+        from telethon.tl.functions.messages import GetForumTopicsRequest, ReadDiscussionRequest
+        
         entity = await resolve_entity(chat_id)
-        await client.send_read_acknowledge(entity)
+        # Mark general chat history as read
+        await client.send_read_acknowledge(entity, clear_mentions=True)
+        
+        # Try to mark forum topics as read
+        try:
+            topics_result = await client(GetForumTopicsRequest(
+                channel=entity,
+                q="",
+                offset_date=0,
+                offset_id=0,
+                offset_topic=0,
+                limit=100
+            ))
+            if hasattr(topics_result, 'topics'):
+                for topic in topics_result.topics:
+                    unread_count = getattr(topic, 'unread_count', 0)
+                    unread_mentions = getattr(topic, 'unread_mentions_count', 0)
+                    if unread_count > 0 or unread_mentions > 0:
+                        try:
+                            # Use ReadDiscussionRequest which supports reading threads/topics
+                            await client(ReadDiscussionRequest(
+                                peer=entity,
+                                msg_id=topic.id,
+                                read_max_id=0
+                            ))
+                        except Exception as inner_e:
+                            logger.debug(f"Failed to read topic {topic.id} in {chat_id}: {inner_e}")
+        except Exception as e:
+            # If it's not a forum or we lack permissions, safely ignore
+            pass
+            
         return f"Marked all messages as read in chat {chat_id}."
     except Exception as e:
         return log_and_format_error("mark_as_read", e, chat_id=chat_id)
