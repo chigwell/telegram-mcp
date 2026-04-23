@@ -208,7 +208,6 @@ def with_account(readonly=False):
     return decorator
 
 
-
 _last_conn_verified: dict[int, float] = {}
 _CONN_VERIFY_INTERVAL: float = 30.0  # seconds between live pings
 
@@ -1112,9 +1111,7 @@ async def delete_scheduled_message(
         if not message_ids:
             return "message_ids must be a non-empty list."
         entity = await resolve_entity(chat_id, cl)
-        await cl(
-            functions.messages.DeleteScheduledMessagesRequest(peer=entity, id=message_ids)
-        )
+        await cl(functions.messages.DeleteScheduledMessagesRequest(peer=entity, id=message_ids))
         return f"Deleted {len(message_ids)} scheduled message(s) from chat {chat_id}."
     except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
         return log_and_format_error(
@@ -1792,14 +1789,10 @@ async def list_chats(
                 about_text = ""
                 try:
                     if isinstance(entity, Channel):
-                        full = await cl(
-                            functions.channels.GetFullChannelRequest(channel=entity)
-                        )
+                        full = await cl(functions.channels.GetFullChannelRequest(channel=entity))
                         about_text = getattr(full.full_chat, "about", "") or ""
                     elif isinstance(entity, Chat):
-                        full = await cl(
-                            functions.messages.GetFullChatRequest(chat_id=entity.id)
-                        )
+                        full = await cl(functions.messages.GetFullChatRequest(chat_id=entity.id))
                         about_text = getattr(full.full_chat, "about", "") or ""
                     elif isinstance(entity, User):
                         full = await cl(functions.users.GetFullUserRequest(id=entity))
@@ -3463,9 +3456,7 @@ async def set_default_chat_permissions(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
-async def toggle_slow_mode(
-    chat_id: Union[int, str], seconds: int = 0, account: str = None
-) -> str:
+async def toggle_slow_mode(chat_id: Union[int, str], seconds: int = 0, account: str = None) -> str:
     """
     Enable or disable slow mode for a supergroup.
 
