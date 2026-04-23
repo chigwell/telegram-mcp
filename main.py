@@ -5526,6 +5526,205 @@ async def reorder_folders(folder_ids: List[int]) -> str:
         )
 
 
+# ============================================================================
+# CHAT DISCOVERY TOOLS
+# ============================================================================
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Get Common Chats", openWorldHint=True, readOnlyHint=True)
+)
+@validate_id("user_id")
+async def get_common_chats(user_id: Union[int, str], limit: int = 100, max_id: int = 0) -> str:
+    """
+    List chats shared with a specific user.
+
+    Args:
+        user_id: The user ID or username to check shared chats for.
+        limit: Maximum number of shared chats to return (max 100).
+        max_id: Pagination cursor — pass the last chat ID from the previous
+            page to fetch older shared chats. Use 0 (default) for the first page.
+    """
+    try:
+        # Telegram caps the limit at 100
+        if limit > 100:
+            limit = 100
+        if limit < 1:
+            limit = 1
+
+        user_entity = await resolve_entity(user_id)
+        result = await client(
+            functions.messages.GetCommonChatsRequest(
+                user_id=user_entity, max_id=max_id, limit=limit
+            )
+        )
+
+        chats = getattr(result, "chats", []) or []
+        if not chats:
+            return f"No common chats found with user {user_id}."
+
+        lines = []
+        for chat in chats:
+            line = f"Chat ID: {chat.id}"
+            if hasattr(chat, "title") and chat.title:
+                line += f", Title: {chat.title}"
+            line += f", Type: {get_entity_type(chat)}"
+            if hasattr(chat, "username") and chat.username:
+                line += f", Username: @{chat.username}"
+            lines.append(line)
+
+        return "\n".join(lines)
+    except Exception as e:
+        logger.exception(
+            f"get_common_chats failed (user_id={user_id}, limit={limit}, max_id={max_id})"
+        )
+        return log_and_format_error(
+            "get_common_chats", e, user_id=user_id, limit=limit, max_id=max_id
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Get Message Read By", openWorldHint=True, readOnlyHint=True)
+)
+@validate_id("chat_id")
+async def get_message_read_by(chat_id: Union[int, str], message_id: int) -> str:
+    """
+    List user IDs who have read a specific message.
+
+    Works in small groups and supergroups where read-marker tracking is
+    enabled (Telegram exposes read receipts for groups up to a fixed size
+    and only for messages sent within the last ~7 days).
+
+    Args:
+        chat_id: The chat ID or username.
+        message_id: The message ID to check read receipts for.
+    """
+    try:
+        from telethon.errors.rpcerrorlist import (
+            ChatAdminRequiredError,
+            UserNotParticipantError,
+            MsgTooOldError,
+            PeerIdInvalidError,
+        )
+
+        entity = await resolve_entity(chat_id)
+        try:
+            result = await client(
+                functions.messages.GetMessageReadParticipantsRequest(
+                    peer=entity, msg_id=message_id
+                )
+            )
+        except MsgTooOldError:
+            return (
+                f"Read receipts unavailable for message {message_id} in chat "
+                f"{chat_id}: message is too old or read receipts are disabled."
+            )
+        except ChatAdminRequiredError:
+            return (
+                f"Cannot read receipts for message {message_id} in chat {chat_id}: "
+                f"admin rights are required."
+            )
+        except UserNotParticipantError:
+            return (
+                f"Cannot read receipts for message {message_id} in chat {chat_id}: "
+                f"you are not a participant of this chat."
+            )
+        except PeerIdInvalidError:
+            return f"Invalid chat: {chat_id}."
+
+        # result is a list of ReadParticipantDate objects in newer Telethon,
+        # or a list of user IDs (ints) in older layers. Handle both.
+        if not result:
+            return f"No read receipts available for message {message_id} in chat " f"{chat_id}."
+
+        readers = []
+        for item in result:
+            if hasattr(item, "user_id"):
+                readers.append(
+                    {
+                        "user_id": item.user_id,
+                        "read_at": item.date.isoformat() if getattr(item, "date", None) else None,
+                    }
+                )
+            else:
+                # Older layer: plain int
+                readers.append({"user_id": item, "read_at": None})
+
+        return json.dumps(
+            {
+                "chat_id": str(chat_id),
+                "message_id": message_id,
+                "read_by": readers,
+                "count": len(readers),
+            },
+            indent=2,
+            default=json_serializer,
+        )
+    except Exception as e:
+        logger.exception(
+            f"get_message_read_by failed (chat_id={chat_id}, message_id={message_id})"
+        )
+        return log_and_format_error(
+            "get_message_read_by", e, chat_id=chat_id, message_id=message_id
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Get Message Link", openWorldHint=True, readOnlyHint=True)
+)
+@validate_id("chat_id")
+async def get_message_link(chat_id: Union[int, str], message_id: int, thread: bool = False) -> str:
+    """
+    Export a t.me/... link for a specific message.
+
+    Only works on channels and supergroups — basic groups and private chats
+    do not expose message links.
+
+    Args:
+        chat_id: The channel/supergroup ID or username.
+        message_id: The message ID to export a link for.
+        thread: If True, returns a link that opens the message inside its
+            discussion thread (only meaningful for supergroups with linked
+            discussion).
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+        if not isinstance(entity, Channel):
+            return (
+                f"Cannot export message link for this entity type "
+                f"({type(entity).__name__}). Message links are only available "
+                f"for channels and supergroups."
+            )
+
+        result = await client(
+            functions.channels.ExportMessageLinkRequest(
+                channel=entity, id=message_id, grouped=False, thread=thread
+            )
+        )
+
+        link = getattr(result, "link", None)
+        html = getattr(result, "html", None)
+        if not link:
+            return f"Could not export link for message {message_id} in chat {chat_id}."
+
+        output = f"Link: {link}"
+        if html:
+            output += f"\nHTML: {html}"
+        return output
+    except Exception as e:
+        logger.exception(
+            f"get_message_link failed (chat_id={chat_id}, message_id={message_id}, "
+            f"thread={thread})"
+        )
+        return log_and_format_error(
+            "get_message_link",
+            e,
+            chat_id=chat_id,
+            message_id=message_id,
+            thread=thread,
+        )
+
+
 async def _main() -> None:
     try:
         # Start the Telethon client non-interactively
