@@ -7,7 +7,7 @@ import asyncio
 import sqlite3
 import logging
 import mimetypes
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import List, Dict, Optional, Union, Any
 from pathlib import Path
@@ -206,6 +206,62 @@ def with_account(readonly=False):
         return wrapper
 
     return decorator
+
+
+
+_last_conn_verified: dict[int, float] = {}
+_CONN_VERIFY_INTERVAL: float = 30.0  # seconds between live pings
+
+
+async def _force_reconnect(cl: TelegramClient):
+    """Force disconnect + reconnect regardless of is_connected() state."""
+    reconnect_logger = logging.getLogger("telegram_mcp")
+    reconnect_logger.warning("Forcing reconnect...")
+    try:
+        await cl.disconnect()
+    except Exception:
+        pass
+    await cl.connect()
+    if not await cl.is_user_authorized():
+        reconnect_logger.warning("Client not authorized after reconnect, calling start()...")
+        await cl.start()
+    _last_conn_verified[id(cl)] = time.time()
+    reconnect_logger.warning("Forced reconnect successful")
+
+
+async def ensure_connected(cl: TelegramClient = None):
+    """Verify Telegram connection is alive, reconnect if needed.
+
+    is_connected() can return True when the underlying TCP socket is dead.
+    We periodically send a lightweight request to verify the connection
+    actually works, and force-reconnect on any failure.
+
+    Accepts an explicit client; falls back to the default single-account
+    client when called without one.
+    """
+    if cl is None:
+        cl = get_client()
+
+    key = id(cl)
+
+    if not cl.is_connected():
+        await _force_reconnect(cl)
+        return
+
+    # Skip verification if recently confirmed alive
+    now = time.time()
+    if now - _last_conn_verified.get(key, 0.0) < _CONN_VERIFY_INTERVAL:
+        return
+
+    # Verify with a lightweight Telegram API call
+    try:
+        await asyncio.wait_for(
+            cl(functions.help.GetNearestDcRequest()),
+            timeout=5.0,
+        )
+        _last_conn_verified[key] = now
+    except (ConnectionError, OSError, asyncio.TimeoutError, Exception):
+        await _force_reconnect(cl)
 
 
 # Setup robust logging with both file and console output
@@ -445,30 +501,53 @@ def format_entity(entity) -> Dict[str, Any]:
 
 
 async def resolve_entity(identifier: Union[int, str], client=None) -> Any:
-    """Resolve entity with automatic cache warming on miss.
+    """Resolve entity with automatic cache warming and auto-reconnect.
 
     StringSession has no persistent entity cache. If get_entity() fails
     because the cache is cold (ValueError on PeerUser lookup for group IDs),
     warm the cache via get_dialogs() and retry.
+
+    On ConnectionError, reconnects and retries once.
     """
     if client is None:
         client = get_client()
+    await ensure_connected(client)
     try:
-        return await client.get_entity(identifier)
-    except ValueError:
-        await client.get_dialogs()
-        return await client.get_entity(identifier)
+        try:
+            return await client.get_entity(identifier)
+        except ValueError:
+            await client.get_dialogs()
+            return await client.get_entity(identifier)
+    except ConnectionError:
+        await ensure_connected(client)
+        try:
+            return await client.get_entity(identifier)
+        except ValueError:
+            await client.get_dialogs()
+            return await client.get_entity(identifier)
 
 
 async def resolve_input_entity(identifier: Union[int, str], client=None) -> Any:
-    """Like resolve_entity() but returns an InputPeer."""
+    """Like resolve_entity() but returns an InputPeer.
+
+    On ConnectionError, reconnects and retries once.
+    """
     if client is None:
         client = get_client()
+    await ensure_connected(client)
     try:
-        return await client.get_input_entity(identifier)
-    except ValueError:
-        await client.get_dialogs()
-        return await client.get_input_entity(identifier)
+        try:
+            return await client.get_input_entity(identifier)
+        except ValueError:
+            await client.get_dialogs()
+            return await client.get_input_entity(identifier)
+    except ConnectionError:
+        await ensure_connected(client)
+        try:
+            return await client.get_input_entity(identifier)
+        except ValueError:
+            await client.get_dialogs()
+            return await client.get_input_entity(identifier)
 
 
 def format_message(message) -> Dict[str, Any]:
@@ -823,6 +902,7 @@ async def get_chats(account: str = None, page: int = 1, page_size: int = 20) -> 
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         dialogs = await cl.get_dialogs()
         start = (page - 1) * page_size
         end = start + page_size
@@ -868,9 +948,10 @@ async def get_messages(
                 reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
 
             engagement_info = get_engagement_info(msg)
+            safe_text = (msg.message or "").replace("\n", "\\n")
 
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info} | Message: {msg.message}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info} | Message: {safe_text}"
             )
         return "\n".join(lines)
     except Exception as e:
@@ -906,6 +987,146 @@ async def send_message(
         return "Message sent successfully."
     except Exception as e:
         return log_and_format_error("send_message", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Send Scheduled Message",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=False,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def send_scheduled_message(
+    chat_id: Union[int, str],
+    message: str,
+    schedule_date: Union[str, int],
+    account: str = None,
+) -> str:
+    """
+    Schedule a message to be sent at a future time.
+    Args:
+        chat_id: The ID or username of the chat.
+        message: The message content to send.
+        schedule_date: When to send the message. Either an ISO-8601 string
+            (e.g. "2026-05-01T14:30:00" or "2026-05-01T14:30:00Z") or a Unix
+            timestamp (int). Naive datetimes are treated as UTC.
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        if isinstance(schedule_date, int):
+            dt = datetime.fromtimestamp(schedule_date, tz=timezone.utc)
+        else:
+            dt = datetime.fromisoformat(schedule_date.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+
+        if dt <= datetime.now(timezone.utc):
+            return (
+                f"schedule_date must be in the future (got {dt.isoformat()}, "
+                f"now {datetime.now(timezone.utc).isoformat()})."
+            )
+
+        entity = await resolve_entity(chat_id, cl)
+        result = await cl.send_message(entity, message, schedule=dt)
+        message_id = getattr(result, "id", None)
+        return f"Scheduled message {message_id} for {dt.isoformat()} in chat {chat_id}."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
+        return log_and_format_error(
+            "send_scheduled_message", e, chat_id=chat_id, schedule_date=str(schedule_date)
+        )
+    except telethon.errors.rpcerrorlist.ScheduleDateTooLateError as e:
+        return log_and_format_error(
+            "send_scheduled_message", e, chat_id=chat_id, schedule_date=str(schedule_date)
+        )
+    except telethon.errors.rpcerrorlist.ScheduleDateInvalidError as e:
+        return log_and_format_error(
+            "send_scheduled_message", e, chat_id=chat_id, schedule_date=str(schedule_date)
+        )
+    except Exception as e:
+        logger.exception(
+            f"send_scheduled_message failed (chat_id={chat_id}, schedule_date={schedule_date})"
+        )
+        return log_and_format_error(
+            "send_scheduled_message", e, chat_id=chat_id, schedule_date=str(schedule_date)
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Scheduled Messages", openWorldHint=True, readOnlyHint=True
+    )
+)
+@with_account(readonly=True)
+@validate_id("chat_id")
+async def get_scheduled_messages(chat_id: Union[int, str], account: str = None) -> str:
+    """
+    List all scheduled (pending) messages in a chat.
+    Args:
+        chat_id: The ID or username of the chat.
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        result = await cl(functions.messages.GetScheduledHistoryRequest(peer=entity, hash=0))
+        messages = getattr(result, "messages", []) or []
+        if not messages:
+            return f"No scheduled messages in chat {chat_id}."
+        lines = [f"Scheduled messages in chat {chat_id} ({len(messages)}):"]
+        for msg in messages:
+            text = getattr(msg, "message", "") or ""
+            preview = text[:100] + ("..." if len(text) > 100 else "")
+            date_iso = msg.date.isoformat() if getattr(msg, "date", None) else "unknown"
+            lines.append(f"ID: {msg.id} | Scheduled: {date_iso} | Text: {preview}")
+        return "\n".join(lines)
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
+        return log_and_format_error("get_scheduled_messages", e, chat_id=chat_id)
+    except Exception as e:
+        logger.exception(f"get_scheduled_messages failed (chat_id={chat_id})")
+        return log_and_format_error("get_scheduled_messages", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Delete Scheduled Message", openWorldHint=True, destructiveHint=True
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def delete_scheduled_message(
+    chat_id: Union[int, str], message_ids: List[int], account: str = None
+) -> str:
+    """
+    Delete one or more scheduled (pending) messages from a chat.
+    Args:
+        chat_id: The ID or username of the chat.
+        message_ids: List of scheduled message IDs to delete.
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        if not message_ids:
+            return "message_ids must be a non-empty list."
+        entity = await resolve_entity(chat_id, cl)
+        await cl(
+            functions.messages.DeleteScheduledMessagesRequest(peer=entity, id=message_ids)
+        )
+        return f"Deleted {len(message_ids)} scheduled message(s) from chat {chat_id}."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
+        return log_and_format_error(
+            "delete_scheduled_message", e, chat_id=chat_id, message_ids=message_ids
+        )
+    except Exception as e:
+        logger.exception(
+            f"delete_scheduled_message failed (chat_id={chat_id}, message_ids={message_ids})"
+        )
+        return log_and_format_error(
+            "delete_scheduled_message", e, chat_id=chat_id, message_ids=message_ids
+        )
 
 
 @mcp.tool(
@@ -953,6 +1174,7 @@ async def list_inline_buttons(
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         if isinstance(message_id, str):
             if message_id.isdigit():
                 message_id = int(message_id)
@@ -960,6 +1182,22 @@ async def list_inline_buttons(
                 return "message_id must be an integer."
 
         entity = await resolve_entity(chat_id, cl)
+
+        def _has_inline(msg):
+            if getattr(msg, "buttons", None):
+                return True
+            rm = getattr(msg, "reply_markup", None)
+            return bool(rm and hasattr(rm, "rows"))
+
+        def _flat_buttons(msg):
+            btns = getattr(msg, "buttons", None)
+            if btns:
+                return [btn for row in btns for btn in row]
+            rm = getattr(msg, "reply_markup", None)
+            if rm and hasattr(rm, "rows"):
+                return [btn for row in rm.rows for btn in row.buttons]
+            return []
+
         target_message = None
 
         if message_id is not None:
@@ -968,18 +1206,12 @@ async def list_inline_buttons(
                 target_message = target_message[0] if target_message else None
         else:
             recent_messages = await cl.get_messages(entity, limit=limit)
-            target_message = next(
-                (msg for msg in recent_messages if getattr(msg, "buttons", None)), None
-            )
+            target_message = next((msg for msg in recent_messages if _has_inline(msg)), None)
 
         if not target_message:
             return "No message with inline buttons found."
 
-        buttons_attr = getattr(target_message, "buttons", None)
-        if not buttons_attr:
-            return f"Message {target_message.id} does not contain inline buttons."
-
-        buttons = [btn for row in buttons_attr for btn in row]
+        buttons = _flat_buttons(target_message)
         if not buttons:
             return f"Message {target_message.id} does not contain inline buttons."
 
@@ -987,9 +1219,8 @@ async def list_inline_buttons(
             f"Buttons for message {target_message.id} (date {target_message.date}):",
         ]
         for idx, btn in enumerate(buttons):
-            raw_button = getattr(btn, "button", None)
             text = getattr(btn, "text", "") or "<no text>"
-            url = getattr(raw_button, "url", None) if raw_button else None
+            url = getattr(btn, "url", None)
             has_callback = bool(getattr(btn, "data", None))
             parts = [f"[{idx}] text='{text}'"]
             parts.append("callback=yes" if has_callback else "callback=no")
@@ -1033,6 +1264,7 @@ async def press_inline_button(
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         if button_text is None and button_index is None:
             return "Provide button_text or button_index to choose a button."
 
@@ -1051,25 +1283,49 @@ async def press_inline_button(
 
         entity = await resolve_entity(chat_id, cl)
 
+        def _has_inline_buttons(msg):
+            """Check if a message has inline buttons via buttons property or reply_markup."""
+            if getattr(msg, "buttons", None):
+                return True
+            rm = getattr(msg, "reply_markup", None)
+            return bool(rm and hasattr(rm, "rows"))
+
+        def _extract_buttons(msg):
+            """Extract flat list of buttons from buttons property or reply_markup fallback."""
+            btns = getattr(msg, "buttons", None)
+            if btns:
+                return [btn for row in btns for btn in row]
+            rm = getattr(msg, "reply_markup", None)
+            if rm and hasattr(rm, "rows"):
+                return [btn for row in rm.rows for btn in row.buttons]
+            return []
+
         target_message = None
         if message_id is not None:
+            # Fetch by ID first, then fall back to recent-message search if
+            # reply_markup is missing (Telethon sometimes omits it for ID fetches).
             target_message = await cl.get_messages(entity, ids=message_id)
             if isinstance(target_message, list):
                 target_message = target_message[0] if target_message else None
+            if target_message and not _has_inline_buttons(target_message):
+                # Fallback: search recent messages for the same ID with markup
+                recent = await cl.get_messages(entity, limit=30)
+                fallback = next(
+                    (m for m in recent if m.id == target_message.id and _has_inline_buttons(m)),
+                    None,
+                )
+                if fallback:
+                    target_message = fallback
         else:
             recent_messages = await cl.get_messages(entity, limit=20)
             target_message = next(
-                (msg for msg in recent_messages if getattr(msg, "buttons", None)), None
+                (msg for msg in recent_messages if _has_inline_buttons(msg)), None
             )
 
         if not target_message:
             return "No message with inline buttons found. Specify message_id to target a specific message."
 
-        buttons_attr = getattr(target_message, "buttons", None)
-        if not buttons_attr:
-            return f"Message {target_message.id} does not contain inline buttons."
-
-        buttons = [btn for row in buttons_attr for btn in row]
+        buttons = _extract_buttons(target_message)
         if not buttons:
             return f"Message {target_message.id} does not contain inline buttons."
 
@@ -1097,16 +1353,16 @@ async def press_inline_button(
             )
             return f"Button not found. Available buttons: {available}"
 
-        if not getattr(target_button, "data", None):
-            raw_button = getattr(target_button, "button", None)
-            url = getattr(raw_button, "url", None) if raw_button else None
+        btn_data = getattr(target_button, "data", None)
+        if not btn_data:
+            url = getattr(target_button, "url", None)
             if url:
                 return f"Selected button opens a URL instead of sending a callback: {url}"
             return "Selected button does not provide callback data to press."
 
         callback_result = await cl(
             functions.messages.GetBotCallbackAnswerRequest(
-                peer=entity, msg_id=target_message.id, data=target_button.data
+                peer=entity, msg_id=target_message.id, data=btn_data
             )
         )
 
@@ -1140,6 +1396,7 @@ async def list_contacts(account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         result = await cl(functions.contacts.GetContactsRequest(hash=0))
         users = result.users
         if not users:
@@ -1172,6 +1429,7 @@ async def search_contacts(query: str, account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         result = await cl(functions.contacts.SearchRequest(q=query, limit=50))
         users = result.users
         if not users:
@@ -1202,6 +1460,7 @@ async def get_contact_ids(account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         result = await cl(functions.contacts.GetContactIDsRequest(hash=0))
         if not result:
             return "No contact IDs found."
@@ -1438,6 +1697,7 @@ async def list_chats(
     limit: int = 20,
     unread_only: bool = False,
     unmuted_only: bool = False,
+    with_about: bool = False,
 ) -> str:
     """
     List available chats with metadata.
@@ -1447,9 +1707,16 @@ async def list_chats(
         limit: Maximum number of chats to retrieve from Telegram API (applied before filtering, so fewer results may be returned when filters are active).
         unread_only: If True, only return chats with unread messages.
         unmuted_only: If True, only return unmuted chats.
+        with_about: If True, fetch each chat's description/bio via an additional
+            API call per chat (slower — use only when needed for dispatch
+            disambiguation).
+
+    **Performance:** when `with_about=True`, makes one extra API call per chat
+    returned. Avoid large `limit` values.
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         dialogs = await cl.get_dialogs(limit=limit)
 
         results = []
@@ -1518,6 +1785,36 @@ async def list_chats(
             if unread_mentions > 0:
                 chat_info += f", Unread mentions: {unread_mentions}"
 
+            # Optionally fetch per-chat description/bio. Each call is guarded
+            # so one failure (permissions, flood, etc.) doesn't abort the whole
+            # listing.
+            if with_about:
+                about_text = ""
+                try:
+                    if isinstance(entity, Channel):
+                        full = await cl(
+                            functions.channels.GetFullChannelRequest(channel=entity)
+                        )
+                        about_text = getattr(full.full_chat, "about", "") or ""
+                    elif isinstance(entity, Chat):
+                        full = await cl(
+                            functions.messages.GetFullChatRequest(chat_id=entity.id)
+                        )
+                        about_text = getattr(full.full_chat, "about", "") or ""
+                    elif isinstance(entity, User):
+                        full = await cl(functions.users.GetFullUserRequest(id=entity))
+                        about_text = getattr(full.full_user, "about", "") or ""
+                except Exception as about_err:
+                    logger.warning(
+                        f"list_chats: failed to fetch about for {entity.id}: {about_err}"
+                    )
+                    about_text = "<error fetching description>"
+
+                if len(about_text) > 200:
+                    about_text = about_text[:200] + "..."
+
+                chat_info += f', About: "{about_text}"'
+
             results.append(chat_info)
 
         if not results:
@@ -1532,6 +1829,7 @@ async def list_chats(
             limit=limit,
             unread_only=unread_only,
             unmuted_only=unmuted_only,
+            with_about=with_about,
         )
 
 
@@ -1624,6 +1922,7 @@ async def get_direct_chat_by_contact(contact_query: str, account: str = None) ->
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         # Fetch all contacts using the correct Telethon method
         result = await cl(functions.contacts.GetContactsRequest(hash=0))
         contacts = result.users
@@ -1870,6 +2169,7 @@ async def add_contact(
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         # Normalize None to empty string for easier checking
         phone = phone or ""
         username = username or ""
@@ -2054,6 +2354,7 @@ async def get_me(account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         me = await cl.get_me()
         return json.dumps(format_entity(me), indent=2)
     except Exception as e:
@@ -2281,6 +2582,7 @@ async def get_participants(chat_id: Union[int, str], account: str = None) -> str
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         participants = await cl.get_participants(chat_id)
         lines = [
             f"ID: {p.id}, Name: {getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}"
@@ -2404,6 +2706,7 @@ async def update_profile(
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         await cl(
             functions.account.UpdateProfileRequest(
                 first_name=first_name, last_name=last_name, about=about
@@ -2430,6 +2733,7 @@ async def set_profile_photo(
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         safe_path, path_error = await _resolve_readable_file_path(
             raw_path=file_path,
             ctx=ctx,
@@ -2457,6 +2761,7 @@ async def delete_profile_photo(account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         photos = await cl(
             functions.photos.GetUserPhotosRequest(user_id="me", offset=0, max_id=0, limit=1)
         )
@@ -2480,6 +2785,7 @@ async def get_privacy_settings(account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         # Import needed types directly
         from telethon.tl.types import InputPrivacyKeyStatusTimestamp
 
@@ -2610,6 +2916,7 @@ async def import_contacts(contacts: list, account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         input_contacts = [
             functions.contacts.InputPhoneContact(
                 client_id=i,
@@ -2635,6 +2942,7 @@ async def export_contacts(account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         result = await cl(functions.contacts.GetContactsRequest(hash=0))
         users = result.users
         return json.dumps([format_entity(u) for u in users], indent=2)
@@ -2652,6 +2960,7 @@ async def get_blocked_users(account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         result = await cl(functions.contacts.GetBlockedRequest(offset=0, limit=100))
         return json.dumps([format_entity(u) for u in result.users], indent=2)
     except Exception as e:
@@ -2670,6 +2979,7 @@ async def create_channel(
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         result = await cl(
             functions.channels.CreateChannelRequest(title=title, about=about, megagroup=megagroup)
         )
@@ -2750,6 +3060,41 @@ async def edit_chat_photo(
     except Exception as e:
         logger.exception(f"edit_chat_photo failed (chat_id={chat_id}, file_path='{file_path}')")
         return log_and_format_error("edit_chat_photo", e, chat_id=chat_id, file_path=file_path)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Edit Chat About",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def edit_chat_about(chat_id: Union[int, str], about: str, account: str = None) -> str:
+    """
+    Edit the description ("About") of a chat, group, or channel.
+
+    Args:
+        chat_id: The ID or username of the chat.
+        about: New description text. Telegram limits About to 255 characters.
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        await cl(functions.messages.EditChatAboutRequest(peer=entity, about=about))
+        return f"Chat {chat_id} description updated."
+    except telethon.errors.rpcerrorlist.ChatAboutNotModifiedError:
+        return f"Chat {chat_id} description is already set to the requested value."
+    except telethon.errors.rpcerrorlist.ChatAboutTooLongError:
+        return "Error: description exceeds Telegram's 255 character limit."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: admin rights required to edit the chat description."
+    except Exception as e:
+        logger.exception(f"edit_chat_about failed (chat_id={chat_id})")
+        return log_and_format_error("edit_chat_about", e, chat_id=chat_id)
 
 
 @mcp.tool(
@@ -3028,6 +3373,211 @@ async def unban_user(
         return log_and_format_error("unban_user", e, chat_id=chat_id, user_id=user_id)
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Set Default Chat Permissions",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def set_default_chat_permissions(
+    chat_id: Union[int, str],
+    send_messages: bool = True,
+    send_media: bool = True,
+    send_stickers: bool = True,
+    send_gifs: bool = True,
+    send_games: bool = True,
+    send_inline: bool = True,
+    embed_links: bool = True,
+    send_polls: bool = True,
+    change_info: bool = False,
+    invite_users: bool = True,
+    pin_messages: bool = False,
+    until_date: int = 0,
+    account: str = None,
+) -> str:
+    """
+    Set default member permissions for a group, supergroup, or channel.
+
+    Pass True to allow, False to restrict. (Internally inverted to match
+    Telegram's ChatBannedRights semantics where True means "banned".)
+
+    Args:
+        chat_id: ID or username of the chat.
+        send_messages: allow sending text messages
+        send_media: allow sending media (photos, videos, docs, audio)
+        send_stickers: allow sending stickers
+        send_gifs: allow sending GIFs
+        send_games: allow sending games
+        send_inline: allow using inline bots
+        embed_links: allow link previews
+        send_polls: allow sending polls
+        change_info: allow members to change group info (title, photo, description)
+        invite_users: allow members to invite others
+        pin_messages: allow members to pin messages
+        until_date: restriction expiry as Unix timestamp, 0 = permanent (default)
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        banned_rights = ChatBannedRights(
+            until_date=until_date if until_date else None,
+            send_messages=not send_messages,
+            send_media=not send_media,
+            send_stickers=not send_stickers,
+            send_gifs=not send_gifs,
+            send_games=not send_games,
+            send_inline=not send_inline,
+            embed_links=not embed_links,
+            send_polls=not send_polls,
+            change_info=not change_info,
+            invite_users=not invite_users,
+            pin_messages=not pin_messages,
+        )
+        await cl(
+            functions.messages.EditChatDefaultBannedRightsRequest(
+                peer=entity, banned_rights=banned_rights
+            )
+        )
+        return f"Default permissions for chat {chat_id} updated."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: admin rights required to change default permissions."
+    except telethon.errors.rpcerrorlist.ChatNotModifiedError:
+        return f"Chat {chat_id} default permissions unchanged (already matched)."
+    except Exception as e:
+        logger.exception(f"set_default_chat_permissions failed (chat_id={chat_id})")
+        return log_and_format_error("set_default_chat_permissions", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Toggle Slow Mode",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def toggle_slow_mode(
+    chat_id: Union[int, str], seconds: int = 0, account: str = None
+) -> str:
+    """
+    Enable or disable slow mode for a supergroup.
+
+    Only works on supergroups (not basic groups or regular channels). Telegram
+    accepts seconds in {0, 10, 30, 60, 300, 900, 3600}. 0 disables slow mode.
+
+    Args:
+        chat_id: ID or username of the supergroup.
+        seconds: interval between messages per user. 0 = disabled (default).
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
+            return "Error: slow mode is only supported for supergroups."
+        await cl(functions.channels.ToggleSlowModeRequest(channel=entity, seconds=seconds))
+        if seconds == 0:
+            return f"Slow mode disabled for chat {chat_id}."
+        return f"Slow mode enabled for chat {chat_id} (interval: {seconds}s)."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: admin rights required to toggle slow mode."
+    except Exception as e:
+        logger.exception(f"toggle_slow_mode failed (chat_id={chat_id}, seconds={seconds})")
+        return log_and_format_error("toggle_slow_mode", e, chat_id=chat_id, seconds=seconds)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Edit Admin Rights",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id", "user_id")
+async def edit_admin_rights(
+    chat_id: Union[int, str],
+    user_id: Union[int, str],
+    rank: str = "",
+    change_info: bool = False,
+    post_messages: bool = False,
+    edit_messages: bool = False,
+    delete_messages: bool = False,
+    ban_users: bool = False,
+    invite_users: bool = False,
+    pin_messages: bool = False,
+    add_admins: bool = False,
+    anonymous: bool = False,
+    manage_call: bool = False,
+    other: bool = False,
+    account: str = None,
+) -> str:
+    """
+    Set granular admin rights for a user in a supergroup or channel.
+
+    Extends `promote_admin` (which uses a default set) by letting each right
+    be specified individually. Pass True to grant, False to revoke. Passing
+    all False revokes admin status (equivalent to `demote_admin`).
+
+    Args:
+        chat_id: ID or username of the supergroup/channel.
+        user_id: User ID or username.
+        rank: Custom admin title (max 16 chars). Empty = no custom title.
+        change_info: can change chat info (title, photo, description)
+        post_messages: can post in channel (channel-only)
+        edit_messages: can edit other users' messages
+        delete_messages: can delete messages
+        ban_users: can restrict/ban members
+        invite_users: can invite new members
+        pin_messages: can pin messages
+        add_admins: can add new admins with their own rights
+        anonymous: admin actions appear anonymous
+        manage_call: can manage voice/video chats
+        other: reserved for future rights
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        user = await resolve_entity(user_id, cl)
+        admin_rights = ChatAdminRights(
+            change_info=change_info,
+            post_messages=post_messages,
+            edit_messages=edit_messages,
+            delete_messages=delete_messages,
+            ban_users=ban_users,
+            invite_users=invite_users,
+            pin_messages=pin_messages,
+            add_admins=add_admins,
+            anonymous=anonymous,
+            manage_call=manage_call,
+            other=other,
+        )
+        await cl(
+            functions.channels.EditAdminRequest(
+                channel=entity, user_id=user, admin_rights=admin_rights, rank=rank
+            )
+        )
+        return f"Admin rights updated for user {user_id} in chat {chat_id}."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: you need admin rights (with 'add_admins') to modify admin rights."
+    except telethon.errors.rpcerrorlist.UserAdminInvalidError:
+        return "Error: cannot modify admin rights for this user (you may need to have promoted them originally)."
+    except telethon.errors.rpcerrorlist.RightForbiddenError:
+        return "Error: some of the requested rights are not allowed for your account or for this chat."
+    except Exception as e:
+        logger.exception(f"edit_admin_rights failed (chat_id={chat_id}, user_id={user_id})")
+        return log_and_format_error("edit_admin_rights", e, chat_id=chat_id, user_id=user_id)
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Get Admins", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
 @validate_id("chat_id")
@@ -3037,6 +3587,7 @@ async def get_admins(chat_id: Union[int, str], account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         # Fix: Use the correct filter type ChannelParticipantsAdmins
         participants = await cl.get_participants(chat_id, filter=ChannelParticipantsAdmins())
         lines = [
@@ -3060,6 +3611,7 @@ async def get_banned_users(chat_id: Union[int, str], account: str = None) -> str
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         # Fix: Use the correct filter type ChannelParticipantsKicked
         participants = await cl.get_participants(chat_id, filter=ChannelParticipantsKicked(q=""))
         lines = [
@@ -3132,6 +3684,7 @@ async def join_chat_by_link(link: str, account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         # Extract the hash from the invite link
         if "/" in link:
             hash_part = link.split("/")[-1]
@@ -3221,6 +3774,7 @@ async def import_chat_invite(hash: str, account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         # Remove any prefixes like '+' if present
         if hash.startswith("+"):
             hash = hash[1:]
@@ -3331,6 +3885,7 @@ async def upload_file(file_path: str, ctx: Optional[Context] = None, account: st
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         safe_path, path_error = await _resolve_readable_file_path(
             raw_path=file_path,
             ctx=ctx,
@@ -3427,6 +3982,105 @@ async def delete_message(chat_id: Union[int, str], message_id: int, account: str
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        title="Delete Chat History",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=False,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def delete_chat_history(
+    chat_id: Union[int, str], max_id: int = 0, revoke: bool = False, account: str = None
+) -> str:
+    """
+    Clear the full message history of a chat.
+
+    Args:
+        chat_id: Chat ID or username.
+        max_id: Delete messages up to this ID; 0 deletes all messages (default).
+        revoke: If True, delete for both parties (default False = only for you).
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        result = await cl(
+            functions.messages.DeleteHistoryRequest(peer=entity, max_id=max_id, revoke=revoke)
+        )
+        pts_count = getattr(result, "pts_count", 0)
+        offset = getattr(result, "offset", 0)
+        scope = "for both parties" if revoke else "for you"
+        return (
+            f"Chat {chat_id} history cleared {scope}: "
+            f"{pts_count} messages deleted (offset={offset})."
+        )
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Cannot delete chat history: admin privileges are required."
+    except Exception as e:
+        return log_and_format_error(
+            "delete_chat_history",
+            e,
+            chat_id=chat_id,
+            max_id=max_id,
+            revoke=revoke,
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Delete Messages Bulk",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def delete_messages_bulk(
+    chat_id: Union[int, str],
+    message_ids: List[int],
+    revoke: bool = True,
+    account: str = None,
+) -> str:
+    """
+    Delete multiple messages in a single call.
+
+    Args:
+        chat_id: Chat ID or username.
+        message_ids: List of message IDs to delete.
+        revoke: If True, delete for both parties (default True). Ignored for channels.
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        if isinstance(entity, Channel):
+            result = await cl(
+                functions.channels.DeleteMessagesRequest(channel=entity, id=message_ids)
+            )
+        else:
+            result = await cl(
+                functions.messages.DeleteMessagesRequest(id=message_ids, revoke=revoke)
+            )
+        pts_count = getattr(result, "pts_count", 0)
+        return f"Deleted {pts_count} of {len(message_ids)} messages from chat {chat_id}."
+    except telethon.errors.rpcerrorlist.MessageIdInvalidError:
+        return "Cannot delete messages: one or more message IDs are invalid."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Cannot delete messages: admin privileges are required."
+    except Exception as e:
+        return log_and_format_error(
+            "delete_messages_bulk",
+            e,
+            chat_id=chat_id,
+            message_ids=message_ids,
+            revoke=revoke,
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         title="Pin Message", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
@@ -3463,6 +4117,35 @@ async def unpin_message(chat_id: Union[int, str], message_id: int, account: str 
         return f"Message {message_id} unpinned in chat {chat_id}."
     except Exception as e:
         return log_and_format_error("unpin_message", e, chat_id=chat_id, message_id=message_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Unpin All Messages",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def unpin_all_messages(chat_id: Union[int, str], account: str = None) -> str:
+    """
+    Unpin all pinned messages in a chat.
+
+    Args:
+        chat_id: Chat ID or username.
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        await cl(functions.messages.UnpinAllMessagesRequest(peer=entity))
+        return f"All messages unpinned in chat {chat_id}."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Cannot unpin messages: admin privileges are required."
+    except Exception as e:
+        return log_and_format_error("unpin_all_messages", e, chat_id=chat_id)
 
 
 @mcp.tool(
@@ -3554,6 +4237,7 @@ async def search_public_chats(query: str, limit: int = 20, account: str = None) 
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         result = await cl(functions.contacts.SearchRequest(q=query, limit=limit))
         entities = [format_entity(e) for e in result.chats + result.users]
         return json.dumps(entities, indent=2)
@@ -3609,6 +4293,7 @@ async def search_global(
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         offset = (page - 1) * page_size
         messages = await cl.get_messages(None, limit=page_size, search=query, add_offset=offset)
 
@@ -3644,10 +4329,97 @@ async def resolve_username(username: str, account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         result = await cl(functions.contacts.ResolveUsernameRequest(username=username))
         return str(result)
     except Exception as e:
         return log_and_format_error("resolve_username", e, username=username)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Get Full User", openWorldHint=True, readOnlyHint=True)
+)
+@with_account(readonly=True)
+async def get_full_user(username: Union[int, str], account: str = None) -> str:
+    """
+    Get full profile info of a Telegram user including bio/about text,
+    personal channel link, and other profile details.
+
+    Args:
+        username: The username (without @) or user ID to look up.
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(username, cl)
+        full = await cl(functions.users.GetFullUserRequest(id=entity))
+
+        user = full.users[0] if full.users else None
+        full_user = full.full_user
+
+        personal_channel_id = getattr(full_user, "personal_channel_id", None)
+        personal_channel = None
+        if personal_channel_id:
+            try:
+                ch = await cl.get_entity(personal_channel_id)
+                ch_username = getattr(ch, "username", None)
+                personal_channel = (
+                    f"https://t.me/{ch_username}" if ch_username else str(personal_channel_id)
+                )
+            except Exception:
+                personal_channel = str(personal_channel_id)
+
+        result = {
+            "id": user.id if user else None,
+            "first_name": getattr(user, "first_name", None) if user else None,
+            "last_name": getattr(user, "last_name", None) if user else None,
+            "username": getattr(user, "username", None) if user else None,
+            "phone": getattr(user, "phone", None) if user else None,
+            "bio": full_user.about or "",
+            "personal_channel": personal_channel,
+            "bot": getattr(user, "bot", False) if user else False,
+            "verified": getattr(user, "verified", False) if user else False,
+            "premium": getattr(user, "premium", False) if user else False,
+            "common_chats_count": getattr(full_user, "common_chats_count", None),
+        }
+
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        return log_and_format_error("get_full_user", e, username=username)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Get Full Chat", openWorldHint=True, readOnlyHint=True)
+)
+@with_account(readonly=True)
+async def get_full_chat(chat_id: Union[int, str], account: str = None) -> str:
+    """
+    Get full info of a channel or group including description/about text.
+
+    Args:
+        chat_id: The channel/group username (without @) or ID.
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        full = await cl(functions.channels.GetFullChannelRequest(channel=entity))
+
+        chat = full.chats[0] if full.chats else None
+        full_chat = full.full_chat
+
+        result = {
+            "id": chat.id if chat else None,
+            "title": getattr(chat, "title", None) if chat else None,
+            "username": getattr(chat, "username", None) if chat else None,
+            "about": full_chat.about or "",
+            "participants_count": getattr(full_chat, "participants_count", None),
+            "linked_chat_id": getattr(full_chat, "linked_chat_id", None),
+        }
+
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        return log_and_format_error("get_full_chat", e, chat_id=chat_id)
 
 
 @mcp.tool(
@@ -3800,6 +4572,7 @@ async def get_sticker_sets(account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         result = await cl(functions.messages.GetAllStickersRequest(hash=0))
         return json.dumps([s.title for s in result.sets], indent=2)
     except Exception as e:
@@ -3855,6 +4628,7 @@ async def get_gif_search(query: str, limit: int = 10, account: str = None) -> st
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         # Try approach 1: SearchGifsRequest
         try:
             result = await cl(
@@ -3921,6 +4695,53 @@ async def send_gif(chat_id: Union[int, str], gif_id: int, account: str = None) -
         return f"GIF sent to chat {chat_id}."
     except Exception as e:
         return log_and_format_error("send_gif", e, chat_id=chat_id, gif_id=gif_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Send Contact", openWorldHint=True, destructiveHint=True)
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def send_contact(
+    chat_id: Union[int, str],
+    phone_number: str,
+    first_name: str,
+    last_name: str = "",
+    vcard: str = "",
+    account: str = None,
+) -> str:
+    """
+    Send a contact to a chat.
+    Args:
+        chat_id: The chat ID or username.
+        phone_number: Contact's phone number.
+        first_name: Contact's first name.
+        last_name: Contact's last name (optional).
+        vcard: Additional vCard data (optional).
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        from telethon.tl.types import InputMediaContact
+        import random
+
+        await cl(
+            functions.messages.SendMediaRequest(
+                peer=entity,
+                media=InputMediaContact(
+                    phone_number=phone_number,
+                    first_name=first_name,
+                    last_name=last_name,
+                    vcard=vcard,
+                ),
+                message="",
+                random_id=random.randint(0, 2**63 - 1),
+            )
+        )
+        return f"Contact sent to chat {chat_id}."
+    except Exception as e:
+        return log_and_format_error("send_contact", e, chat_id=chat_id, phone_number=phone_number)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Bot Info", openWorldHint=True, readOnlyHint=True))
@@ -4088,6 +4909,7 @@ async def get_recent_actions(chat_id: Union[int, str], account: str = None) -> s
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         result = await cl(
             functions.channels.GetAdminLogRequest(
                 channel=chat_id,
@@ -4450,6 +5272,7 @@ async def get_drafts(account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         result = await cl(functions.messages.GetAllDraftsRequest())
 
         # The result contains updates with draft info
@@ -4546,6 +5369,7 @@ async def list_folders(account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         result = await cl(functions.messages.GetDialogFiltersRequest())
 
         folders = []
@@ -5042,6 +5866,7 @@ async def delete_folder(folder_id: int, account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         # System folders (id < 2) cannot be deleted
         if folder_id < 2:
             return f"Cannot delete system folder (ID {folder_id}). Only custom folders can be deleted."
@@ -5088,6 +5913,7 @@ async def reorder_folders(folder_ids: List[int], account: str = None) -> str:
     """
     try:
         cl = get_client(account)
+        await ensure_connected(cl)
         # Get existing folders to validate
         result = await cl(functions.messages.GetDialogFiltersRequest())
 
@@ -5117,6 +5943,220 @@ async def reorder_folders(folder_ids: List[int], account: str = None) -> str:
         )
 
 
+# ============================================================================
+# CHAT DISCOVERY TOOLS
+# ============================================================================
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Get Common Chats", openWorldHint=True, readOnlyHint=True)
+)
+@with_account(readonly=True)
+@validate_id("user_id")
+async def get_common_chats(
+    user_id: Union[int, str], limit: int = 100, max_id: int = 0, account: str = None
+) -> str:
+    """
+    List chats shared with a specific user.
+
+    Args:
+        user_id: The user ID or username to check shared chats for.
+        limit: Maximum number of shared chats to return (max 100).
+        max_id: Pagination cursor — pass the last chat ID from the previous
+            page to fetch older shared chats. Use 0 (default) for the first page.
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        # Telegram caps the limit at 100
+        if limit > 100:
+            limit = 100
+        if limit < 1:
+            limit = 1
+
+        user_entity = await resolve_entity(user_id, cl)
+        result = await cl(
+            functions.messages.GetCommonChatsRequest(
+                user_id=user_entity, max_id=max_id, limit=limit
+            )
+        )
+
+        chats = getattr(result, "chats", []) or []
+        if not chats:
+            return f"No common chats found with user {user_id}."
+
+        lines = []
+        for chat in chats:
+            line = f"Chat ID: {chat.id}"
+            if hasattr(chat, "title") and chat.title:
+                line += f", Title: {chat.title}"
+            line += f", Type: {get_entity_type(chat)}"
+            if hasattr(chat, "username") and chat.username:
+                line += f", Username: @{chat.username}"
+            lines.append(line)
+
+        return "\n".join(lines)
+    except Exception as e:
+        logger.exception(
+            f"get_common_chats failed (user_id={user_id}, limit={limit}, max_id={max_id})"
+        )
+        return log_and_format_error(
+            "get_common_chats", e, user_id=user_id, limit=limit, max_id=max_id
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Get Message Read By", openWorldHint=True, readOnlyHint=True)
+)
+@with_account(readonly=True)
+@validate_id("chat_id")
+async def get_message_read_by(
+    chat_id: Union[int, str], message_id: int, account: str = None
+) -> str:
+    """
+    List user IDs who have read a specific message.
+
+    Works in small groups and supergroups where read-marker tracking is
+    enabled (Telegram exposes read receipts for groups up to a fixed size
+    and only for messages sent within the last ~7 days).
+
+    Args:
+        chat_id: The chat ID or username.
+        message_id: The message ID to check read receipts for.
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        from telethon.errors.rpcerrorlist import (
+            ChatAdminRequiredError,
+            UserNotParticipantError,
+            MsgTooOldError,
+            PeerIdInvalidError,
+        )
+
+        entity = await resolve_entity(chat_id, cl)
+        try:
+            result = await cl(
+                functions.messages.GetMessageReadParticipantsRequest(
+                    peer=entity, msg_id=message_id
+                )
+            )
+        except MsgTooOldError:
+            return (
+                f"Read receipts unavailable for message {message_id} in chat "
+                f"{chat_id}: message is too old or read receipts are disabled."
+            )
+        except ChatAdminRequiredError:
+            return (
+                f"Cannot read receipts for message {message_id} in chat {chat_id}: "
+                f"admin rights are required."
+            )
+        except UserNotParticipantError:
+            return (
+                f"Cannot read receipts for message {message_id} in chat {chat_id}: "
+                f"you are not a participant of this chat."
+            )
+        except PeerIdInvalidError:
+            return f"Invalid chat: {chat_id}."
+
+        # result is a list of ReadParticipantDate objects in newer Telethon,
+        # or a list of user IDs (ints) in older layers. Handle both.
+        if not result:
+            return f"No read receipts available for message {message_id} in chat " f"{chat_id}."
+
+        readers = []
+        for item in result:
+            if hasattr(item, "user_id"):
+                readers.append(
+                    {
+                        "user_id": item.user_id,
+                        "read_at": item.date.isoformat() if getattr(item, "date", None) else None,
+                    }
+                )
+            else:
+                # Older layer: plain int
+                readers.append({"user_id": item, "read_at": None})
+
+        return json.dumps(
+            {
+                "chat_id": str(chat_id),
+                "message_id": message_id,
+                "read_by": readers,
+                "count": len(readers),
+            },
+            indent=2,
+            default=json_serializer,
+        )
+    except Exception as e:
+        logger.exception(
+            f"get_message_read_by failed (chat_id={chat_id}, message_id={message_id})"
+        )
+        return log_and_format_error(
+            "get_message_read_by", e, chat_id=chat_id, message_id=message_id
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Get Message Link", openWorldHint=True, readOnlyHint=True)
+)
+@with_account(readonly=True)
+@validate_id("chat_id")
+async def get_message_link(
+    chat_id: Union[int, str], message_id: int, thread: bool = False, account: str = None
+) -> str:
+    """
+    Export a t.me/... link for a specific message.
+
+    Only works on channels and supergroups — basic groups and private chats
+    do not expose message links.
+
+    Args:
+        chat_id: The channel/supergroup ID or username.
+        message_id: The message ID to export a link for.
+        thread: If True, returns a link that opens the message inside its
+            discussion thread (only meaningful for supergroups with linked
+            discussion).
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        entity = await resolve_entity(chat_id, cl)
+        if not isinstance(entity, Channel):
+            return (
+                f"Cannot export message link for this entity type "
+                f"({type(entity).__name__}). Message links are only available "
+                f"for channels and supergroups."
+            )
+
+        result = await cl(
+            functions.channels.ExportMessageLinkRequest(
+                channel=entity, id=message_id, grouped=False, thread=thread
+            )
+        )
+
+        link = getattr(result, "link", None)
+        html = getattr(result, "html", None)
+        if not link:
+            return f"Could not export link for message {message_id} in chat {chat_id}."
+
+        output = f"Link: {link}"
+        if html:
+            output += f"\nHTML: {html}"
+        return output
+    except Exception as e:
+        logger.exception(
+            f"get_message_link failed (chat_id={chat_id}, message_id={message_id}, "
+            f"thread={thread})"
+        )
+        return log_and_format_error(
+            "get_message_link",
+            e,
+            chat_id=chat_id,
+            message_id=message_id,
+            thread=thread,
+        )
+
+
 async def _main() -> None:
     try:
         labels = ", ".join(clients.keys())
@@ -5129,6 +6169,7 @@ async def _main() -> None:
         await asyncio.gather(*(cl.get_dialogs() for cl in clients.values()))
 
         print(f"Telegram client(s) started ({labels}). Running MCP server...", file=sys.stderr)
+        # Use the asynchronous entrypoint instead of mcp.run()
         await mcp.run_stdio_async()
     except Exception as e:
         print(f"Error starting client: {e}", file=sys.stderr)
@@ -5138,6 +6179,13 @@ async def _main() -> None:
                 file=sys.stderr,
             )
         sys.exit(1)
+    finally:
+        try:
+            await asyncio.gather(
+                *(cl.disconnect() for cl in clients.values()), return_exceptions=True
+            )
+        except Exception:
+            pass
 
 
 def main() -> None:

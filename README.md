@@ -40,12 +40,13 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 
 ### Chat & Group Management
 - **get_chats(page, page_size)**: Paginated list of chats
-- **list_chats(chat_type, limit)**: List chats with metadata and filtering
+- **list_chats(chat_type, limit, unread_only, unmuted_only, with_about)**: List chats with metadata and filtering; `with_about=True` enriches output with each chat's description (slower).
 - **get_chat(chat_id)**: Detailed info about a chat
 - **create_group(title, user_ids)**: Create a new group
 - **invite_to_group(group_id, user_ids)**: Invite users to a group or channel
 - **create_channel(title, about, megagroup)**: Create a channel or supergroup
 - **edit_chat_title(chat_id, title)**: Change chat/group/channel title
+- **edit_chat_about(chat_id, about)**: Edit chat/group/channel description (About, max 255 chars)
 - **delete_chat_photo(chat_id)**: Remove chat/group/channel photo
 - **leave_chat(chat_id)**: Leave a group or channel
 - **get_participants(chat_id)**: List all participants
@@ -55,11 +56,16 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **demote_admin(chat_id, user_id)**: Demote admin to user
 - **ban_user(chat_id, user_id)**: Ban user
 - **unban_user(chat_id, user_id)**: Unban user
+- **edit_admin_rights(chat_id, user_id, rank, ...rights)**: Set granular admin rights (extends promote_admin)
+- **set_default_chat_permissions(chat_id, ...perms, until_date)**: Set default member permissions (send, media, invite, pin, etc.)
+- **toggle_slow_mode(chat_id, seconds)**: Enable/disable slow mode in supergroups (0/10/30/60/300/900/3600s)
 - **get_invite_link(chat_id)**: Get invite link
 - **export_chat_invite(chat_id)**: Export invite link
 - **import_chat_invite(hash)**: Join chat by invite hash
 - **join_chat_by_link(link)**: Join chat by invite link
 - **subscribe_public_channel(channel)**: Subscribe to a public channel or supergroup by username or ID
+- **get_common_chats(user_id, limit=100, max_id=0)**: List chats shared with a specific user
+- **get_message_read_by(chat_id, message_id)**: List users who have read a message (small groups/supergroups with read receipts enabled)
 
 ### Messaging
 - **get_messages(chat_id, page, page_size)**: Paginated messages
@@ -69,9 +75,12 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **reply_to_message(chat_id, message_id, text)**: Reply to a message
 - **edit_message(chat_id, message_id, new_text)**: Edit your message
 - **delete_message(chat_id, message_id)**: Delete a message
+- **delete_messages_bulk(chat_id, message_ids, revoke=True)**: Delete multiple messages in one call
+- **delete_chat_history(chat_id, max_id=0, revoke=False)**: Clear the full message history of a chat
 - **forward_message(from_chat_id, message_id, to_chat_id)**: Forward a message
 - **pin_message(chat_id, message_id)**: Pin a message
 - **unpin_message(chat_id, message_id)**: Unpin a message
+- **unpin_all_messages(chat_id)**: Unpin all pinned messages in a chat
 - **mark_as_read(chat_id)**: Mark all as read
 - **get_message_context(chat_id, message_id, context_size)**: Context around a message
 - **get_history(chat_id, limit)**: Full chat history
@@ -83,6 +92,10 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 -  **send_reaction(chat_id, message_id, emoji, big=False)**: Add a reaction to a message
 -  **remove_reaction(chat_id, message_id)**: Remove a reaction from a message
 -  **get_message_reactions(chat_id, message_id, limit=50)**: Get all reactions on a message
+- **send_scheduled_message(chat_id, message, schedule_date)**: Schedule a message for future delivery (ISO-8601 or Unix timestamp)
+- **get_scheduled_messages(chat_id)**: List all pending scheduled messages in a chat
+- **delete_scheduled_message(chat_id, message_ids)**: Delete one or more scheduled messages
+- **get_message_link(chat_id, message_id, thread=False)**: Export a t.me/... link to a message (channels/supergroups only)
 
 ### Contact Management
 - **list_contacts()**: List all contacts
