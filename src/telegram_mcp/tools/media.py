@@ -3,9 +3,12 @@
 import json
 import os
 import mimetypes
-from typing import Union
+import tempfile
+import urllib.request
+from typing import Union, List
+from urllib.parse import urlparse
 
-from telethon import functions
+from telethon import functions, types
 
 from ..app import mcp, client
 from ..exceptions import log_and_format_error
@@ -13,6 +16,33 @@ from ..validators import validate_id
 from ..formatters import json_serializer
 from ..logging_config import logger
 from mcp.types import ToolAnnotations
+
+
+def _validate_image_url(url: str) -> tuple[bool, str]:
+    """Validate a single image URL.
+
+    Args:
+        url: URL string to validate.
+
+    Returns:
+        Tuple of (is_valid, error_message). If valid, error_message is empty.
+    """
+    if not isinstance(url, str):
+        return False, f"URL must be a string, got {type(url).__name__}"
+    if not url or not url.strip():
+        return False, "URL cannot be empty"
+
+    url = url.strip()
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False, f"URL must use http or https protocol, got '{parsed.scheme}'"
+        if not parsed.netloc:
+            return False, "Invalid URL format: missing domain"
+    except Exception as e:
+        return False, f"Invalid URL format: {e}"
+
+    return True, ""
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Send File", openWorldHint=True, destructiveHint=True))
@@ -325,3 +355,100 @@ async def set_bot_commands(bot_username: str, commands: list) -> str:
     except Exception as e:
         logger.exception(f"set_bot_commands failed (bot_username={bot_username})")
         return log_and_format_error("set_bot_commands", e, bot_username=bot_username)
+
+
+def _download_url_to_temp(url: str, index: int) -> str:
+    """Download a URL to a temporary file.
+
+    Args:
+        url: URL to download.
+        index: Index for naming the temp file.
+
+    Returns:
+        Path to the temporary file.
+
+    Raises:
+        Exception: If download fails.
+    """
+    temp_dir = tempfile.gettempdir()
+    temp_path = os.path.join(temp_dir, f"telegram_mcp_photo_{index}_{os.getpid()}.jpg")
+
+    opener = urllib.request.build_opener()
+    opener.addheaders = [("User-Agent", "Mozilla/5.0")]
+    urllib.request.install_opener(opener)
+    urllib.request.urlretrieve(url.strip(), temp_path)
+
+    return temp_path
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Send Photo From URL", openWorldHint=True, destructiveHint=True
+    )
+)
+@validate_id("chat_id")
+async def send_photo_from_url(
+    chat_id: Union[int, str],
+    url: Union[str, List[str]],
+    caption: str = None,
+) -> str:
+    """
+    Send photo(s) from URL(s) to a chat. Supports single image or media group (album).
+
+    Args:
+        chat_id: The chat ID or username.
+        url: Single URL or list of URLs (max 10 for media group/album).
+        caption: Optional caption for the photo(s).
+    """
+    temp_files = []
+    try:
+        # Normalize to list
+        urls = [url] if isinstance(url, str) else list(url)
+
+        # Validate count
+        if len(urls) == 0:
+            return "Error: At least one URL is required."
+        if len(urls) > 10:
+            return "Error: Media group cannot exceed 10 images."
+
+        # Validate each URL
+        for i, u in enumerate(urls):
+            is_valid, error = _validate_image_url(u)
+            if not is_valid:
+                return f"Error: Invalid URL at index {i}: {error}"
+
+        entity = await client.get_entity(chat_id)
+
+        # Send single image using InputMediaPhotoExternal
+        if len(urls) == 1:
+            media = types.InputMediaPhotoExternal(url=urls[0].strip())
+            await client(
+                functions.messages.SendMediaRequest(
+                    peer=entity,
+                    media=media,
+                    message=caption or "",
+                )
+            )
+            return f"Photo sent to chat {chat_id}."
+
+        # For multiple images, download first then send as album
+        # (Telegram API doesn't support external URLs for albums directly)
+        for i, u in enumerate(urls):
+            temp_path = _download_url_to_temp(u, i)
+            temp_files.append(temp_path)
+
+        await client.send_file(entity, temp_files, caption=caption, force_document=False)
+        return f"Media group ({len(urls)} photos) sent to chat {chat_id}."
+
+    except Exception as e:
+        return log_and_format_error(
+            "send_photo_from_url", e, chat_id=chat_id, url=url, caption=caption
+        )
+    finally:
+        # Clean up temp files
+        for f in temp_files:
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+            except OSError:
+                pass
