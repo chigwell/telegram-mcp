@@ -297,6 +297,102 @@ docker run -it --rm \
 
 ---
 
+## Quick Start with uvx
+
+For the fastest setup without cloning the repository, you can use `uvx` (part of the `uv` toolchain) to run `telegram-mcp` directly from PyPI:
+
+### Prerequisites
+- Python 3.10 or higher
+- [uv](https://docs.astral.sh/uv/) installed (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- Telegram API credentials from [my.telegram.org/apps](https://my.telegram.org/apps)
+- A session string (generate one first—see below)
+
+### Generate a Session String
+
+Before using `uvx`, you need to generate a session string. Clone the repository temporarily to use the session generator:
+
+```bash
+git clone https://github.com/chigwell/telegram-mcp.git
+cd telegram-mcp
+uv run session_string_generator.py
+```
+
+Follow the prompts to authenticate with your Telegram account. Save the generated session string securely.
+
+### Running with uvx
+
+Once you have your session string, you can run the server directly:
+
+```bash
+uvx telegram-mcp
+```
+
+The server will look for environment variables or a `.env` file in your current directory. Make sure to set:
+
+```bash
+export TELEGRAM_API_ID=your_api_id_here
+export TELEGRAM_API_HASH=your_api_hash_here
+export TELEGRAM_SESSION_STRING=your_session_string_here
+```
+
+Alternatively, create a `.env` file in your working directory with these values.
+
+### MCP Configuration for uvx
+
+To use `telegram-mcp` via `uvx` in Claude or Cursor, update your MCP configuration:
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "telegram-mcp": {
+      "command": "uvx",
+      "args": ["telegram-mcp"],
+      "env": {
+        "TELEGRAM_API_ID": "your_api_id_here",
+        "TELEGRAM_API_HASH": "your_api_hash_here",
+        "TELEGRAM_SESSION_STRING": "your_session_string_here"
+      }
+    }
+  }
+}
+```
+
+**Cursor** (`~/.cursor/mcp.json`): Same format as above.
+
+### Benefits of uvx
+
+- **No repository clone required**: Run directly from PyPI
+- **Automatic dependency management**: `uv` handles all dependencies in isolated environments
+- **Easy updates**: `uvx telegram-mcp` always runs the latest published version
+- **Clean system**: No global installation or virtual environment clutter
+
+For file-path tools (e.g., `send_file`, `download_media`), pass allowed root directories as arguments:
+
+```bash
+uvx telegram-mcp /path/to/allowed/dir1 /path/to/allowed/dir2
+```
+
+Or in your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "telegram-mcp": {
+      "command": "uvx",
+      "args": ["telegram-mcp", "/data/telegram", "/tmp/telegram-mcp"],
+      "env": {
+        "TELEGRAM_API_ID": "your_api_id_here",
+        "TELEGRAM_API_HASH": "your_api_hash_here",
+        "TELEGRAM_SESSION_STRING": "your_session_string_here"
+      }
+    }
+  }
+}
+```
+
+---
+
 ## ⚙️ Configuration for Claude & Cursor
 
 ### MCP Configuration
