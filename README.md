@@ -309,12 +309,10 @@ For the fastest setup without cloning the repository, you can use `uvx` (part of
 
 ### Generate a Session String
 
-Before using `uvx`, you need to generate a session string. Clone the repository temporarily to use the session generator:
+Before using `uvx`, you need to generate a session string. Run the session generator directly via `uvx` — no repository clone needed:
 
 ```bash
-git clone https://github.com/chigwell/telegram-mcp.git
-cd telegram-mcp
-uv run session_string_generator.py
+uvx --from telegram-mcp telegram-mcp-generate-session
 ```
 
 Follow the prompts to authenticate with your Telegram account. Save the generated session string securely.
@@ -341,7 +339,7 @@ Alternatively, create a `.env` file in your working directory with these values.
 
 To use `telegram-mcp` via `uvx` in Claude or Cursor, update your MCP configuration:
 
-**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+**Claude Desktop** (`claude_desktop_config.json` — typically `~/Library/Application Support/Claude/` on macOS or `%APPDATA%\Claude\` on Windows):
 ```json
 {
   "mcpServers": {
@@ -364,7 +362,7 @@ To use `telegram-mcp` via `uvx` in Claude or Cursor, update your MCP configurati
 
 - **No repository clone required**: Run directly from PyPI
 - **Automatic dependency management**: `uv` handles all dependencies in isolated environments
-- **Easy updates**: `uvx telegram-mcp` always runs the latest published version
+- **Easy updates**: run `uv tool upgrade telegram-mcp` to update to the latest published version
 - **Clean system**: No global installation or virtual environment clutter
 
 For file-path tools (e.g., `send_file`, `download_media`), pass allowed root directories as arguments:
