@@ -2567,23 +2567,47 @@ async def leave_chat(chat_id: Union[int, str], account: str = None) -> str:
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
-async def get_participants(chat_id: Union[int, str], account: str = None) -> str:
+async def get_participants(
+    chat_id: Union[int, str], page: int = 1, page_size: int = 100, account: str = None
+) -> str:
     """
-    List all participants in a group or channel.
+    List participants in a group or channel with pagination.
     Args:
         chat_id: The group or channel ID or username.
+        page: Page number (1-indexed).
+        page_size: Number of participants per page (max 1000).
     """
     try:
+        # Enforce safety limit per issue #14
+        if page_size > 1000:
+            return "Error: page_size cannot exceed 1000 participants per request."
+
         cl = get_client(account)
         await ensure_connected(cl)
-        participants = await cl.get_participants(chat_id)
+
+        # Calculate offset for pagination
+        offset = (page - 1) * page_size
+
+        # Fetch participants with limit and offset
+        participants = await cl.get_participants(chat_id, limit=page_size, offset=offset)
+
+        if not participants:
+            return "No participants found for this page."
+
         lines = [
             f"ID: {p.id}, Name: {getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}"
             for p in participants
         ]
-        return "\n".join(lines)
+
+        # Add pagination metadata
+        result = "\n".join(lines)
+        result += f"\n\nPage {page} (showing {len(participants)} participants)"
+
+        return result
     except Exception as e:
-        return log_and_format_error("get_participants", e, chat_id=chat_id)
+        return log_and_format_error(
+            "get_participants", e, chat_id=chat_id, page=page, page_size=page_size
+        )
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Send File", openWorldHint=True, destructiveHint=True))
