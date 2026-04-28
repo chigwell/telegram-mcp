@@ -17,4 +17,4 @@ services:
     # Replace './telegram_sessions' with your desired host path.
     # volumes:
     #   - ./telegram_sessions:/app
-    restart: unless-stopped 
+    restart: unless-stopped
