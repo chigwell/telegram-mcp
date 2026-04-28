@@ -1,13 +1,9 @@
-import os
 from pathlib import Path
 
 import pytest
 from mcp import types
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
-
-os.environ.setdefault("TELEGRAM_API_ID", "12345")
-os.environ.setdefault("TELEGRAM_API_HASH", "dummy_hash")
 
 import main
 
