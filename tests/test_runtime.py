@@ -76,7 +76,9 @@ async def test_with_account_routes_single_multi_and_readonly(monkeypatch):
         "Error: 'account' is required. Available accounts: work, personal"
     )
     assert await runtime.with_account(readonly=False)(tool)(account="work") == "work"
-    assert await runtime.with_account(readonly=True)(tool)() == "[work]\nwork\n\n[personal]\npersonal"
+    assert (
+        await runtime.with_account(readonly=True)(tool)() == "[work]\nwork\n\n[personal]\npersonal"
+    )
 
 
 class _ConnectivityClient:
@@ -228,7 +230,9 @@ def test_entity_type_filter_and_formatting_helpers():
         username="jdoe",
         phone="123",
     )
-    chat = Chat(id=2, title="Group\x00Name", photo=None, participants_count=3, date=None, version=1)
+    chat = Chat(
+        id=2, title="Group\x00Name", photo=None, participants_count=3, date=None, version=1
+    )
     channel = Channel(
         id=3,
         title="Channel",
@@ -330,7 +334,10 @@ def test_message_formatting_sender_and_engagement_helpers():
     assert formatted["text"] == "helloworld"
     assert runtime.get_sender_name(message) == "Jane Doe"
     assert runtime.get_sender_name(SimpleNamespace(sender=None)) == "Unknown"
-    assert runtime.get_sender_name(SimpleNamespace(sender=SimpleNamespace(title="A\nGroup"))) == "A Group"
+    assert (
+        runtime.get_sender_name(SimpleNamespace(sender=SimpleNamespace(title="A\nGroup")))
+        == "A Group"
+    )
     assert runtime.get_engagement_info(message) == " | views:10, forwards:2, reactions:3"
     assert runtime.get_engagement_dict(message) == {"views": 10, "forwards": 2, "reactions": 3}
     assert runtime.get_engagement_info(SimpleNamespace()) == ""
