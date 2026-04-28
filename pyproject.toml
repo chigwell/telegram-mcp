@@ -38,7 +38,8 @@ dependencies = [
 "Bug Tracker" = "https://github.com/chigwell/telegram-mcp/issues"
 
 [tool.setuptools]
-py-modules = ["main", "session_string_generator"]
+py-modules = ["main", "sanitize", "session_string_generator"]
+packages = ["telegram_mcp", "telegram_mcp.tools"]
 
 [project.scripts]
 telegram-mcp = "main:main"
@@ -67,4 +68,27 @@ dev = [
     "flake8>=7.3.0",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+    "pytest-cov>=6.0.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+]
+
+[tool.coverage.run]
+branch = true
+# Unit coverage focuses on deterministic local logic. The Telegram tool modules
+# are live API adapters and should get separate mocked or integration coverage.
+source = [
+    "main",
+    "sanitize",
+    "telegram_mcp.runtime",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 80
