@@ -179,3 +179,7 @@ class TestFormatToolResult:
         )
         parsed = json.loads(result)
         assert parsed["results"][0]["text"] == 'He said "hello\\nworld"'
+
+    def test_unserializable_value_raises_type_error(self):
+        with pytest.raises(TypeError, match="not JSON serializable"):
+            format_tool_result([{"bad": object()}])

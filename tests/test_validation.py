@@ -1,12 +1,6 @@
 import pytest
-import os
 
-os.environ["TELEGRAM_API_ID"] = "12345"
-os.environ["TELEGRAM_API_HASH"] = "dummy_hash"
-from main import validate_id, ValidationError, log_and_format_error
-from functools import wraps
-import asyncio
-from typing import Union, List, Optional
+from main import validate_id
 
 
 # A simple async function to be decorated for testing
