@@ -1,0 +1,40 @@
+repos:
+  - repo: https://github.com/psf/black
+    rev: 25.9.0
+    hooks:
+      - id: black
+        language_version: python3
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.3.0
+    hooks:
+      - id: flake8
+        args: ["--count", "--select=E9,F63,F7,F82", "--show-source", "--statistics"]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.12.0
+    hooks:
+      - id: hadolint-docker
+        args: ["--failure-threshold", "error", "Dockerfile"]
+
+  - repo: local
+    hooks:
+      - id: docker-compose-config
+        name: docker compose config
+        entry: docker compose --env-file .env.example config
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: docker-build-ci
+        name: docker build (ci parity)
+        entry: docker build --file Dockerfile --tag telegram-mcp:ci .
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
