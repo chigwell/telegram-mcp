@@ -38,3 +38,9 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-push]
+      - id: pytest-coverage-ci
+        name: pytest with coverage (ci parity)
+        entry: uv run --env-file .env.example pytest --cov --cov-report=term-missing --cov-report=xml
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
