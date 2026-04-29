@@ -30,6 +30,7 @@ Message sent successfully:
 - [Quick Start](#quick-start)
 - [MCP Client Configuration](#mcp-client-configuration)
 - [Multi-Account Setup](#multi-account-setup)
+- [Proxy Support](#proxy-support)
 - [File Path Security](#file-path-security)
 - [Docker](#docker)
 - [Development](#development)
@@ -165,6 +166,58 @@ Example prompts:
 - "List my accounts"
 - "Show unread messages from all accounts"
 - "Send this from my work account to @example"
+
+## Proxy Support
+
+Route Telegram traffic through a proxy by setting the `TELEGRAM_PROXY_*`
+environment variables. Supported types are `socks5`, `socks4`, `http`, and
+`mtproxy`.
+
+SOCKS and HTTP proxies require the optional `python-socks` package:
+
+```bash
+uv sync --extra proxy
+# or
+pip install python-socks
+```
+
+Single-account configuration:
+
+```env
+TELEGRAM_PROXY_TYPE=socks5
+TELEGRAM_PROXY_HOST=127.0.0.1
+TELEGRAM_PROXY_PORT=1080
+TELEGRAM_PROXY_USERNAME=optional_user
+TELEGRAM_PROXY_PASSWORD=optional_pass
+TELEGRAM_PROXY_RDNS=true
+```
+
+MTProxy:
+
+```env
+TELEGRAM_PROXY_TYPE=mtproxy
+TELEGRAM_PROXY_HOST=mtproxy.example
+TELEGRAM_PROXY_PORT=443
+TELEGRAM_PROXY_SECRET=ee0123456789abcdef...
+```
+
+Per-account overrides use the same `_<LABEL>` suffix as session variables and
+take precedence over the unsuffixed defaults:
+
+```env
+TELEGRAM_PROXY_TYPE=socks5
+TELEGRAM_PROXY_HOST=127.0.0.1
+TELEGRAM_PROXY_PORT=1080
+
+TELEGRAM_PROXY_TYPE_WORK=http
+TELEGRAM_PROXY_HOST_WORK=proxy.work.example
+TELEGRAM_PROXY_PORT_WORK=3128
+```
+
+Misconfigured proxy settings (unknown type, missing host/port, invalid port,
+missing MTProxy secret, or a missing `python-socks` package) cause the server
+to fail fast at startup with a clear error message instead of silently
+bypassing the proxy.
 
 ## File Path Security
 

@@ -133,6 +133,108 @@ _install_annotation_hook()
 # ---------------------------------------------------------------------------
 
 
+_PROXY_TYPES_SOCKS_HTTP = {"socks5", "socks4", "http"}
+_PROXY_TYPES_ALL = _PROXY_TYPES_SOCKS_HTTP | {"mtproxy"}
+
+
+def _get_proxy_env(name: str, label: str) -> Optional[str]:
+    """Resolve a TELEGRAM_PROXY_* env var with optional ``_<LABEL>`` suffix.
+
+    Per-account values override the unsuffixed defaults so a global proxy can
+    coexist with per-label overrides.
+    """
+    suffixed = os.getenv(f"TELEGRAM_PROXY_{name}_{label.upper()}")
+    if suffixed:
+        return suffixed
+    return os.getenv(f"TELEGRAM_PROXY_{name}") or None
+
+
+def _parse_bool_env(value: Optional[str], default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_proxy_for_label(label: str) -> tuple[Optional[Any], Optional[Any]]:
+    """Return ``(proxy, connection)`` kwargs for ``TelegramClient`` for a label.
+
+    Reads ``TELEGRAM_PROXY_*`` env vars (with optional ``_<LABEL>`` suffix).
+    Returns ``(None, None)`` when no proxy is configured. Raises
+    :class:`ValidationError` for malformed configuration so the server fails
+    fast instead of silently bypassing the proxy.
+    """
+    proxy_type = _get_proxy_env("TYPE", label)
+    if not proxy_type:
+        return None, None
+
+    proxy_type = proxy_type.strip().lower()
+    if proxy_type not in _PROXY_TYPES_ALL:
+        raise ValidationError(
+            f"Invalid TELEGRAM_PROXY_TYPE '{proxy_type}'. "
+            f"Expected one of: {', '.join(sorted(_PROXY_TYPES_ALL))}."
+        )
+
+    host = _get_proxy_env("HOST", label)
+    port_raw = _get_proxy_env("PORT", label)
+    if not host or not port_raw:
+        raise ValidationError(
+            "TELEGRAM_PROXY_HOST and TELEGRAM_PROXY_PORT are required when "
+            "TELEGRAM_PROXY_TYPE is set."
+        )
+    try:
+        port = int(port_raw)
+    except ValueError as exc:
+        raise ValidationError(
+            f"TELEGRAM_PROXY_PORT must be an integer, got '{port_raw}'."
+        ) from exc
+
+    if proxy_type == "mtproxy":
+        secret = _get_proxy_env("SECRET", label)
+        if not secret:
+            raise ValidationError("TELEGRAM_PROXY_SECRET is required for mtproxy.")
+        try:
+            from telethon.network import ConnectionTcpMTProxyRandomizedIntermediate
+        except ImportError as exc:  # pragma: no cover - defensive guard
+            raise ValidationError(
+                "Telethon MTProxy connection class is unavailable; upgrade telethon."
+            ) from exc
+        return (host, port, secret), ConnectionTcpMTProxyRandomizedIntermediate
+
+    # SOCKS4/SOCKS5/HTTP via python-socks (Telethon's optional dependency).
+    try:
+        import python_socks  # noqa: F401
+    except ImportError as exc:
+        raise ValidationError(
+            f"Proxy type '{proxy_type}' requires the 'python-socks' package. "
+            "Install it with `pip install python-socks` or `uv sync --extra proxy`."
+        ) from exc
+
+    proxy: dict[str, Any] = {
+        "proxy_type": proxy_type,
+        "addr": host,
+        "port": port,
+        "rdns": _parse_bool_env(_get_proxy_env("RDNS", label), default=True),
+    }
+    username = _get_proxy_env("USERNAME", label)
+    password = _get_proxy_env("PASSWORD", label)
+    if username:
+        proxy["username"] = username
+    if password:
+        proxy["password"] = password
+    return proxy, None
+
+
+def _build_client(session: Any, label: str) -> TelegramClient:
+    """Construct a ``TelegramClient`` honoring per-label proxy configuration."""
+    proxy, connection = _build_proxy_for_label(label)
+    kwargs: dict[str, Any] = {}
+    if proxy is not None:
+        kwargs["proxy"] = proxy
+    if connection is not None:
+        kwargs["connection"] = connection
+    return TelegramClient(session, TELEGRAM_API_ID, TELEGRAM_API_HASH, **kwargs)
+
+
 def _discover_accounts() -> dict[str, TelegramClient]:
     """Scan env vars to build account label -> TelegramClient mapping.
 
@@ -140,6 +242,9 @@ def _discover_accounts() -> dict[str, TelegramClient]:
     - TELEGRAM_SESSION_STRING_<LABEL> / TELEGRAM_SESSION_NAME_<LABEL> -> multi-mode
     - Unsuffixed TELEGRAM_SESSION_STRING / TELEGRAM_SESSION_NAME -> label "default"
     - If both suffixed and unsuffixed exist -> unsuffixed becomes "default"
+
+    Each client is constructed via :func:`_build_client`, which applies any
+    matching ``TELEGRAM_PROXY_*`` configuration (optionally per-label).
     """
     accounts: dict[str, TelegramClient] = {}
 
@@ -149,23 +254,19 @@ def _discover_accounts() -> dict[str, TelegramClient]:
     for key, value in os.environ.items():
         if key.startswith(prefix_str) and value:
             label = key[len(prefix_str) :].lower()
-            accounts[label] = TelegramClient(
-                StringSession(value), TELEGRAM_API_ID, TELEGRAM_API_HASH
-            )
+            accounts[label] = _build_client(StringSession(value), label)
         elif key.startswith(prefix_name) and value:
             label = key[len(prefix_name) :].lower()
-            accounts[label] = TelegramClient(value, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+            accounts[label] = _build_client(value, label)
 
     # Backward-compatible unsuffixed variables
     session_string = os.getenv("TELEGRAM_SESSION_STRING")
     session_name = os.getenv("TELEGRAM_SESSION_NAME")
 
     if session_string and "default" not in accounts:
-        accounts["default"] = TelegramClient(
-            StringSession(session_string), TELEGRAM_API_ID, TELEGRAM_API_HASH
-        )
+        accounts["default"] = _build_client(StringSession(session_string), "default")
     elif session_name and "default" not in accounts:
-        accounts["default"] = TelegramClient(session_name, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+        accounts["default"] = _build_client(session_name, "default")
 
     if not accounts:
         print(

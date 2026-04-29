@@ -19,8 +19,9 @@ def _clear_session_env(monkeypatch):
 
 
 class _FakeTelegramClient:
-    def __init__(self, *args):
+    def __init__(self, *args, **kwargs):
         self.args = args
+        self.kwargs = kwargs
 
 
 def test_discover_accounts_supports_suffixed_and_default_sessions(monkeypatch):
@@ -44,6 +45,161 @@ def test_discover_accounts_exits_when_no_sessions_configured(monkeypatch):
 
     with pytest.raises(SystemExit):
         runtime._discover_accounts()
+
+
+def _clear_proxy_env(monkeypatch):
+    for key in list(runtime.os.environ):
+        if key.startswith("TELEGRAM_PROXY_"):
+            monkeypatch.delenv(key, raising=False)
+
+
+def test_build_proxy_returns_none_when_unset(monkeypatch):
+    _clear_proxy_env(monkeypatch)
+    assert runtime._build_proxy_for_label("default") == (None, None)
+
+
+def _stub_python_socks(monkeypatch):
+    """Make ``import python_socks`` succeed without installing the package."""
+    import sys
+    import types
+
+    stub = types.ModuleType("python_socks")
+    monkeypatch.setitem(sys.modules, "python_socks", stub)
+
+
+def test_build_proxy_socks5_with_credentials(monkeypatch):
+    _clear_proxy_env(monkeypatch)
+    _stub_python_socks(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_PROXY_TYPE", "socks5")
+    monkeypatch.setenv("TELEGRAM_PROXY_HOST", "127.0.0.1")
+    monkeypatch.setenv("TELEGRAM_PROXY_PORT", "1080")
+    monkeypatch.setenv("TELEGRAM_PROXY_USERNAME", "alice")
+    monkeypatch.setenv("TELEGRAM_PROXY_PASSWORD", "secret")
+    monkeypatch.setenv("TELEGRAM_PROXY_RDNS", "false")
+
+    proxy, connection = runtime._build_proxy_for_label("default")
+
+    assert connection is None
+    assert proxy == {
+        "proxy_type": "socks5",
+        "addr": "127.0.0.1",
+        "port": 1080,
+        "rdns": False,
+        "username": "alice",
+        "password": "secret",
+    }
+
+
+def test_build_proxy_per_label_overrides_default(monkeypatch):
+    _clear_proxy_env(monkeypatch)
+    _stub_python_socks(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_PROXY_TYPE", "socks5")
+    monkeypatch.setenv("TELEGRAM_PROXY_HOST", "127.0.0.1")
+    monkeypatch.setenv("TELEGRAM_PROXY_PORT", "1080")
+    monkeypatch.setenv("TELEGRAM_PROXY_TYPE_WORK", "http")
+    monkeypatch.setenv("TELEGRAM_PROXY_HOST_WORK", "proxy.work.example")
+    monkeypatch.setenv("TELEGRAM_PROXY_PORT_WORK", "3128")
+
+    proxy, connection = runtime._build_proxy_for_label("work")
+
+    assert connection is None
+    assert proxy["proxy_type"] == "http"
+    assert proxy["addr"] == "proxy.work.example"
+    assert proxy["port"] == 3128
+
+
+def test_build_proxy_mtproxy_returns_connection_class(monkeypatch):
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_PROXY_TYPE", "mtproxy")
+    monkeypatch.setenv("TELEGRAM_PROXY_HOST", "mtproxy.example")
+    monkeypatch.setenv("TELEGRAM_PROXY_PORT", "443")
+    monkeypatch.setenv("TELEGRAM_PROXY_SECRET", "ee0123456789abcdef")
+
+    proxy, connection = runtime._build_proxy_for_label("default")
+
+    from telethon.network import ConnectionTcpMTProxyRandomizedIntermediate
+
+    assert proxy == ("mtproxy.example", 443, "ee0123456789abcdef")
+    assert connection is ConnectionTcpMTProxyRandomizedIntermediate
+
+
+def test_build_proxy_rejects_unknown_type(monkeypatch):
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_PROXY_TYPE", "carrier-pigeon")
+    monkeypatch.setenv("TELEGRAM_PROXY_HOST", "127.0.0.1")
+    monkeypatch.setenv("TELEGRAM_PROXY_PORT", "1080")
+
+    with pytest.raises(runtime.ValidationError, match="Invalid TELEGRAM_PROXY_TYPE"):
+        runtime._build_proxy_for_label("default")
+
+
+def test_build_proxy_requires_host_and_port(monkeypatch):
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_PROXY_TYPE", "socks5")
+
+    with pytest.raises(runtime.ValidationError, match="HOST and TELEGRAM_PROXY_PORT"):
+        runtime._build_proxy_for_label("default")
+
+
+def test_build_proxy_rejects_non_integer_port(monkeypatch):
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_PROXY_TYPE", "socks5")
+    monkeypatch.setenv("TELEGRAM_PROXY_HOST", "127.0.0.1")
+    monkeypatch.setenv("TELEGRAM_PROXY_PORT", "not-a-port")
+
+    with pytest.raises(runtime.ValidationError, match="must be an integer"):
+        runtime._build_proxy_for_label("default")
+
+
+def test_build_proxy_mtproxy_requires_secret(monkeypatch):
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_PROXY_TYPE", "mtproxy")
+    monkeypatch.setenv("TELEGRAM_PROXY_HOST", "mtproxy.example")
+    monkeypatch.setenv("TELEGRAM_PROXY_PORT", "443")
+
+    with pytest.raises(runtime.ValidationError, match="SECRET"):
+        runtime._build_proxy_for_label("default")
+
+
+def test_build_proxy_socks_requires_python_socks(monkeypatch):
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_PROXY_TYPE", "socks5")
+    monkeypatch.setenv("TELEGRAM_PROXY_HOST", "127.0.0.1")
+    monkeypatch.setenv("TELEGRAM_PROXY_PORT", "1080")
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "python_socks":
+            raise ImportError("simulated missing python-socks")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(runtime.ValidationError, match="python-socks"):
+        runtime._build_proxy_for_label("default")
+
+
+def test_discover_accounts_passes_proxy_kwargs_to_client(monkeypatch):
+    _clear_session_env(monkeypatch)
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_SESSION_STRING", "default-session")
+    monkeypatch.setenv("TELEGRAM_PROXY_TYPE", "mtproxy")
+    monkeypatch.setenv("TELEGRAM_PROXY_HOST", "mtproxy.example")
+    monkeypatch.setenv("TELEGRAM_PROXY_PORT", "443")
+    monkeypatch.setenv("TELEGRAM_PROXY_SECRET", "ee0123456789abcdef")
+    monkeypatch.setattr(runtime, "TelegramClient", _FakeTelegramClient)
+    monkeypatch.setattr(runtime, "StringSession", lambda value: f"StringSession:{value}")
+
+    accounts = runtime._discover_accounts()
+
+    client = accounts["default"]
+    assert client.kwargs["proxy"] == ("mtproxy.example", 443, "ee0123456789abcdef")
+    from telethon.network import ConnectionTcpMTProxyRandomizedIntermediate
+
+    assert client.kwargs["connection"] is ConnectionTcpMTProxyRandomizedIntermediate
 
 
 def test_get_client_single_and_multi_account_paths(monkeypatch):

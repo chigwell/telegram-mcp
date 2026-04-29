@@ -33,6 +33,12 @@ dependencies = [
     "telethon>=1.42.0",
 ]
 
+[project.optional-dependencies]
+# Required only when TELEGRAM_PROXY_TYPE is set to socks5/socks4/http.
+proxy = [
+    "python-socks>=2.4.3",
+]
+
 [project.urls]
 "Homepage" = "https://github.com/chigwell/telegram-mcp"
 "Bug Tracker" = "https://github.com/chigwell/telegram-mcp/issues"
