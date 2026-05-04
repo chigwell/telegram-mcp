@@ -28,8 +28,17 @@ from dotenv import load_dotenv
 from telethon import errors
 from telethon.sessions import StringSession
 from telethon.sync import TelegramClient
+from telegram_mcp.install_guard import UnsafeInstallationError, assert_safe_distribution
 
 load_dotenv()
+
+
+def _check_installation() -> None:
+    try:
+        assert_safe_distribution()
+    except UnsafeInstallationError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
 
 
 def _qr_login(client: TelegramClient) -> None:
@@ -90,6 +99,8 @@ def _phone_login(client: TelegramClient) -> None:
 
 
 def main() -> None:
+    _check_installation()
+
     API_ID = os.getenv("TELEGRAM_API_ID")
     API_HASH = os.getenv("TELEGRAM_API_HASH")
 

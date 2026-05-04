@@ -1,5 +1,12 @@
 """Application entrypoints for the Telegram MCP server."""
 
+from telegram_mcp.install_guard import UnsafeInstallationError, assert_safe_distribution
+
+try:
+    assert_safe_distribution()
+except UnsafeInstallationError as exc:
+    raise SystemExit(str(exc)) from None
+
 from telegram_mcp.runtime import *
 import telegram_mcp.tools  # noqa: F401 - registers MCP tools via decorators
 

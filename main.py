@@ -4,6 +4,13 @@ The implementation lives in the telegram_mcp package. This module keeps the
 historic `main` import path and console script target working.
 """
 
+from telegram_mcp.install_guard import UnsafeInstallationError, assert_safe_distribution
+
+try:
+    assert_safe_distribution()
+except UnsafeInstallationError as exc:
+    raise SystemExit(str(exc)) from None
+
 from telegram_mcp import runtime as _runtime
 from telegram_mcp.runtime import *
 from telegram_mcp.runner import _main, main

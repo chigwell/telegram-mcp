@@ -58,9 +58,15 @@ All tool results that include Telegram user-controlled content are sanitized and
 - Telegram API credentials from [my.telegram.org/apps](https://my.telegram.org/apps)
 - A Telegram session string or file-based session
 - An MCP client such as Claude Desktop, Cursor, or another MCP-compatible host
-- Optional: [uv](https://docs.astral.sh/uv/) for local development and `uvx` usage
+- Optional: [uv](https://docs.astral.sh/uv/) for local development
 
 ## Quick Start
+
+> Do not install this server with `uvx telegram-mcp`, `uvx --from telegram-mcp`,
+> or `pip install telegram-mcp`. The `telegram-mcp` name on PyPI is currently
+> owned by a different project and does not install this repository. Passing
+> `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, or `TELEGRAM_SESSION_STRING` to that
+> package can expose Telegram account credentials to unrelated third-party code.
 
 ### 1. Clone and Install
 
@@ -102,7 +108,8 @@ uv run main.py
 
 ## MCP Client Configuration
 
-For Claude Desktop or Cursor, point the MCP server at this project:
+For Claude Desktop or Cursor, point the MCP server at a cloned checkout of
+this project:
 
 ```json
 {
@@ -114,20 +121,7 @@ For Claude Desktop or Cursor, point the MCP server at this project:
         "/full/path/to/telegram-mcp",
         "run",
         "main.py"
-      ]
-    }
-  }
-}
-```
-
-You can also run from PyPI with `uvx`:
-
-```json
-{
-  "mcpServers": {
-    "telegram-mcp": {
-      "command": "uvx",
-      "args": ["telegram-mcp"],
+      ],
       "env": {
         "TELEGRAM_API_ID": "your_api_id_here",
         "TELEGRAM_API_HASH": "your_api_hash_here",
@@ -138,10 +132,37 @@ You can also run from PyPI with `uvx`:
 }
 ```
 
-Generate a session string without cloning the repo:
+Alternatively, install this repository directly from GitHub into a virtual
+environment using a specific release tag or commit:
 
 ```bash
-uvx --from telegram-mcp telegram-mcp-generate-session
+python -m venv .venv
+. .venv/bin/activate
+pip install "git+https://github.com/chigwell/telegram-mcp.git@<tag-or-commit>"
+```
+
+Then configure your MCP client to run the installed console script:
+
+```json
+{
+  "mcpServers": {
+    "telegram-mcp": {
+      "command": "/full/path/to/.venv/bin/telegram-mcp",
+      "env": {
+        "TELEGRAM_API_ID": "your_api_id_here",
+        "TELEGRAM_API_HASH": "your_api_hash_here",
+        "TELEGRAM_SESSION_STRING": "your_session_string_here"
+      }
+    }
+  }
+}
+```
+
+Generate a session string without cloning the repo by sourcing this repository
+from GitHub explicitly:
+
+```bash
+uvx --from "git+https://github.com/chigwell/telegram-mcp.git@<pinned-release-tag-or-commit>" telegram-mcp-generate-session
 ```
 
 ## Multi-Account Setup
@@ -244,10 +265,29 @@ Run with allowed roots:
 uv run main.py /data/telegram /tmp/telegram-mcp
 ```
 
-Or with `uvx`:
+From an MCP client configuration, pass the same roots after `main.py`:
 
-```bash
-uvx telegram-mcp /data/telegram /tmp/telegram-mcp
+```json
+{
+  "mcpServers": {
+    "telegram-mcp": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/full/path/to/telegram-mcp",
+        "run",
+        "main.py",
+        "/data/telegram",
+        "/tmp/telegram-mcp"
+      ],
+      "env": {
+        "TELEGRAM_API_ID": "your_api_id_here",
+        "TELEGRAM_API_HASH": "your_api_hash_here",
+        "TELEGRAM_SESSION_STRING": "your_session_string_here"
+      }
+    }
+  }
+}
 ```
 
 ## Docker
@@ -314,8 +354,17 @@ uv run flake8 .
 
 - Never commit `.env`, session strings, or `.session` files.
 - A Telegram session string grants access to the account it belongs to.
+- The `telegram-mcp` package name on PyPI is not controlled by this project.
+  Avoid PyPI-based `telegram-mcp` install commands unless ownership changes and
+  the package is verified.
+- This repository includes a best-effort startup guard that refuses installed
+  `telegram-mcp` distributions without a source checkout or direct git/file
+  install record. That guard cannot run when the unrelated PyPI package itself
+  is launched, so use clone-based or explicit git installs.
 - Prefer session strings over file sessions when running multiple server instances.
-- All Telegram API calls go directly from your machine/container to Telegram.
+- By default, Telegram API calls go directly from your machine/container to Telegram.
+  If `TELEGRAM_PROXY_*` is configured, Telegram traffic is routed through the
+  configured SOCKS/HTTP/MTProxy proxy instead.
 - User-generated Telegram content is sanitized before being returned to MCP clients.
 
 ### Prompt Injection Protection
