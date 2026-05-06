@@ -30,6 +30,7 @@ Message sent successfully:
 - [Quick Start](#quick-start)
 - [MCP Client Configuration](#mcp-client-configuration)
 - [Multi-Account Setup](#multi-account-setup)
+- [Voice Transcription](#voice-transcription)
 - [Proxy Support](#proxy-support)
 - [File Path Security](#file-path-security)
 - [Docker](#docker)
@@ -49,6 +50,7 @@ The server currently includes 80+ MCP tools grouped into these areas:
 - **Media:** send files, download media, upload files, send voice notes, stickers, GIFs, and inspect message media.
 - **Profile and privacy:** get your own account info, update profile fields, set or delete profile photos, inspect privacy settings, get user info/photos/status, and manage bot commands.
 - **Folders and drafts:** list, create, update, reorder, and delete Telegram folders; save, list, and clear drafts.
+- **Voice transcription (optional):** download a voice/audio message and transcribe it locally with Whisper (Intel CPU/Iris/Arc, NVIDIA CUDA, Apple Silicon, or CPU fallback). See [Voice Transcription](#voice-transcription).
 
 All tool results that include Telegram user-controlled content are sanitized and, where practical, returned as structured JSON.
 
@@ -187,6 +189,81 @@ Example prompts:
 - "List my accounts"
 - "Show unread messages from all accounts"
 - "Send this from my work account to @example"
+
+## Voice Transcription
+
+Voice and audio messages can be transcribed locally with Whisper. Audio
+never leaves your host — the model runs against whichever accelerator
+your machine has. Two MCP tools are exposed:
+
+- `transcribe_voice(chat_id, message_id, language=None)` — downloads the
+  voice/audio attachment and returns transcribed text.
+- `voice_transcription_info()` — reports the active backend, device,
+  model, and config.
+
+### Install one of the backend extras
+
+The transcription dependencies are **optional** — pick the one that
+matches your hardware. Without any of them installed the tools return a
+clear `transcription_unavailable` error and the rest of the server keeps
+working unchanged.
+
+| Hardware | Extras | Backend |
+|---|---|---|
+| Universal CPU on any OS, NVIDIA CUDA | `pip install -e ".[voice]"` | `faster-whisper` (CTranslate2) |
+| Intel CPU / Iris Xe iGPU / Arc dGPU | `pip install -e ".[voice-openvino]"` | OpenVINO GenAI |
+| Apple Silicon (M1/M2/M3/M4) | `pip install -e ".[voice-mlx]"` | `mlx-whisper` |
+
+You can install several extras at once — `auto`-detection picks the best
+available accelerator at startup. If only CPU is available the server
+emits a one-time warning ("будет долго" / `whisper_cpu_only`) — disable
+with `WHISPER_WARN_CPU=false`.
+
+### Configuration
+
+All settings are env vars. Defaults are sensible for most setups.
+
+| Var | Default | Meaning |
+|---|---|---|
+| `WHISPER_ENABLED` | `true` | Set to `false` to disable transcription tools entirely. |
+| `WHISPER_BACKEND` | `auto` | `auto` / `faster_whisper` / `openvino` / `mlx`. |
+| `WHISPER_DEVICE` | `auto` | `auto` / `cpu` / `cuda` / `gpu` / `gpu.0` / `gpu.1` … |
+| `WHISPER_MODEL` | `base` | `tiny` / `base` / `small` / `medium` / `large-v3` / `large-v3-turbo`. |
+| `WHISPER_LANGUAGE` | _(unset = auto-detect)_ | ISO 639-1 code (`ru`, `en`, …). |
+| `WHISPER_WARN_CPU` | `true` | Log a one-time warning when running CPU-only. |
+| `WHISPER_CACHE_DIR` | `~/.cache/telegram-mcp/whisper` | Where weights are downloaded. |
+
+### Auto-detect priority
+
+1. Apple Silicon → `mlx-whisper` (MPS).
+2. NVIDIA CUDA → `faster-whisper` (`cuda`, fp16).
+3. Intel discrete GPU (Arc) or iGPU (Iris/UHD) → OpenVINO (`GPU.N`).
+4. CPU fallback via `faster-whisper` (or OpenVINO if it's the only one
+   installed).
+
+Performance reference (Whisper-base, 11 s English clip):
+
+| Device | Inference | × realtime |
+|---|---|---|
+| Intel Arc A550M (OpenVINO) | ~160 ms | 67× |
+| Intel Iris Xe (OpenVINO) | ~330 ms | 33× |
+| i7-12700H, 20 threads (OpenVINO CPU) | ~600 ms | 18× |
+
+Larger models (`large-v3-turbo` etc.) are correspondingly slower; pick
+the smallest model that gives you acceptable accuracy for your language
+and noise level.
+
+### Example
+
+```text
+> Find the latest voice message in my Saved Messages and transcribe it
+  in Russian.
+
+  list_messages(chat_id="me", limit=20, with_media=true)
+  → finds a voice message with id=12345
+  transcribe_voice(chat_id="me", message_id=12345, language="ru")
+  → "Привет, проверка транскрипции через локальный Whisper."
+```
 
 ## Proxy Support
 
