@@ -638,54 +638,108 @@ def format_entity(entity) -> Dict[str, Any]:
     return result
 
 
+def _marked_id_candidates(identifier: Union[int, str]) -> list[int]:
+    """Return marked chat/channel ID variants for a bare positive integer ID."""
+    if not isinstance(identifier, int) or identifier <= 0:
+        return []
+
+    return [
+        -1000000000000 - identifier,
+        -identifier,
+    ]
+
+
 async def resolve_entity(identifier: Union[int, str], client=None) -> Any:
-    """Resolve entity with automatic cache warming and auto-reconnect.
+    """Resolve entity with automatic cache warming, marked-ID fallback, and reconnect.
 
     StringSession has no persistent entity cache. If get_entity() fails
     because the cache is cold (ValueError on PeerUser lookup for group IDs),
     warm the cache via get_dialogs() and retry.
 
+    If the value is a bare positive channel/chat ID, try Telethon's marked
+    channel/chat ID variants before raising.
+
     On ConnectionError, reconnects and retries once.
     """
     if client is None:
         client = get_client()
     await ensure_connected(client)
+    last_error = None
     try:
         try:
             return await client.get_entity(identifier)
-        except ValueError:
+        except ValueError as error:
+            last_error = error
             await client.get_dialogs()
-            return await client.get_entity(identifier)
+            try:
+                return await client.get_entity(identifier)
+            except ValueError as error:
+                last_error = error
     except ConnectionError:
         await ensure_connected(client)
         try:
             return await client.get_entity(identifier)
-        except ValueError:
+        except ValueError as error:
+            last_error = error
             await client.get_dialogs()
-            return await client.get_entity(identifier)
+            try:
+                return await client.get_entity(identifier)
+            except ValueError as error:
+                last_error = error
+
+    for candidate in _marked_id_candidates(identifier):
+        try:
+            return await client.get_entity(candidate)
+        except ValueError as error:
+            last_error = error
+
+    raise ValueError(
+        f"Could not resolve entity for {identifier!r}, "
+        f"including marked variants {_marked_id_candidates(identifier)}"
+    ) from last_error
 
 
 async def resolve_input_entity(identifier: Union[int, str], client=None) -> Any:
     """Like resolve_entity() but returns an InputPeer.
 
-    On ConnectionError, reconnects and retries once.
+    Uses the same cache warming, marked-ID fallback, and reconnect behavior.
     """
     if client is None:
         client = get_client()
     await ensure_connected(client)
+    last_error = None
     try:
         try:
             return await client.get_input_entity(identifier)
-        except ValueError:
+        except ValueError as error:
+            last_error = error
             await client.get_dialogs()
-            return await client.get_input_entity(identifier)
+            try:
+                return await client.get_input_entity(identifier)
+            except ValueError as error:
+                last_error = error
     except ConnectionError:
         await ensure_connected(client)
         try:
             return await client.get_input_entity(identifier)
-        except ValueError:
+        except ValueError as error:
+            last_error = error
             await client.get_dialogs()
-            return await client.get_input_entity(identifier)
+            try:
+                return await client.get_input_entity(identifier)
+            except ValueError as error:
+                last_error = error
+
+    for candidate in _marked_id_candidates(identifier):
+        try:
+            return await client.get_input_entity(candidate)
+        except ValueError as error:
+            last_error = error
+
+    raise ValueError(
+        f"Could not resolve input entity for {identifier!r}, "
+        f"including marked variants {_marked_id_candidates(identifier)}"
+    ) from last_error
 
 
 def format_message(message) -> Dict[str, Any]:
