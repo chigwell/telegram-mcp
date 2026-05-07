@@ -100,7 +100,7 @@ async def get_folder(folder_id: int, account: str = None) -> str:
             try:
                 entity = await resolve_entity(peer, cl)
                 chat_info = {
-                    "id": entity.id,
+                    "id": get_marked_id(entity),
                     "name": sanitize_name(
                         getattr(entity, "title", None) or getattr(entity, "first_name", "Unknown")
                     ),
@@ -118,7 +118,7 @@ async def get_folder(folder_id: int, account: str = None) -> str:
             try:
                 entity = await resolve_entity(peer, cl)
                 chat_info = {
-                    "id": entity.id,
+                    "id": get_marked_id(entity),
                     "name": sanitize_name(
                         getattr(entity, "title", None) or getattr(entity, "first_name", "Unknown")
                     ),
@@ -134,7 +134,7 @@ async def get_folder(folder_id: int, account: str = None) -> str:
             try:
                 entity = await resolve_entity(peer, cl)
                 chat_info = {
-                    "id": entity.id,
+                    "id": get_marked_id(entity),
                     "name": sanitize_name(
                         getattr(entity, "title", None) or getattr(entity, "first_name", "Unknown")
                     ),

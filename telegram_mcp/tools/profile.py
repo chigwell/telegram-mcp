@@ -308,7 +308,7 @@ async def get_bot_info(bot_username: str, account: str = None) -> str:
         # user content (names, about) directly in the tool result.
         info = {
             "bot_info": {
-                "id": entity.id,
+                "id": get_marked_id(entity),
                 "username": entity.username,
                 "first_name": sanitize_name(entity.first_name),
                 "last_name": sanitize_name(getattr(entity, "last_name", "")),
