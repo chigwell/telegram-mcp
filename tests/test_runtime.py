@@ -307,6 +307,7 @@ class _ResolvingClient:
         self.method_name = method_name
         self.failures = list(failures)
         self.dialogs_loaded = 0
+        self.calls = []
 
     async def get_dialogs(self):
         self.dialogs_loaded += 1
@@ -318,6 +319,7 @@ class _ResolvingClient:
         return await self._resolve(identifier)
 
     async def _resolve(self, identifier):
+        self.calls.append(identifier)
         if self.failures:
             raise self.failures.pop(0)
         return f"{self.method_name}:{identifier}"
@@ -345,6 +347,39 @@ async def test_resolve_input_entity_retries_after_connection_error(monkeypatch):
 
     assert await runtime.resolve_input_entity("chat", client) == "input:chat"
     assert client.dialogs_loaded == 1
+
+
+def test_marked_id_candidates_only_for_positive_integers():
+    assert runtime._marked_id_candidates(123) == [-1000000000123, -123]
+    assert runtime._marked_id_candidates(0) == []
+    assert runtime._marked_id_candidates(-123) == []
+    assert runtime._marked_id_candidates("123") == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_entity_tries_marked_id_candidates_after_cache_miss(monkeypatch):
+    async def noop(_client):
+        return None
+
+    client = _ResolvingClient("entity", [ValueError("not a user"), ValueError("still cold")])
+    monkeypatch.setattr(runtime, "ensure_connected", noop)
+
+    assert await runtime.resolve_entity(123, client) == "entity:-1000000000123"
+    assert client.dialogs_loaded == 1
+    assert client.calls == [123, 123, -1000000000123]
+
+
+@pytest.mark.asyncio
+async def test_resolve_input_entity_tries_marked_id_candidates_after_cache_miss(monkeypatch):
+    async def noop(_client):
+        return None
+
+    client = _ResolvingClient("input", [ValueError("not a user"), ValueError("still cold")])
+    monkeypatch.setattr(runtime, "ensure_connected", noop)
+
+    assert await runtime.resolve_input_entity(123, client) == "input:-1000000000123"
+    assert client.dialogs_loaded == 1
+    assert client.calls == [123, 123, -1000000000123]
 
 
 def test_json_serializer_handles_supported_and_unsupported_values():
