@@ -1,6 +1,74 @@
 """Chats MCP tools."""
 
+import struct
+
+from telethon.tl.tlobject import TLObject, TLRequest
+
 from telegram_mcp.runtime import *
+
+
+class GetForumTopicsRequest(TLRequest):
+    """Raw request for channels.getForumTopics missing in Telethon 1.42-1.43."""
+
+    CONSTRUCTOR_ID = 0x0DE560D1
+    SUBCLASS_OF_ID = 0x0
+
+    def __init__(self, channel, offset_date, offset_id, offset_topic, limit, q=None):
+        self.channel = channel
+        self.q = q
+        self.offset_date = offset_date
+        self.offset_id = offset_id
+        self.offset_topic = offset_topic
+        self.limit = limit
+
+    async def resolve(self, client, utils):
+        self.channel = utils.get_input_channel(await client.get_input_entity(self.channel))
+
+    def to_dict(self):
+        return {
+            "_": "GetForumTopicsRequest",
+            "channel": (
+                self.channel.to_dict() if isinstance(self.channel, TLObject) else self.channel
+            ),
+            "q": self.q,
+            "offset_date": self.offset_date,
+            "offset_id": self.offset_id,
+            "offset_topic": self.offset_topic,
+            "limit": self.limit,
+        }
+
+    def _bytes(self):
+        flags = 0 if self.q is None or self.q is False else 1
+        return b"".join(
+            (
+                struct.pack("<I", self.CONSTRUCTOR_ID),
+                struct.pack("<I", flags),
+                self.channel._bytes(),
+                b"" if self.q is None or self.q is False else self.serialize_bytes(self.q),
+                struct.pack("<i", self.offset_date),
+                struct.pack("<i", self.offset_id),
+                struct.pack("<i", self.offset_topic),
+                struct.pack("<i", self.limit),
+            )
+        )
+
+    @classmethod
+    def from_reader(cls, reader):
+        flags = reader.read_int()
+        channel = reader.tgread_object()
+        q = reader.tgread_string() if flags & 1 else None
+        offset_date = reader.read_int()
+        offset_id = reader.read_int()
+        offset_topic = reader.read_int()
+        limit = reader.read_int()
+        return cls(
+            channel=channel,
+            offset_date=offset_date,
+            offset_id=offset_id,
+            offset_topic=offset_topic,
+            limit=limit,
+            q=q,
+        )
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chats", openWorldHint=True, readOnlyHint=True))
@@ -107,7 +175,7 @@ async def list_topics(
             return "The specified supergroup does not have forum topics enabled."
 
         result = await cl(
-            functions.channels.GetForumTopicsRequest(
+            GetForumTopicsRequest(
                 channel=entity,
                 offset_date=0,
                 offset_id=0,
