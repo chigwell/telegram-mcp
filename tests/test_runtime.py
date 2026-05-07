@@ -494,6 +494,10 @@ def test_entity_type_filter_and_formatting_helpers():
     assert runtime.get_entity_type(supergroup) == "Supergroup"
     assert runtime.get_entity_filter_type(supergroup) == "group"
     assert runtime.get_entity_filter_type(object()) is None
+    assert runtime.get_marked_id(user) == 1
+    assert runtime.get_marked_id(chat) == -2
+    assert runtime.get_marked_id(channel) == -1000000000003
+    assert runtime.get_marked_id(supergroup) == -1000000000004
 
     assert runtime.format_entity(user) == {
         "id": 1,
@@ -502,8 +506,12 @@ def test_entity_type_filter_and_formatting_helpers():
         "username": "jdoe",
         "phone": "123",
     }
-    assert runtime.format_entity(chat) == {"id": 2, "name": "GroupName", "type": "group"}
-    assert runtime.format_entity(channel) == {"id": 3, "name": "Channel", "type": "channel"}
+    assert runtime.format_entity(chat) == {"id": -2, "name": "GroupName", "type": "group"}
+    assert runtime.format_entity(channel) == {
+        "id": -1000000000003,
+        "name": "Channel",
+        "type": "channel",
+    }
 
 
 def test_message_formatting_sender_and_engagement_helpers():

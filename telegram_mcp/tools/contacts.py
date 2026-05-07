@@ -144,7 +144,7 @@ async def get_direct_chat_by_contact(contact_query: str, account: str = None) ->
             for dialog in dialogs:
                 if isinstance(dialog.entity, User) and dialog.entity.id == contact.id:
                     record = {
-                        "chat_id": dialog.entity.id,
+                        "chat_id": get_marked_id(dialog.entity),
                         "contact": contact_name,
                     }
                     if getattr(contact, "username", ""):
@@ -196,7 +196,7 @@ async def get_contact_chats(contact_id: Union[int, str], account: str = None) ->
         # Look for direct chat
         for dialog in dialogs:
             if isinstance(dialog.entity, User) and dialog.entity.id == contact_id:
-                record = {"chat_id": dialog.entity.id, "type": "Private"}
+                record = {"chat_id": get_marked_id(dialog.entity), "type": "Private"}
                 if dialog.unread_count:
                     record["unread"] = dialog.unread_count
                 records.append(record)
@@ -208,7 +208,7 @@ async def get_contact_chats(contact_id: Union[int, str], account: str = None) ->
             for chat in common:
                 records.append(
                     {
-                        "chat_id": chat.id,
+                        "chat_id": get_marked_id(chat),
                         "title": sanitize_name(chat.title),
                         "type": get_entity_type(chat),
                     }

@@ -41,9 +41,9 @@ async def create_group(title: str, user_ids: List[Union[int, str]], account: str
             # Check what type of response we got
             if hasattr(result, "chats") and result.chats:
                 created_chat = result.chats[0]
-                return f"Group created with ID: {created_chat.id}"
+                return f"Group created with ID: {get_marked_id(created_chat)}"
             elif hasattr(result, "chat") and result.chat:
-                return f"Group created with ID: {result.chat.id}"
+                return f"Group created with ID: {get_marked_id(result.chat)}"
             elif hasattr(result, "chat_id"):
                 return f"Group created with ID: {result.chat_id}"
             else:
@@ -53,7 +53,7 @@ async def create_group(title: str, user_ids: List[Union[int, str]], account: str
                 dialogs = await cl.get_dialogs(limit=5)  # Get recent dialogs
                 for dialog in dialogs:
                     if dialog.title == title:
-                        return f"Group created with ID: {dialog.id}"
+                        return f"Group created with ID: {get_marked_id(dialog.entity)}"
 
                 # If we still can't find it, at least return success
                 return f"Group created successfully. Please check your recent chats for '{sanitize_name(title)}'."

@@ -29,7 +29,7 @@ async def get_chats(account: str = None, page: int = 1, page_size: int = 20) -> 
             title = getattr(entity, "title", None) or getattr(entity, "first_name", "Unknown")
             records.append(
                 {
-                    "chat_id": entity.id,
+                    "chat_id": get_marked_id(entity),
                     "title": sanitize_name(title),
                 }
             )
@@ -212,7 +212,7 @@ async def list_chats(
                 continue
 
             # Build chat record
-            record = {"chat_id": entity.id}
+            record = {"chat_id": get_marked_id(entity)}
 
             if hasattr(entity, "title"):
                 record["title"] = sanitize_name(entity.title)
@@ -323,7 +323,7 @@ async def get_chat(chat_id: Union[int, str], account: str = None) -> str:
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
 
-        record = {"id": entity.id}
+        record = {"id": get_marked_id(entity)}
 
         is_user = isinstance(entity, User)
 
@@ -444,7 +444,7 @@ async def get_full_chat(chat_id: Union[int, str], account: str = None) -> str:
         full_chat = full.full_chat
 
         result = {
-            "id": chat.id if chat else None,
+            "id": get_marked_id(chat) if chat else None,
             "title": sanitize_name(getattr(chat, "title", None)) if chat else None,
             "username": getattr(chat, "username", None) if chat else None,
             "about": sanitize_user_content(full_chat.about or "", max_length=1024),
@@ -636,7 +636,7 @@ async def get_common_chats(
 
         lines = []
         for chat in chats:
-            line = f"Chat ID: {chat.id}"
+            line = f"Chat ID: {get_marked_id(chat)}"
             if hasattr(chat, "title") and chat.title:
                 line += f", Title: {sanitize_name(chat.title)}"
             line += f", Type: {get_entity_type(chat)}"

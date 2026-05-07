@@ -76,6 +76,15 @@ def get_entity_type(entity: Any) -> str:
     return type(entity).__name__
 
 
+def get_marked_id(entity: Any) -> int:
+    """Return a Telethon-compatible marked ID for an entity."""
+    if isinstance(entity, Channel):
+        return -1000000000000 - entity.id
+    if isinstance(entity, Chat):
+        return -entity.id
+    return entity.id
+
+
 def get_entity_filter_type(entity: Any) -> Optional[str]:
     """Return list_chats-compatible filter type: user/group/channel."""
     entity_type = get_entity_type(entity)
@@ -617,7 +626,7 @@ def format_entity(entity) -> Dict[str, Any]:
 
     Names and titles are sanitized to prevent prompt injection.
     """
-    result = {"id": entity.id}
+    result = {"id": get_marked_id(entity)}
 
     if hasattr(entity, "title"):
         result["name"] = sanitize_name(entity.title)
