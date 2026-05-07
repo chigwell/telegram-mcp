@@ -45,7 +45,7 @@ proxy = [
 
 [tool.setuptools]
 py-modules = ["main", "sanitize", "session_string_generator"]
-packages = ["telegram_mcp", "telegram_mcp.tools"]
+packages = ["telegram_mcp", "telegram_mcp.tools", "telegram_mcp.mcpl"]
 
 [project.scripts]
 telegram-mcp = "main:main"
