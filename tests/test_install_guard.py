@@ -101,6 +101,39 @@ def test_install_guard_allows_source_checkout_without_distribution(monkeypatch):
     install_guard.assert_safe_distribution()
 
 
+def test_install_guard_allows_uv_editable_source_checkout_without_direct_url(
+    monkeypatch, tmp_path
+):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "telegram-mcp"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "telegram_mcp.egg-info").mkdir()
+
+    class FakeDistribution:
+        version = "source-version"
+
+        def __init__(self):
+            self._path = tmp_path / "telegram_mcp.egg-info"
+            self.files = []
+            self.metadata = Message()
+            self.metadata["Name"] = "telegram-mcp"
+            self.metadata["Version"] = "source-version"
+            self.metadata["Author"] = "chigwell, l1v0n1"
+            self.metadata["Project-URL"] = "Homepage, https://github.com/chigwell/telegram-mcp"
+
+        def read_text(self, _filename):
+            return None
+
+    monkeypatch.setattr(
+        install_guard.metadata,
+        "distribution",
+        lambda _distribution_name: FakeDistribution(),
+    )
+
+    install_guard.assert_safe_distribution()
+
+
 def test_install_guard_raises_for_untrusted_installed_distribution(monkeypatch):
     class FakeDistribution:
         version = "0.6.3"
