@@ -11,11 +11,27 @@ from telegram_mcp.runtime import *
 import telegram_mcp.tools  # noqa: F401 - registers MCP tools via decorators
 
 
+async def _connect_authorized_client(label, client) -> None:
+    await client.connect()
+    if await client.is_user_authorized():
+        return
+
+    raise RuntimeError(
+        f"Telegram client '{label}' is not authorized. Interactive phone login "
+        "is disabled for the MCP server because it runs over stdio. Generate a "
+        "session string with `uv run session_string_generator.py`, then set "
+        "TELEGRAM_SESSION_STRING or TELEGRAM_SESSION_STRING_<LABEL> in .env. "
+        "For existing file sessions, run the login outside the MCP server first."
+    )
+
+
 async def _main() -> None:
     try:
         labels = ", ".join(clients.keys())
         print(f"Starting {len(clients)} Telegram client(s) ({labels})...", file=sys.stderr)
-        await asyncio.gather(*(cl.start() for cl in clients.values()))
+        await asyncio.gather(
+            *(_connect_authorized_client(label, cl) for label, cl in clients.items())
+        )
 
         # Warm entity caches — StringSession has no persistent cache,
         # so fetch all dialogs once per client to populate them

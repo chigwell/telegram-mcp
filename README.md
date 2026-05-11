@@ -380,6 +380,10 @@ Telegram messages, display names, chat titles, and button labels are untrusted c
 ## Troubleshooting
 
 - **No Telegram session configured:** set `TELEGRAM_SESSION_STRING`, `TELEGRAM_SESSION_NAME`, or suffixed multi-account variants.
+- **Session is not authorized:** run `uv run session_string_generator.py` outside
+  the MCP server, use QR login when possible, then set `TELEGRAM_SESSION_STRING`
+  in `.env`. The MCP server does not perform interactive phone-code login over
+  stdio.
 - **Invalid API credentials:** verify `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` at [my.telegram.org/apps](https://my.telegram.org/apps).
 - **Database is locked:** prefer string sessions, or make sure no other process is using the same file session.
 - **File tools are disabled:** pass allowed roots or configure MCP Roots in your client.
