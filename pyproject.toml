@@ -39,13 +39,38 @@ proxy = [
     "python-socks>=2.4.3",
 ]
 
+# Voice transcription (universal): faster-whisper covers CPU on every OS and
+# NVIDIA CUDA. See README "Voice transcription" for backend selection.
+voice = [
+    "faster-whisper>=1.1.0",
+]
+
+# Voice transcription on Intel CPU / Iris Xe iGPU / Arc dGPU via OpenVINO.
+voice-openvino = [
+    "openvino>=2025.0.0",
+    "openvino-genai>=2025.0.0.0",
+    "librosa>=0.10",
+    "huggingface-hub>=0.26",
+    "numpy>=1.24",
+]
+
+# Voice transcription on Apple Silicon (M1/M2/M3/M4) via Apple's MLX.
+voice-mlx = [
+    "mlx-whisper>=0.4",
+]
+
 [project.urls]
 "Homepage" = "https://github.com/chigwell/telegram-mcp"
 "Bug Tracker" = "https://github.com/chigwell/telegram-mcp/issues"
 
 [tool.setuptools]
 py-modules = ["main", "sanitize", "session_string_generator"]
-packages = ["telegram_mcp", "telegram_mcp.tools"]
+packages = [
+    "telegram_mcp",
+    "telegram_mcp.tools",
+    "telegram_mcp.voice",
+    "telegram_mcp.voice.backends",
+]
 
 [project.scripts]
 telegram-mcp = "main:main"
