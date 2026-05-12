@@ -1450,8 +1450,8 @@ async def list_topics(
             return "The specified supergroup does not have forum topics enabled."
 
         result = await client(
-            functions.channels.GetForumTopicsRequest(
-                channel=entity,
+            functions.messages.GetForumTopicsRequest(
+                peer=entity,
                 offset_date=0,
                 offset_id=0,
                 offset_topic=offset_topic,
@@ -1505,6 +1505,164 @@ async def list_topics(
             limit=limit,
             offset_topic=offset_topic,
             search_query=search_query,
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Create Forum Topic", openWorldHint=True, destructiveHint=True, idempotentHint=False
+    )
+)
+@validate_id("chat_id")
+async def create_forum_topic(
+    chat_id: Union[int, str],
+    title: str,
+    icon_color: int = 0x6FB9F0,
+    icon_emoji_id: int = 0,
+) -> str:
+    """
+    Create a new forum topic in a supergroup with the forum feature enabled.
+
+    Requires the caller (or the acting account) to be an admin of the supergroup
+    with the `manage_topics` right.
+
+    Args:
+        chat_id: The ID or username of the forum-enabled supergroup.
+        title: Topic title (1-128 chars).
+        icon_color: ARGB color int (default light-blue 0x6FB9F0). Telegram exposes a fixed palette:
+            0x6FB9F0 (light-blue), 0xFFD67E (yellow), 0xCB86DB (purple),
+            0x8EEE98 (green), 0xFF93B2 (pink), 0xFB6F5F (red).
+        icon_emoji_id: Custom emoji document ID (0 = no custom emoji).
+
+    Returns the new topic's ID on success.
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+
+        if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
+            return "Error: the specified chat is not a supergroup."
+        if not getattr(entity, "forum", False):
+            return "Error: the specified supergroup does not have forum topics enabled."
+
+        import random
+        random_id = random.getrandbits(63)
+
+        kwargs = {
+            "peer": entity,
+            "title": title,
+            "icon_color": icon_color,
+            "random_id": random_id,
+        }
+        if icon_emoji_id:
+            kwargs["icon_emoji_id"] = icon_emoji_id
+
+        result = await client(functions.messages.CreateForumTopicRequest(**kwargs))
+
+        # Extract topic ID from Updates (MessageActionTopicCreate is in updates.updates[].message)
+        topic_id = None
+        for update in getattr(result, "updates", []) or []:
+            message = getattr(update, "message", None)
+            if message and getattr(message, "id", None):
+                topic_id = message.id
+                break
+        if topic_id is None:
+            # Fallback — return raw result repr
+            return f"Topic created in chat {chat_id} (could not extract ID): {result.stringify()[:200]}"
+        return f"Topic created. ID: {topic_id}, Title: {title}, Chat: {chat_id}"
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: you need admin rights with `manage_topics` to create forum topics."
+    except telethon.errors.rpcerrorlist.TopicsEmptyError:
+        return "Error: forum topics are not enabled for this chat."
+    except Exception as e:
+        logger.exception(f"create_forum_topic failed (chat_id={chat_id}, title={title})")
+        return log_and_format_error("create_forum_topic", e, chat_id=chat_id, title=title)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Edit Forum Topic", openWorldHint=True, destructiveHint=True, idempotentHint=True
+    )
+)
+@validate_id("chat_id")
+async def edit_forum_topic(
+    chat_id: Union[int, str],
+    topic_id: int,
+    title: str = None,
+    icon_emoji_id: int = None,
+    closed: bool = None,
+    hidden: bool = None,
+) -> str:
+    """
+    Edit an existing forum topic in a supergroup. Pass only the fields you want to change.
+
+    Requires `manage_topics` admin right (or topic ownership for some fields).
+
+    Args:
+        chat_id: ID or username of the forum-enabled supergroup.
+        topic_id: ID of the topic to edit.
+        title: New title (omit to keep current).
+        icon_emoji_id: New custom emoji document ID (0 to clear; omit to keep current).
+        closed: True to close, False to reopen, None to leave unchanged.
+        hidden: True to hide (General topic only), False to show, None to leave unchanged.
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+        kwargs = {"peer": entity, "topic_id": topic_id}
+        if title is not None:
+            kwargs["title"] = title
+        if icon_emoji_id is not None:
+            kwargs["icon_emoji_id"] = icon_emoji_id
+        if closed is not None:
+            kwargs["closed"] = closed
+        if hidden is not None:
+            kwargs["hidden"] = hidden
+        await client(functions.messages.EditForumTopicRequest(**kwargs))
+        return f"Topic {topic_id} updated in chat {chat_id}."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: you need admin rights with `manage_topics` to edit forum topics."
+    except telethon.errors.rpcerrorlist.TopicIdInvalidError:
+        return f"Error: invalid topic ID {topic_id} for this chat."
+    except Exception as e:
+        logger.exception(f"edit_forum_topic failed (chat_id={chat_id}, topic_id={topic_id})")
+        return log_and_format_error(
+            "edit_forum_topic", e, chat_id=chat_id, topic_id=topic_id
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Delete Forum Topic", openWorldHint=True, destructiveHint=True, idempotentHint=True
+    )
+)
+@validate_id("chat_id")
+async def delete_forum_topic(chat_id: Union[int, str], topic_id: int) -> str:
+    """
+    Delete a forum topic from a supergroup (irreversible — all topic messages are removed).
+
+    Implemented via `messages.DeleteHistory(channel, top_msg_id)` which Telegram clients use
+    to delete a topic by clearing its history.
+
+    Requires `delete_messages` admin right.
+    """
+    try:
+        entity = await resolve_entity(chat_id)
+        result = await client(
+            functions.messages.DeleteTopicHistoryRequest(peer=entity, top_msg_id=topic_id)
+        )
+        offset = getattr(result, "offset", None)
+        count = getattr(result, "count", None)
+        return (
+            f"Topic {topic_id} deleted in chat {chat_id}"
+            + (f" (messages removed: {count}, offset={offset})." if count is not None else ".")
+        )
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        return "Error: you need admin rights to delete forum topics."
+    except telethon.errors.rpcerrorlist.TopicIdInvalidError:
+        return f"Error: invalid topic ID {topic_id} for this chat."
+    except Exception as e:
+        logger.exception(f"delete_forum_topic failed (chat_id={chat_id}, topic_id={topic_id})")
+        return log_and_format_error(
+            "delete_forum_topic", e, chat_id=chat_id, topic_id=topic_id
         )
 
 
@@ -2872,6 +3030,7 @@ async def promote_admin(
                 "add_admins": False,
                 "anonymous": False,
                 "manage_call": True,
+                "manage_topics": True,
                 "other": True,
             }
 
@@ -2886,6 +3045,7 @@ async def promote_admin(
             add_admins=rights.get("add_admins", False),
             anonymous=rights.get("anonymous", False),
             manage_call=rights.get("manage_call", True),
+            manage_topics=rights.get("manage_topics", True),
             other=rights.get("other", True),
         )
 
@@ -2939,6 +3099,7 @@ async def demote_admin(group_id: Union[int, str], user_id: Union[int, str]) -> s
             add_admins=False,
             anonymous=False,
             manage_call=False,
+            manage_topics=False,
             other=False,
         )
 
@@ -3198,6 +3359,7 @@ async def edit_admin_rights(
     add_admins: bool = False,
     anonymous: bool = False,
     manage_call: bool = False,
+    manage_topics: bool = False,
     other: bool = False,
 ) -> str:
     """
@@ -3221,6 +3383,7 @@ async def edit_admin_rights(
         add_admins: can add new admins with their own rights
         anonymous: admin actions appear anonymous
         manage_call: can manage voice/video chats
+        manage_topics: can create, edit, close and reopen forum topics (forum-enabled supergroups only)
         other: reserved for future rights
     """
     try:
@@ -3237,6 +3400,7 @@ async def edit_admin_rights(
             add_admins=add_admins,
             anonymous=anonymous,
             manage_call=manage_call,
+            manage_topics=manage_topics,
             other=other,
         )
         await client(

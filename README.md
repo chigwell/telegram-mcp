@@ -52,11 +52,11 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **get_participants(chat_id)**: List all participants
 - **get_admins(chat_id)**: List all admins
 - **get_banned_users(chat_id)**: List all banned users
-- **promote_admin(chat_id, user_id)**: Promote user to admin
+- **promote_admin(chat_id, user_id, rights={...})**: Promote user to admin (default rights include `manage_topics`)
 - **demote_admin(chat_id, user_id)**: Demote admin to user
 - **ban_user(chat_id, user_id)**: Ban user
 - **unban_user(chat_id, user_id)**: Unban user
-- **edit_admin_rights(chat_id, user_id, rank, ...rights)**: Set granular admin rights (extends promote_admin)
+- **edit_admin_rights(chat_id, user_id, rank, ...rights, manage_topics)**: Set granular admin rights including `manage_topics` for forum-enabled supergroups
 - **set_default_chat_permissions(chat_id, ...perms, until_date)**: Set default member permissions (send, media, invite, pin, etc.)
 - **toggle_slow_mode(chat_id, seconds)**: Enable/disable slow mode in supergroups (0/10/30/60/300/900/3600s)
 - **get_invite_link(chat_id)**: Get invite link
@@ -71,6 +71,9 @@ This MCP server exposes a huge suite of Telegram tools. **Every major Telegram/T
 - **get_messages(chat_id, page, page_size)**: Paginated messages
 - **list_messages(chat_id, limit, search_query, from_date, to_date)**: Filtered messages
 - **list_topics(chat_id, limit, offset_topic, search_query)**: List forum topics in supergroups
+- **create_forum_topic(chat_id, title, icon_color, icon_emoji_id)**: Create a new forum topic (requires `manage_topics` admin right)
+- **edit_forum_topic(chat_id, topic_id, title, icon_emoji_id, closed, hidden)**: Edit / close / reopen / hide a forum topic
+- **delete_forum_topic(chat_id, topic_id)**: Delete a forum topic (irreversible)
 - **send_message(chat_id, message)**: Send a message
 - **reply_to_message(chat_id, message_id, text)**: Reply to a message
 - **edit_message(chat_id, message_id, new_text)**: Edit your message
