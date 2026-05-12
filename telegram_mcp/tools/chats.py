@@ -107,8 +107,8 @@ async def list_topics(
             return "The specified supergroup does not have forum topics enabled."
 
         result = await cl(
-            functions.channels.GetForumTopicsRequest(
-                channel=entity,
+            functions.messages.GetForumTopicsRequest(
+                peer=entity,
                 offset_date=0,
                 offset_id=0,
                 offset_topic=offset_topic,
