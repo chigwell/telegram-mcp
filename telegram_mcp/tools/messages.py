@@ -694,11 +694,24 @@ async def forward_message(
     account: str = None,
 ) -> str:
     """
-    Forward one or more messages from one chat to another.
+    Forward one or more messages from a source chat to a destination chat.
 
-    Pass a list of message IDs to forward multiple messages in a single call.
-    Messages that share a Telegram album (same grouped_id) are preserved as a
-    grouped album in the destination when forwarded together in one list.
+    To forward MULTIPLE messages, pass `message_id` as a list of integers in
+    a SINGLE call (e.g. message_id=[12345, 12346, 12347]). Do NOT call this
+    tool repeatedly with single ints to forward several messages — the list
+    form is faster, atomic, and preserves Telegram album grouping (messages
+    sharing a `grouped_id` arrive as one grouped album in the destination).
+
+    Pass a single int only when forwarding exactly one message and you do
+    not need album grouping. See also: forward_messages (plural) — same
+    behavior with a list-only signature.
+
+    Args:
+        from_chat_id: Source chat (id or @username).
+        message_id: A single message id (int) OR a list of message ids
+            (e.g. [12345, 12346]). USE A LIST WHENEVER FORWARDING >1 MESSAGE.
+        to_chat_id: Destination chat (id or @username).
+        account: Optional account label for multi-account mode.
     """
     try:
         cl = get_client(account)
@@ -715,6 +728,61 @@ async def forward_message(
             e,
             from_chat_id=from_chat_id,
             message_id=message_id,
+            to_chat_id=to_chat_id,
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Forward Messages (batch)", openWorldHint=True, destructiveHint=True
+    )
+)
+@with_account(readonly=False)
+@validate_id("from_chat_id", "to_chat_id")
+async def forward_messages(
+    from_chat_id: Union[int, str],
+    message_ids: List[int],
+    to_chat_id: Union[int, str],
+    account: str = None,
+) -> str:
+    """
+    Forward a BATCH of messages from a source chat to a destination chat in
+    a single atomic call.
+
+    Use this whenever you need to forward more than one message. Pass all
+    message ids as a list (e.g. message_ids=[12345, 12346, 12347]). Calling
+    this once with a list is strictly better than calling forward_message
+    multiple times: it preserves Telegram album grouping (siblings sharing
+    `grouped_id` arrive as one grouped album), is atomic, and counts as a
+    single forward op for Telegram rate limits.
+
+    For exactly one message, you may use either this tool with a one-item
+    list or `forward_message` with an int.
+
+    Args:
+        from_chat_id: Source chat (id or @username).
+        message_ids: List of message ids to forward, in any order
+            (e.g. [12345, 12346]). Must contain at least one id.
+        to_chat_id: Destination chat (id or @username).
+        account: Optional account label for multi-account mode.
+    """
+    try:
+        if not message_ids:
+            return "Error: message_ids must contain at least one id."
+        cl = get_client(account)
+        from_entity = await resolve_entity(from_chat_id, cl)
+        to_entity = await resolve_entity(to_chat_id, cl)
+        await cl.forward_messages(to_entity, list(message_ids), from_entity)
+        return (
+            f"{len(message_ids)} messages forwarded from "
+            f"{from_chat_id} to {to_chat_id}."
+        )
+    except Exception as e:
+        return log_and_format_error(
+            "forward_messages",
+            e,
+            from_chat_id=from_chat_id,
+            message_ids=message_ids,
             to_chat_id=to_chat_id,
         )
 
