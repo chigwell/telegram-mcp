@@ -576,6 +576,9 @@ async def list_messages(
                 "date": msg.date,
                 "text": sanitize_user_content(msg.message),
             }
+            grouped_id = getattr(msg, "grouped_id", None)
+            if grouped_id is not None:
+                record["grouped_id"] = grouped_id
             reply_to_id = getattr(msg.reply_to, "reply_to_msg_id", None) if msg.reply_to else None
             if reply_to_id:
                 record["reply_to"] = reply_to_id
@@ -639,6 +642,9 @@ async def get_message_context(
                 "is_target": msg.id == message_id,
                 "text": sanitize_user_content(msg.message),
             }
+            grouped_id = getattr(msg, "grouped_id", None)
+            if grouped_id is not None:
+                record["grouped_id"] = grouped_id
 
             # Check if this message is a reply and get the replied message
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
@@ -683,19 +689,26 @@ async def get_message_context(
 @validate_id("from_chat_id", "to_chat_id")
 async def forward_message(
     from_chat_id: Union[int, str],
-    message_id: int,
+    message_id: Union[int, List[int]],
     to_chat_id: Union[int, str],
     account: str = None,
 ) -> str:
     """
-    Forward a message from one chat to another.
+    Forward one or more messages from one chat to another.
+
+    Pass a list of message IDs to forward multiple messages in a single call.
+    Messages that share a Telegram album (same grouped_id) are preserved as a
+    grouped album in the destination when forwarded together in one list.
     """
     try:
         cl = get_client(account)
         from_entity = await resolve_entity(from_chat_id, cl)
         to_entity = await resolve_entity(to_chat_id, cl)
         await cl.forward_messages(to_entity, message_id, from_entity)
-        return f"Message {message_id} forwarded from {from_chat_id} to {to_chat_id}."
+        count = len(message_id) if isinstance(message_id, list) else 1
+        if count == 1:
+            return f"Message {message_id} forwarded from {from_chat_id} to {to_chat_id}."
+        return f"{count} messages forwarded from {from_chat_id} to {to_chat_id}."
     except Exception as e:
         return log_and_format_error(
             "forward_message",
