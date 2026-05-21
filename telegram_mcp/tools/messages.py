@@ -576,8 +576,9 @@ async def list_messages(
                 "date": msg.date,
                 "text": sanitize_user_content(msg.message),
             }
-            if msg.reply_to and msg.reply_to.reply_to_msg_id:
-                record["reply_to"] = msg.reply_to.reply_to_msg_id
+            reply_to_id = getattr(msg.reply_to, "reply_to_msg_id", None) if msg.reply_to else None
+            if reply_to_id:
+                record["reply_to"] = reply_to_id
             engagement = get_engagement_dict(msg)
             if engagement:
                 record["engagement"] = engagement
@@ -1077,8 +1078,9 @@ async def get_history(chat_id: Union[int, str], limit: int = 100, account: str =
                 "date": msg.date,
                 "text": sanitize_user_content(msg.message),
             }
-            if msg.reply_to and msg.reply_to.reply_to_msg_id:
-                record["reply_to"] = msg.reply_to.reply_to_msg_id
+            reply_to_id = getattr(msg.reply_to, "reply_to_msg_id", None) if msg.reply_to else None
+            if reply_to_id:
+                record["reply_to"] = reply_to_id
             records.append(record)
         return format_tool_result(records)
     except Exception as e:
