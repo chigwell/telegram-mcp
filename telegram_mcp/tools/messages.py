@@ -576,6 +576,9 @@ async def list_messages(
                 "date": msg.date,
                 "text": sanitize_user_content(msg.message),
             }
+            grouped_id = getattr(msg, "grouped_id", None)
+            if grouped_id is not None:
+                record["grouped_id"] = grouped_id
             reply_to_id = getattr(msg.reply_to, "reply_to_msg_id", None) if msg.reply_to else None
             if reply_to_id:
                 record["reply_to"] = reply_to_id
@@ -639,6 +642,9 @@ async def get_message_context(
                 "is_target": msg.id == message_id,
                 "text": sanitize_user_content(msg.message),
             }
+            grouped_id = getattr(msg, "grouped_id", None)
+            if grouped_id is not None:
+                record["grouped_id"] = grouped_id
 
             # Check if this message is a reply and get the replied message
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
@@ -683,25 +689,130 @@ async def get_message_context(
 @validate_id("from_chat_id", "to_chat_id")
 async def forward_message(
     from_chat_id: Union[int, str],
-    message_id: int,
+    message_id: Union[int, List[int]],
     to_chat_id: Union[int, str],
     account: str = None,
+    expand_album: bool = True,
 ) -> str:
     """
-    Forward a message from one chat to another.
+    Forward a message (or several) from a source chat to a destination chat.
+
+    When forwarding a single int message_id, the server automatically detects
+    Telegram albums (multi-photo/video posts sharing a `grouped_id`) and
+    forwards the ENTIRE album as one grouped batch — so the destination
+    receives the album intact with "Forwarded from <source>", not a single
+    detached photo. This is the desired behavior in almost all cases.
+
+    Set expand_album=False to forward only the exact message you specified
+    (useful if you really want one photo out of an album).
+
+    To forward a specific set of unrelated messages, pass a list of ints.
+    Album expansion is not applied to list inputs — the list is treated as
+    the explicit batch.
+
+    Args:
+        from_chat_id: Source chat (id or @username).
+        message_id: A single message id (int) OR a list of ids. Single ints
+            are auto-expanded to the full album when applicable.
+        to_chat_id: Destination chat (id or @username).
+        account: Optional account label for multi-account mode.
+        expand_album: If True (default) and message_id is a single int, the
+            server expands albums automatically. No effect on list inputs.
     """
     try:
         cl = get_client(account)
         from_entity = await resolve_entity(from_chat_id, cl)
         to_entity = await resolve_entity(to_chat_id, cl)
-        await cl.forward_messages(to_entity, message_id, from_entity)
-        return f"Message {message_id} forwarded from {from_chat_id} to {to_chat_id}."
+
+        ids_to_forward = message_id
+        expanded_from_album = False
+        if expand_album and isinstance(message_id, int):
+            anchor = await cl.get_messages(from_entity, ids=message_id)
+            grouped_id = getattr(anchor, "grouped_id", None) if anchor else None
+            if grouped_id is not None:
+                # Album ids are allocated contiguously by Telegram; a small
+                # window around the anchor reliably captures all siblings.
+                window = list(range(message_id - 9, message_id + 10))
+                neighbors = await cl.get_messages(from_entity, ids=window)
+                sibling_ids = sorted(
+                    {
+                        m.id
+                        for m in neighbors
+                        if m is not None and getattr(m, "grouped_id", None) == grouped_id
+                    }
+                )
+                if len(sibling_ids) > 1:
+                    ids_to_forward = sibling_ids
+                    expanded_from_album = True
+
+        await cl.forward_messages(to_entity, ids_to_forward, from_entity)
+        count = len(ids_to_forward) if isinstance(ids_to_forward, list) else 1
+        if count == 1:
+            return f"Message {message_id} forwarded from {from_chat_id} to {to_chat_id}."
+        if expanded_from_album:
+            return (
+                f"Album of {count} messages forwarded from {from_chat_id} "
+                f"to {to_chat_id} (auto-expanded from message {message_id})."
+            )
+        return f"{count} messages forwarded from {from_chat_id} to {to_chat_id}."
     except Exception as e:
         return log_and_format_error(
             "forward_message",
             e,
             from_chat_id=from_chat_id,
             message_id=message_id,
+            to_chat_id=to_chat_id,
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Forward Messages (batch)", openWorldHint=True, destructiveHint=True
+    )
+)
+@with_account(readonly=False)
+@validate_id("from_chat_id", "to_chat_id")
+async def forward_messages(
+    from_chat_id: Union[int, str],
+    message_ids: List[int],
+    to_chat_id: Union[int, str],
+    account: str = None,
+) -> str:
+    """
+    Forward a BATCH of messages from a source chat to a destination chat in
+    a single atomic call.
+
+    Use this whenever you need to forward more than one message. Pass all
+    message ids as a list (e.g. message_ids=[12345, 12346, 12347]). Calling
+    this once with a list is strictly better than calling forward_message
+    multiple times: it preserves Telegram album grouping (siblings sharing
+    `grouped_id` arrive as one grouped album), is atomic, and counts as a
+    single forward op for Telegram rate limits.
+
+    For exactly one message, you may use either this tool with a one-item
+    list or `forward_message` with an int.
+
+    Args:
+        from_chat_id: Source chat (id or @username).
+        message_ids: List of message ids to forward, in any order
+            (e.g. [12345, 12346]). Must contain at least one id.
+        to_chat_id: Destination chat (id or @username).
+        account: Optional account label for multi-account mode.
+    """
+    try:
+        if not message_ids:
+            return "Error: message_ids must contain at least one id."
+        cl = get_client(account)
+        from_entity = await resolve_entity(from_chat_id, cl)
+        to_entity = await resolve_entity(to_chat_id, cl)
+        await cl.forward_messages(to_entity, list(message_ids), from_entity)
+        return f"{len(message_ids)} messages forwarded from " f"{from_chat_id} to {to_chat_id}."
+    except Exception as e:
+        return log_and_format_error(
+            "forward_messages",
+            e,
+            from_chat_id=from_chat_id,
+            message_ids=message_ids,
             to_chat_id=to_chat_id,
         )
 
