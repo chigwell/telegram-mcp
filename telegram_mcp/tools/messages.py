@@ -738,8 +738,7 @@ async def forward_message(
                     {
                         m.id
                         for m in neighbors
-                        if m is not None
-                        and getattr(m, "grouped_id", None) == grouped_id
+                        if m is not None and getattr(m, "grouped_id", None) == grouped_id
                     }
                 )
                 if len(sibling_ids) > 1:
@@ -807,10 +806,7 @@ async def forward_messages(
         from_entity = await resolve_entity(from_chat_id, cl)
         to_entity = await resolve_entity(to_chat_id, cl)
         await cl.forward_messages(to_entity, list(message_ids), from_entity)
-        return (
-            f"{len(message_ids)} messages forwarded from "
-            f"{from_chat_id} to {to_chat_id}."
-        )
+        return f"{len(message_ids)} messages forwarded from " f"{from_chat_id} to {to_chat_id}."
     except Exception as e:
         return log_and_format_error(
             "forward_messages",
