@@ -27,8 +27,14 @@ COPY main.py sanitize.py ./
 COPY telegram_mcp ./telegram_mcp
 # COPY session_string_generator.py . # Optional: if needed within the container, otherwise can be run outside
 
-# Create a non-root user and switch to it
-RUN adduser --disabled-password --gecos "" appuser && chown -R appuser:appuser /app
+# Create a non-root user and switch to it. Also pre-create /data with the
+# right ownership so a Docker named volume mounted there (used by the http
+# profile for OAuth state, TELEGRAM_MCP_OAUTH_DB) inherits these perms when
+# it's first created. Without this the volume comes up as root:root and the
+# server crashes with "unable to open database file".
+RUN adduser --disabled-password --gecos "" appuser \
+    && mkdir -p /data \
+    && chown -R appuser:appuser /app /data
 USER appuser
 
 # Define environment variables needed by the application
