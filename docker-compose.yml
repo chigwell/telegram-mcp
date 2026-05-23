@@ -1,7 +1,25 @@
 version: '3.8'
 
+# Two service variants, selected by Compose profile:
+#
+#   stdio (default): the classic local-only MCP server. Useful when you
+#     attach it as a stdio MCP from Claude Desktop / Claude Code on the
+#     same machine.
+#
+#   http: streamable-HTTP transport with OAuth 2.1 + PKCE. Intended for
+#     remote deployment behind an HTTPS reverse proxy or Cloudflare Tunnel
+#     so Claude Desktop's "Add custom connector" dialog can talk to it.
+#
+# Usage:
+#   docker compose --profile stdio up        # local stdio mode
+#   docker compose --profile http  up -d     # remote HTTP mode
+#
+# Both services read the same .env file -- the http profile relies on the
+# TELEGRAM_MCP_* vars documented in Dockerfile and README.
+
 services:
   telegram-mcp:
+    profiles: ["stdio"]
     build:
       context: .
       dockerfile: Dockerfile
@@ -17,4 +35,24 @@ services:
     # Replace './telegram_sessions' with your desired host path.
     # volumes:
     #   - ./telegram_sessions:/app
+    restart: unless-stopped
+
+  telegram-mcp-http:
+    profiles: ["http"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram-mcp-http
+    env_file:
+      - .env
+    environment:
+      # Force the runner into HTTP mode regardless of what .env says.
+      TELEGRAM_MCP_TRANSPORT: "http"
+      TELEGRAM_MCP_HOST: "0.0.0.0"
+      TELEGRAM_MCP_PORT: "8000"
+    # Bind to loopback only -- Cloudflare Tunnel (cloudflared on the host)
+    # reaches us over localhost. If you'd rather expose the port publicly
+    # and put nginx/Caddy in front, drop the "127.0.0.1:" prefix.
+    ports:
+      - "127.0.0.1:8000:8000"
     restart: unless-stopped

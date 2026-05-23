@@ -102,7 +102,37 @@ load_dotenv()
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID"))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
 
-mcp = FastMCP("telegram")
+# Transport selection: "stdio" (default, local Claude Desktop / Claude Code)
+# or "http" (remote via streamable-http behind an HTTPS reverse proxy /
+# Cloudflare Tunnel, with OAuth 2.1 + PKCE).
+TELEGRAM_MCP_TRANSPORT = os.getenv("TELEGRAM_MCP_TRANSPORT", "stdio").lower()
+
+
+def _build_mcp() -> FastMCP:
+    if TELEGRAM_MCP_TRANSPORT != "http":
+        return FastMCP("telegram")
+
+    # HTTP mode: wire in the OAuth provider + streamable-http settings.
+    from telegram_mcp.auth import build_auth_settings, build_oauth_provider
+
+    public_url = os.getenv("TELEGRAM_MCP_PUBLIC_URL", "").rstrip("/")
+    provider = build_oauth_provider()
+    auth_settings = build_auth_settings(public_url)
+
+    # FastMCP wraps ``auth_server_provider`` in a ``ProviderTokenVerifier``
+    # automatically when ``token_verifier`` is omitted (see
+    # ``mcp.server.fastmcp.server.FastMCP.__init__``), so passing both raises.
+    return FastMCP(
+        "telegram",
+        auth_server_provider=provider,
+        auth=auth_settings,
+        host=os.getenv("TELEGRAM_MCP_HOST", "0.0.0.0"),
+        port=int(os.getenv("TELEGRAM_MCP_PORT", "8000")),
+        streamable_http_path="/mcp",
+    )
+
+
+mcp = _build_mcp()
 
 # Annotate all tool results with audience=["user"] so MCP clients know
 # the content is user-generated data, not instructions for the model.

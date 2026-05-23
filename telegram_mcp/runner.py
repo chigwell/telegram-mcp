@@ -25,18 +25,28 @@ async def _connect_authorized_client(label, client) -> None:
     )
 
 
+async def connect_clients() -> None:
+    """Connect every configured Telegram client and warm its entity cache.
+
+    Shared by both the stdio entrypoint (:func:`_main`) and the HTTP
+    entrypoint in :mod:`telegram_mcp.runner_http` so they behave identically
+    at startup. Raises ``RuntimeError`` if any client is unauthorized.
+    """
+    await asyncio.gather(
+        *(_connect_authorized_client(label, cl) for label, cl in clients.items())
+    )
+
+    # Warm entity caches — StringSession has no persistent cache,
+    # so fetch all dialogs once per client to populate them.
+    print("Warming entity caches...", file=sys.stderr)
+    await asyncio.gather(*(cl.get_dialogs() for cl in clients.values()))
+
+
 async def _main() -> None:
     try:
         labels = ", ".join(clients.keys())
         print(f"Starting {len(clients)} Telegram client(s) ({labels})...", file=sys.stderr)
-        await asyncio.gather(
-            *(_connect_authorized_client(label, cl) for label, cl in clients.items())
-        )
-
-        # Warm entity caches — StringSession has no persistent cache,
-        # so fetch all dialogs once per client to populate them
-        print("Warming entity caches...", file=sys.stderr)
-        await asyncio.gather(*(cl.get_dialogs() for cl in clients.values()))
+        await connect_clients()
 
         print(f"Telegram client(s) started ({labels}). Running MCP server...", file=sys.stderr)
         # Use the asynchronous entrypoint instead of mcp.run()
@@ -59,6 +69,14 @@ async def _main() -> None:
 
 
 def main() -> None:
+    # Branch on transport before doing anything else so the HTTP runner's
+    # uvicorn / Starlette imports stay out of the stdio code path.
+    if TELEGRAM_MCP_TRANSPORT == "http":
+        from telegram_mcp.runner_http import main as http_main
+
+        http_main()
+        return
+
     _configure_allowed_roots_from_cli(sys.argv[1:])
     nest_asyncio.apply()
     asyncio.run(_main())

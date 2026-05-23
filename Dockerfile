@@ -41,8 +41,25 @@ ENV TELEGRAM_SESSION_NAME="telegram_mcp_session"
 # Or provide the session string directly
 ENV TELEGRAM_SESSION_STRING=""
 
-# Expose any ports if the application were a web server (not needed for stdio MCP)
-# EXPOSE 8000
+# --- Transport selection ----------------------------------------------------
+# TELEGRAM_MCP_TRANSPORT: "stdio" (default, local Claude Desktop / Claude
+#   Code) or "http" (remote streamable-http + OAuth 2.1 for Claude Desktop's
+#   "Add custom connector" dialog).
+# When TELEGRAM_MCP_TRANSPORT=http these additional vars are required:
+#   TELEGRAM_MCP_PUBLIC_URL   - externally reachable HTTPS base URL
+#                               (e.g. https://tg-mcp.example.com). Used as
+#                               the OAuth issuer + resource identifier.
+#   TELEGRAM_MCP_AUTH_PASSWORD - password the single user enters in the
+#                                login form to complete the OAuth flow.
+# Optional:
+#   TELEGRAM_MCP_AUTH_USERNAME (default "admin")
+#   TELEGRAM_MCP_HOST          (default "0.0.0.0")
+#   TELEGRAM_MCP_PORT          (default 8000)
+ENV TELEGRAM_MCP_TRANSPORT="stdio"
+
+# HTTP transport listens on 8000 inside the container; expose it so a host
+# reverse proxy / Cloudflare Tunnel can reach it. No-op in stdio mode.
+EXPOSE 8000
 
 # Define the command to run the application
 CMD ["python", "main.py"]
