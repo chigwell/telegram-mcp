@@ -55,9 +55,20 @@ services:
       # in multi-account string-session mode (TELEGRAM_SESSION_STRING_<LABEL>).
       # If you want a default file-session account, set it explicitly in .env.
       TELEGRAM_SESSION_NAME: ""
-    # Bind to loopback only -- Cloudflare Tunnel (cloudflared on the host)
-    # reaches us over localhost. If you'd rather expose the port publicly
-    # and put nginx/Caddy in front, drop the "127.0.0.1:" prefix.
+      # Persist OAuth state (registered clients + access/refresh tokens) on
+      # disk so Claude Desktop's connector doesn't re-run the OAuth flow
+      # after every container restart. Without this it would default to an
+      # in-memory store.
+      TELEGRAM_MCP_OAUTH_DB: "/data/oauth.db"
+    volumes:
+      # Named volume backing TELEGRAM_MCP_OAUTH_DB.
+      - oauth-data:/data
+    # Bind to loopback only -- the public tunnel (Cloudflare / Tailscale
+    # Funnel / etc.) reaches us over localhost. If you'd rather expose the
+    # port publicly and put nginx/Caddy in front, drop the "127.0.0.1:" prefix.
     ports:
       - "127.0.0.1:8000:8000"
     restart: unless-stopped
+
+volumes:
+  oauth-data:

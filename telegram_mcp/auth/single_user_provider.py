@@ -1,10 +1,16 @@
 """Single-user OAuth 2.1 + PKCE provider for the HTTP transport.
 
 This implements the MCP SDK's :class:`OAuthAuthorizationServerProvider` and
-:class:`TokenVerifier` interfaces with an in-memory backing store. It is
-intended for a personal, single-user deployment fronted by a Cloudflare
-Tunnel (or any HTTPS reverse proxy) -- the issued tokens live in process
-memory and are lost on restart, which is acceptable for the target setup.
+:class:`TokenVerifier` interfaces with a SQLite-backed storage layer
+(see :mod:`telegram_mcp.auth.storage`). It is intended for a personal,
+single-user deployment fronted by a Cloudflare Tunnel, Tailscale Funnel,
+or any HTTPS reverse proxy.
+
+Persistence lets Claude Desktop's connector survive container restarts
+without forcing a re-login: registered clients, issued access tokens,
+and refresh tokens all live on disk. Short-lived in-flight state (the
+login session cookie between ``/authorize`` and the form POST) stays in
+memory because it's tied to one browser window.
 
 Flow:
 
@@ -13,19 +19,21 @@ Flow:
    the metadata).
 2. Claude Desktop sends the user's browser to ``/authorize`` with PKCE
    parameters. The SDK calls :meth:`SingleUserOAuthProvider.authorize`,
-   which stashes the request and returns a URL to a local login form.
+   which stashes the request in memory and returns a URL to a local login
+   form.
 3. The user submits username + password (compared with ``hmac.compare_digest``
    against env-var values). On success we issue an authorization code and
    redirect the browser back to Claude Desktop's ``redirect_uri``.
 4. Claude Desktop exchanges the code (with PKCE ``code_verifier``) at
-   ``/token`` for an access token + refresh token. The SDK's
-   ``TokenHandler`` handles PKCE verification; we only mint tokens.
+   ``/token`` for an access token + refresh token. The SDK's ``TokenHandler``
+   handles PKCE verification; we only mint tokens.
 5. Every MCP request carries ``Authorization: Bearer <token>``; the SDK's
    ``BearerAuthBackend`` calls :meth:`verify_token` to validate it.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import os
 import secrets
@@ -52,6 +60,8 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from telegram_mcp.auth.storage import OAuthStore
+
 
 # Token / code lifetimes -----------------------------------------------------
 AUTH_CODE_TTL = 600  # 10 minutes
@@ -61,60 +71,64 @@ REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60  # 30 days
 
 
 class SingleUserOAuthProvider(OAuthAuthorizationServerProvider, TokenVerifier):
-    """In-memory OAuth 2.1 + PKCE provider for one user.
+    """OAuth 2.1 + PKCE provider for one user, backed by SQLite.
 
-    All state lives in process memory. Restarting the server invalidates
-    every issued token (Claude Desktop will silently re-run the OAuth
-    flow on the next request).
+    State that needs to survive a container restart (registered clients,
+    auth codes, access/refresh tokens) lives in the SQLite store. The
+    short-lived "user has hit /authorize and not yet submitted the login
+    form" mapping stays in process memory because it's bound to a single
+    browser window and naturally vanishes if the user gives up.
     """
 
-    def __init__(self, *, username: str, password: str, public_url: str) -> None:
+    def __init__(
+        self,
+        *,
+        username: str,
+        password: str,
+        public_url: str,
+        store: OAuthStore,
+    ) -> None:
         self._username = username
         self._password = password
         self._public_url = public_url.rstrip("/")
-        self._clients: dict[str, OAuthClientInformationFull] = {}
+        self._store = store
         # session_id -> {"client_id", "params", "expires_at"}
         self._login_sessions: dict[str, dict] = {}
-        self._auth_codes: dict[str, AuthorizationCode] = {}
-        self._access_tokens: dict[str, AccessToken] = {}
-        self._refresh_tokens: dict[str, RefreshToken] = {}
-        # refresh_token -> access_token (so refresh rotates both)
-        self._refresh_to_access: dict[str, str] = {}
 
     # -- OAuthAuthorizationServerProvider ----------------------------------
 
     async def get_client(self, client_id: str) -> Optional[OAuthClientInformationFull]:
-        return self._clients.get(client_id)
+        return await asyncio.to_thread(self._store.get_client, client_id)
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         # Dynamic Client Registration: trust whatever Claude Desktop sends.
         # The SDK has already validated the metadata shape before calling us.
-        self._clients[client_info.client_id] = client_info
+        await asyncio.to_thread(self._store.put_client, client_info)
 
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
-        # Stash the request; return the absolute URL of our login form. The
-        # SDK 302-redirects the user's browser to whatever string we return.
+        # Stash the request in memory; return the absolute URL of our login
+        # form. The SDK 302-redirects the user's browser to whatever string
+        # we return.
         session_id = secrets.token_urlsafe(24)
         self._login_sessions[session_id] = {
             "client_id": client.client_id,
             "params": params,
             "expires_at": time.time() + LOGIN_SESSION_TTL,
         }
-        self._gc()
+        self._gc_login_sessions()
+        await asyncio.to_thread(self._store.gc)
         return f"{self._public_url}/login?session={session_id}"
 
     async def load_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: str
     ) -> Optional[AuthorizationCode]:
-        entry = self._auth_codes.get(authorization_code)
-        if entry is None:
-            return None
-        if entry.client_id != client.client_id:
+        entry = await asyncio.to_thread(self._store.get_auth_code, authorization_code)
+        if entry is None or entry.client_id != client.client_id:
             return None
         if entry.expires_at < time.time():
-            self._auth_codes.pop(authorization_code, None)
+            await asyncio.to_thread(self._store.delete_auth_code, authorization_code)
             return None
         return entry
 
@@ -124,26 +138,31 @@ class SingleUserOAuthProvider(OAuthAuthorizationServerProvider, TokenVerifier):
         authorization_code: AuthorizationCode,
     ) -> OAuthToken:
         # Authorization codes are single-use.
-        self._auth_codes.pop(authorization_code.code, None)
-        access = self._issue_access_token(
+        await asyncio.to_thread(
+            self._store.delete_auth_code, authorization_code.code
+        )
+        access = self._make_access_token(
             client.client_id,
             authorization_code.scopes,
             resource=authorization_code.resource,
         )
-        refresh = self._issue_refresh_token(
+        refresh = self._make_refresh_token(
             client.client_id, authorization_code.scopes
         )
-        self._refresh_to_access[refresh.token] = access.token
+        await asyncio.to_thread(self._store.put_access_token, access)
+        await asyncio.to_thread(
+            self._store.put_refresh_token, refresh, access.token
+        )
         return self._build_oauth_token(access, refresh)
 
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
     ) -> Optional[RefreshToken]:
-        entry = self._refresh_tokens.get(refresh_token)
+        entry = await asyncio.to_thread(self._store.get_refresh_token, refresh_token)
         if entry is None or entry.client_id != client.client_id:
             return None
         if entry.expires_at and entry.expires_at < time.time():
-            self._refresh_tokens.pop(refresh_token, None)
+            await asyncio.to_thread(self._store.delete_refresh_token, refresh_token)
             return None
         return entry
 
@@ -154,23 +173,30 @@ class SingleUserOAuthProvider(OAuthAuthorizationServerProvider, TokenVerifier):
         scopes: list[str],
     ) -> OAuthToken:
         # Rotate both access and refresh tokens.
-        old_access = self._refresh_to_access.pop(refresh_token.token, None)
+        old_access = await asyncio.to_thread(
+            self._store.get_access_token_for_refresh, refresh_token.token
+        )
         if old_access:
-            self._access_tokens.pop(old_access, None)
-        self._refresh_tokens.pop(refresh_token.token, None)
+            await asyncio.to_thread(self._store.delete_access_token, old_access)
+        await asyncio.to_thread(
+            self._store.delete_refresh_token, refresh_token.token
+        )
 
         new_scopes = scopes or refresh_token.scopes
-        access = self._issue_access_token(client.client_id, new_scopes)
-        new_refresh = self._issue_refresh_token(client.client_id, new_scopes)
-        self._refresh_to_access[new_refresh.token] = access.token
+        access = self._make_access_token(client.client_id, new_scopes)
+        new_refresh = self._make_refresh_token(client.client_id, new_scopes)
+        await asyncio.to_thread(self._store.put_access_token, access)
+        await asyncio.to_thread(
+            self._store.put_refresh_token, new_refresh, access.token
+        )
         return self._build_oauth_token(access, new_refresh)
 
     async def load_access_token(self, token: str) -> Optional[AccessToken]:
-        entry = self._access_tokens.get(token)
+        entry = await asyncio.to_thread(self._store.get_access_token, token)
         if entry is None:
             return None
         if entry.expires_at and entry.expires_at < time.time():
-            self._access_tokens.pop(token, None)
+            await asyncio.to_thread(self._store.delete_access_token, token)
             return None
         return entry
 
@@ -178,9 +204,7 @@ class SingleUserOAuthProvider(OAuthAuthorizationServerProvider, TokenVerifier):
         raw = getattr(token, "token", None)
         if not raw:
             return
-        self._access_tokens.pop(raw, None)
-        self._refresh_tokens.pop(raw, None)
-        self._refresh_to_access.pop(raw, None)
+        await asyncio.to_thread(self._store.revoke, raw)
 
     # -- TokenVerifier ------------------------------------------------------
 
@@ -225,7 +249,7 @@ class SingleUserOAuthProvider(OAuthAuthorizationServerProvider, TokenVerifier):
         params: AuthorizationParams = session["params"]
         client_id: str = session["client_id"]
         code_str = secrets.token_urlsafe(48)
-        self._auth_codes[code_str] = AuthorizationCode(
+        entry = AuthorizationCode(
             code=code_str,
             scopes=params.scopes or [],
             expires_at=time.time() + AUTH_CODE_TTL,
@@ -235,6 +259,7 @@ class SingleUserOAuthProvider(OAuthAuthorizationServerProvider, TokenVerifier):
             redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
             resource=params.resource,
         )
+        await asyncio.to_thread(self._store.put_auth_code, entry)
         redirect = construct_redirect_uri(
             str(params.redirect_uri), code=code_str, state=params.state
         )
@@ -248,35 +273,29 @@ class SingleUserOAuthProvider(OAuthAuthorizationServerProvider, TokenVerifier):
 
     # -- Helpers ------------------------------------------------------------
 
-    def _issue_access_token(
+    def _make_access_token(
         self,
         client_id: str,
         scopes: list[str],
         resource: Optional[str] = None,
     ) -> AccessToken:
-        token = secrets.token_urlsafe(48)
-        entry = AccessToken(
-            token=token,
+        return AccessToken(
+            token=secrets.token_urlsafe(48),
             client_id=client_id,
             scopes=scopes,
             expires_at=int(time.time() + ACCESS_TOKEN_TTL),
             resource=resource,
         )
-        self._access_tokens[token] = entry
-        return entry
 
-    def _issue_refresh_token(
+    def _make_refresh_token(
         self, client_id: str, scopes: list[str]
     ) -> RefreshToken:
-        token = secrets.token_urlsafe(48)
-        entry = RefreshToken(
-            token=token,
+        return RefreshToken(
+            token=secrets.token_urlsafe(48),
             client_id=client_id,
             scopes=scopes,
             expires_at=int(time.time() + REFRESH_TOKEN_TTL),
         )
-        self._refresh_tokens[token] = entry
-        return entry
 
     def _build_oauth_token(
         self, access: AccessToken, refresh: RefreshToken
@@ -293,19 +312,15 @@ class SingleUserOAuthProvider(OAuthAuthorizationServerProvider, TokenVerifier):
         session = self._login_sessions.get(session_id)
         return session is not None and session["expires_at"] >= time.time()
 
-    def _gc(self) -> None:
-        # Cheap periodic cleanup. Called from authorize() so it runs on
-        # every login attempt -- enough for a single-user server.
+    def _gc_login_sessions(self) -> None:
         now = time.time()
-        for store in (self._login_sessions, self._auth_codes):
-            expired = [
-                key
-                for key, value in store.items()
-                if (value["expires_at"] if isinstance(value, dict) else value.expires_at)
-                < now
-            ]
-            for key in expired:
-                store.pop(key, None)
+        expired = [
+            sid
+            for sid, value in self._login_sessions.items()
+            if value["expires_at"] < now
+        ]
+        for sid in expired:
+            self._login_sessions.pop(sid, None)
 
     @staticmethod
     def _render_message(text: str) -> str:
@@ -361,12 +376,23 @@ class SingleUserOAuthProvider(OAuthAuthorizationServerProvider, TokenVerifier):
 def build_oauth_provider() -> SingleUserOAuthProvider:
     """Build a provider from ``TELEGRAM_MCP_AUTH_*`` env vars.
 
+    Reads:
+      * ``TELEGRAM_MCP_AUTH_USERNAME`` (default ``admin``)
+      * ``TELEGRAM_MCP_AUTH_PASSWORD`` (required)
+      * ``TELEGRAM_MCP_PUBLIC_URL``    (required)
+      * ``TELEGRAM_MCP_OAUTH_DB``      (default ``:memory:``)
+
+    Setting ``TELEGRAM_MCP_OAUTH_DB`` to a file path enables persistence
+    across restarts. In Docker the recommended layout is a named volume
+    mounted at ``/data`` with the env var set to ``/data/oauth.db``.
+
     Raises :class:`SystemExit` (caught by ``runner.main()``) when required
     environment variables are missing.
     """
     username = os.getenv("TELEGRAM_MCP_AUTH_USERNAME", "admin")
     password = os.getenv("TELEGRAM_MCP_AUTH_PASSWORD")
     public_url = os.getenv("TELEGRAM_MCP_PUBLIC_URL")
+    db_path = os.getenv("TELEGRAM_MCP_OAUTH_DB", ":memory:")
     if not password:
         raise SystemExit(
             "TELEGRAM_MCP_AUTH_PASSWORD must be set when TELEGRAM_MCP_TRANSPORT=http"
@@ -376,8 +402,12 @@ def build_oauth_provider() -> SingleUserOAuthProvider:
             "TELEGRAM_MCP_PUBLIC_URL must be set when TELEGRAM_MCP_TRANSPORT=http "
             "(the externally reachable HTTPS base URL, e.g. https://tg-mcp.example.com)"
         )
+    store = OAuthStore(db_path)
     return SingleUserOAuthProvider(
-        username=username, password=password, public_url=public_url
+        username=username,
+        password=password,
+        public_url=public_url,
+        store=store,
     )
 
 
