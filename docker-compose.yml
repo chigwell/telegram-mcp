@@ -50,6 +50,11 @@ services:
       TELEGRAM_MCP_TRANSPORT: "http"
       TELEGRAM_MCP_HOST: "0.0.0.0"
       TELEGRAM_MCP_PORT: "8000"
+      # Suppress the Dockerfile's TELEGRAM_SESSION_NAME default so it doesn't
+      # spawn a phantom "default" file-based session when the user is running
+      # in multi-account string-session mode (TELEGRAM_SESSION_STRING_<LABEL>).
+      # If you want a default file-session account, set it explicitly in .env.
+      TELEGRAM_SESSION_NAME: ""
     # Bind to loopback only -- Cloudflare Tunnel (cloudflared on the host)
     # reaches us over localhost. If you'd rather expose the port publicly
     # and put nginx/Caddy in front, drop the "127.0.0.1:" prefix.
