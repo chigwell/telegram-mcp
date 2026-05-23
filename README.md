@@ -298,10 +298,10 @@ Build the image:
 docker build -t telegram-mcp:latest .
 ```
 
-Run with Compose (local stdio mode, the default profile):
+Run with Compose:
 
 ```bash
-docker compose --profile stdio up --build
+docker compose up --build
 ```
 
 Run directly:
@@ -315,103 +315,6 @@ docker run -it --rm \
 ```
 
 For multiple accounts, pass variables such as `TELEGRAM_SESSION_STRING_WORK` and `TELEGRAM_SESSION_STRING_PERSONAL`.
-
-## Remote deployment (Claude Desktop custom connector)
-
-You can run telegram-mcp on a VM and attach it to Claude Desktop via
-**Settings → Connectors → Add custom connector**. The server speaks the
-MCP [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports.md)
-and uses **OAuth 2.1 + PKCE** with Dynamic Client Registration, so you
-only need to paste the URL into Claude Desktop — no manual Client ID /
-Secret. Single-user; one password protects the entire connector.
-
-### 1. Pre-generate a session string locally
-
-The HTTP runner cannot do interactive Telegram login, just like the
-stdio runner. Generate the session string on a workstation and copy it
-into the VM's `.env`:
-
-```bash
-uv run session_string_generator.py
-```
-
-### 2. Configure environment
-
-Add these to `.env` on the VM (in addition to the existing
-`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION_STRING`):
-
-```bash
-TELEGRAM_MCP_TRANSPORT=http
-TELEGRAM_MCP_PUBLIC_URL=https://tg-mcp.example.com   # externally reachable HTTPS URL
-TELEGRAM_MCP_AUTH_PASSWORD=replace-with-a-strong-password
-# Optional:
-# TELEGRAM_MCP_AUTH_USERNAME=admin
-# TELEGRAM_MCP_HOST=0.0.0.0
-# TELEGRAM_MCP_PORT=8000
-```
-
-`TELEGRAM_MCP_PUBLIC_URL` must match exactly what Claude Desktop will
-connect to — it is published as the OAuth `issuer` and resource
-identifier, and used to build the redirect back from the login form.
-
-### 3. Start the container
-
-```bash
-docker compose --profile http up -d --build
-```
-
-The container binds `127.0.0.1:8000` on the host. Put it behind any
-HTTPS reverse proxy that can serve `TELEGRAM_MCP_PUBLIC_URL` and forward
-to `http://127.0.0.1:8000`. Cloudflare Tunnel is the lightest option
-and works on machines without public ports:
-
-```bash
-# On the VM
-cloudflared tunnel login
-cloudflared tunnel create telegram-mcp
-cloudflared tunnel route dns telegram-mcp tg-mcp.example.com
-
-cat > ~/.cloudflared/config.yml <<'YAML'
-tunnel: telegram-mcp
-credentials-file: /root/.cloudflared/<tunnel-id>.json
-ingress:
-  - hostname: tg-mcp.example.com
-    service: http://127.0.0.1:8000
-  - service: http_status:404
-YAML
-
-cloudflared service install
-```
-
-Caddy / nginx / Traefik work equally well — just terminate TLS and
-proxy to `http://127.0.0.1:8000`.
-
-### 4. Add the connector in Claude Desktop
-
-Open **Add custom connector**, paste `https://tg-mcp.example.com/mcp`
-into "Remote MCP server URL", and leave the OAuth fields empty (Claude
-Desktop self-registers via DCR). Claude opens a browser tab → you sign
-in with the username/password from `.env` → the connector goes green.
-
-### What's protected
-
-- `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource/mcp`,
-  `/authorize`, `/token`, `/register`, `/revoke`, `/login` — public, as required by RFC 8414.
-- `/mcp` — requires a valid bearer token. Unauthenticated requests get
-  `401` with a `WWW-Authenticate` header pointing at the resource metadata
-  endpoint.
-
-### Notes & limits
-
-- Tokens live in process memory. Restarting the container forces
-  Claude Desktop to re-run the OAuth flow on the next request — fine
-  for personal use; swap in a SQLite-backed store if it becomes annoying.
-- Single user only; the password comes from `TELEGRAM_MCP_AUTH_PASSWORD`.
-- Anyone with the URL can _see_ the login page. Anyone with the URL
-  **and** the password can drive your Telegram account. Treat the
-  password like a Telegram session secret.
-- Cloudflare Tunnel terminates TLS at Cloudflare. If that's not
-  acceptable, use a self-hosted reverse proxy with your own certificate.
 
 ## Development
 
