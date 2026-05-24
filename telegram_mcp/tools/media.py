@@ -8,7 +8,7 @@ from telegram_mcp.runtime import *
 @validate_id("chat_id")
 async def send_file(
     chat_id: Union[int, str],
-    file_path: str,
+    file_path: Union[str, List[str]],
     caption: str = None,
     ctx: Optional[Context] = None,
     account: str = None,
@@ -18,9 +18,19 @@ async def send_file(
     Args:
         chat_id: The chat ID or username.
         file_path: Absolute or relative path to the file under allowed roots.
-        caption: Optional caption for the file.
+            Pass a list of 2-10 paths to send them as one Telegram media group.
+        caption: Optional caption for the file or media group.
     """
     try:
+        if isinstance(file_path, list):
+            return await _send_album(
+                chat_id=chat_id,
+                file_paths=file_path,
+                caption=caption,
+                ctx=ctx,
+                account=account,
+            )
+
         cl = get_client(account)
         safe_path, path_error = await _resolve_readable_file_path(
             raw_path=file_path,
@@ -35,6 +45,69 @@ async def send_file(
     except Exception as e:
         return log_and_format_error(
             "send_file", e, chat_id=chat_id, file_path=file_path, caption=caption
+        )
+
+
+async def _send_album(
+    chat_id: Union[int, str],
+    file_paths: List[str],
+    caption: str = None,
+    ctx: Optional[Context] = None,
+    account: str = None,
+) -> str:
+    if not 2 <= len(file_paths) <= 10:
+        return "Albums must contain between 2 and 10 files."
+
+    cl = get_client(account)
+    safe_paths = []
+    for file_path in file_paths:
+        safe_path, path_error = await _resolve_readable_file_path(
+            raw_path=file_path,
+            ctx=ctx,
+            tool_name="send_file",
+        )
+        if path_error:
+            return path_error
+        safe_paths.append(str(safe_path))
+
+    entity = await resolve_entity(chat_id, cl)
+    await cl.send_file(entity, safe_paths, caption=caption)
+    return f"Album sent to chat {chat_id} with {len(safe_paths)} files."
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Send Album", openWorldHint=True, destructiveHint=True)
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def send_album(
+    chat_id: Union[int, str],
+    file_paths: List[str],
+    caption: str = None,
+    ctx: Optional[Context] = None,
+    account: str = None,
+) -> str:
+    """
+    Send multiple photos/videos as one Telegram media group (album).
+
+    Args:
+        chat_id: The chat ID or username.
+        file_paths: 2-10 absolute or relative file paths under allowed roots.
+        caption: Optional caption for the album. Telegram displays it on the first item.
+    """
+    try:
+        if not isinstance(file_paths, list):
+            return "file_paths must be a list of file paths."
+        return await _send_album(
+            chat_id=chat_id,
+            file_paths=file_paths,
+            caption=caption,
+            ctx=ctx,
+            account=account,
+        )
+    except Exception as e:
+        return log_and_format_error(
+            "send_album", e, chat_id=chat_id, file_paths=file_paths, caption=caption
         )
 
 
@@ -347,6 +420,7 @@ async def send_gif(chat_id: Union[int, str], gif_id: int, account: str = None) -
 
 __all__ = [
     "send_file",
+    "send_album",
     "download_media",
     "send_voice",
     "upload_file",
