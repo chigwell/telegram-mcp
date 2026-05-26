@@ -13,7 +13,12 @@ def get_media_label(msg) -> str:
     msg.message but the media stays in msg.media).
     """
     try:
-        # стикер/голос/видео/аудио/гиф — это тоже document, поэтому проверяем их РАНЬШЕ document
+        # Веб-превью ссылки — НЕ вложение. Проверяем ПЕРВЫМ: у сообщения со
+        # ссылкой Telethon отдаёт картинку превью через msg.photo, иначе она
+        # ложно пометилась бы как "photo".
+        if getattr(msg, "web_preview", None) is not None:
+            return ""
+        # Стикер/голос/видео/аудио/гиф — это тоже document, проверяем РАНЬШЕ document.
         sticker = getattr(msg, "sticker", None)
         if sticker is not None:
             alt = ""
@@ -47,14 +52,161 @@ def get_media_label(msg) -> str:
             return "geo"
         if getattr(msg, "poll", None) is not None:
             return "poll"
-        # web-превью ссылки — это не вложение, не флагуем
-        if getattr(msg, "web_preview", None) is not None:
-            return ""
         if getattr(msg, "media", None) is not None:
             return "media"
         return ""
     except Exception:
         return ""
+
+
+def _inline_button_texts(msg):
+    """Тексты inline-кнопок сообщения (плоским списком), [] если нет."""
+    out = []
+    try:
+        for row in (getattr(msg, "buttons", None) or []):
+            for b in row:
+                t = getattr(b, "text", None)
+                if t:
+                    out.append(t)
+    except Exception:
+        pass
+    return out
+
+
+def _link_urls(msg):
+    """Явные URL из entities (скрытые за текстом ссылки), [] если нет."""
+    out = []
+    try:
+        for e in (getattr(msg, "entities", None) or []):
+            u = getattr(e, "url", None)
+            if u:
+                out.append(u)
+    except Exception:
+        pass
+    return out
+
+
+def message_to_dict(msg) -> dict:
+    """API-полный, но компактный вид сообщения Telethon (пустые поля опускаем).
+
+    Цель — чтобы вывод MCP по полноте соответствовал объекту API, а не терял
+    данные (медиа, альбомы, пересылки, правки, кнопки, реакции и т.п.).
+    Все эти поля уже приходят в объекте сообщения тем же запросом get_messages.
+    """
+    d = {"id": msg.id, "sender": get_sender_name(msg), "date": msg.date}
+
+    sender_id = getattr(msg, "sender_id", None)
+    if sender_id is not None:
+        d["sender_id"] = sender_id
+    if getattr(msg, "out", False):
+        d["out"] = True
+
+    text = sanitize_user_content(msg.message) if getattr(msg, "message", None) else ""
+    if text:
+        d["text"] = text
+
+    media_label = get_media_label(msg)
+    if media_label:
+        d["media"] = media_label
+
+    grouped_id = getattr(msg, "grouped_id", None)
+    if grouped_id:
+        d["grouped_id"] = grouped_id  # альбом: сообщения с одним grouped_id — одна группа
+
+    reply_to_id = getattr(msg.reply_to, "reply_to_msg_id", None) if getattr(msg, "reply_to", None) else None
+    if reply_to_id:
+        d["reply_to"] = reply_to_id
+
+    fwd = getattr(msg, "fwd_from", None)
+    if fwd is not None:
+        finfo = {}
+        fdate = getattr(fwd, "date", None)
+        if fdate:
+            finfo["date"] = fdate
+        fname = getattr(fwd, "from_name", None)
+        if fname:
+            finfo["from_name"] = sanitize_name(fname)
+        d["forwarded"] = finfo or True
+
+    via_bot_id = getattr(msg, "via_bot_id", None)
+    if via_bot_id:
+        d["via_bot_id"] = via_bot_id
+
+    edit_date = getattr(msg, "edit_date", None)
+    if edit_date:
+        d["edited"] = edit_date
+
+    if getattr(msg, "pinned", False):
+        d["pinned"] = True
+
+    engagement = get_engagement_dict(msg)
+    if engagement:
+        d["engagement"] = engagement
+
+    replies = getattr(msg, "replies", None)
+    if replies is not None:
+        cnt = getattr(replies, "replies", None)
+        if cnt is not None:
+            d["comments"] = cnt
+
+    buttons = _inline_button_texts(msg)
+    if buttons:
+        d["buttons"] = buttons
+
+    urls = _link_urls(msg)
+    if urls:
+        d["link_urls"] = urls
+
+    action = getattr(msg, "action", None)
+    if action is not None:
+        d["action"] = type(action).__name__  # сервисное сообщение (вступил/закрепил/…)
+
+    ttl = getattr(msg, "ttl_period", None)
+    if ttl:
+        d["ttl_period"] = ttl
+
+    return d
+
+
+def format_message_line(msg) -> str:
+    """Однострочный человекочитаемый вид сообщения со ВСЕМИ ключевыми флагами."""
+    parts = [f"ID: {msg.id}", get_sender_name(msg), f"Date: {msg.date}"]
+
+    reply_to_id = getattr(msg.reply_to, "reply_to_msg_id", None) if getattr(msg, "reply_to", None) else None
+    if reply_to_id:
+        parts.append(f"reply to {reply_to_id}")
+
+    flags = []
+    media_label = get_media_label(msg)
+    if media_label:
+        flags.append(f"📎 {media_label}")
+    grouped_id = getattr(msg, "grouped_id", None)
+    if grouped_id:
+        flags.append(f"album:{grouped_id}")
+    if getattr(msg, "fwd_from", None) is not None:
+        flags.append("forwarded")
+    if getattr(msg, "edit_date", None):
+        flags.append("edited")
+    if getattr(msg, "via_bot_id", None):
+        flags.append("via_bot")
+    if getattr(msg, "pinned", False):
+        flags.append("pinned")
+    btn = _inline_button_texts(msg)
+    if btn:
+        flags.append(f"buttons:{len(btn)}")
+    action = getattr(msg, "action", None)
+    if action is not None:
+        flags.append(f"service:{type(action).__name__}")
+    if flags:
+        parts.append(", ".join(flags))
+
+    engagement_info = get_engagement_info(msg).lstrip(" |").strip()
+    if engagement_info:
+        parts.append(engagement_info)
+
+    raw = sanitize_user_content(msg.message) if getattr(msg, "message", None) else ""
+    safe_text = raw.replace("\n", "\\n") if raw else "[empty]"
+    return " | ".join(parts) + f" | Message: {safe_text}"
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Messages", openWorldHint=True, readOnlyHint=True))
@@ -79,21 +231,7 @@ async def get_messages(
         messages = await cl.get_messages(entity, limit=page_size, add_offset=offset)
         if not messages:
             return "No messages found for this page."
-        lines = []
-        for msg in messages:
-            sender_name = get_sender_name(msg)
-            reply_info = ""
-            if msg.reply_to and msg.reply_to.reply_to_msg_id:
-                reply_info = f" | reply to {msg.reply_to.reply_to_msg_id}"
-
-            engagement_info = get_engagement_info(msg)
-            safe_text = sanitize_user_content(msg.message).replace("\n", "\\n")
-            media_label = get_media_label(msg)
-            media_info = f" | 📎 {media_label}" if media_label else ""
-
-            lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info}{media_info} | Message: {safe_text}"
-            )
+        lines = [format_message_line(msg) for msg in messages]
         return "\n".join(lines)
     except Exception as e:
         return log_and_format_error(
@@ -1237,21 +1375,7 @@ async def get_history(chat_id: Union[int, str], limit: int = 100, account: str =
         entity = await resolve_entity(chat_id, cl)
         messages = await cl.get_messages(entity, limit=limit)
 
-        records = []
-        for msg in messages:
-            record = {
-                "id": msg.id,
-                "sender": get_sender_name(msg),
-                "date": msg.date,
-                "text": sanitize_user_content(msg.message),
-            }
-            reply_to_id = getattr(msg.reply_to, "reply_to_msg_id", None) if msg.reply_to else None
-            if reply_to_id:
-                record["reply_to"] = reply_to_id
-            media_label = get_media_label(msg)
-            if media_label:
-                record["media"] = media_label
-            records.append(record)
+        records = [message_to_dict(msg) for msg in messages]
         return format_tool_result(records)
     except Exception as e:
         return log_and_format_error("get_history", e, chat_id=chat_id, limit=limit)
