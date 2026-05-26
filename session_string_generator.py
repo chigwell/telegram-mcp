@@ -8,6 +8,7 @@ without storing session files.
 
 Usage:
     python session_string_generator.py
+    python session_string_generator.py --qr
 
 Requirements:
     - telethon
@@ -19,6 +20,7 @@ parameters support integer IDs, string representations of IDs (e.g., "123456"),
 and usernames (e.g., "@mychannel").
 """
 
+import argparse
 import asyncio
 import io
 import os
@@ -31,6 +33,24 @@ from telethon.sync import TelegramClient
 from telegram_mcp.install_guard import UnsafeInstallationError, assert_safe_distribution
 
 load_dotenv()
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate a Telegram session string for telegram-mcp."
+    )
+    login_group = parser.add_mutually_exclusive_group()
+    login_group.add_argument(
+        "--qr",
+        action="store_true",
+        help="Use Telegram QR login without prompting for a login method.",
+    )
+    login_group.add_argument(
+        "--phone",
+        action="store_true",
+        help="Use phone number + verification code login without prompting for a login method.",
+    )
+    return parser.parse_args()
 
 
 def _check_installation() -> None:
@@ -99,6 +119,7 @@ def _phone_login(client: TelegramClient) -> None:
 
 
 def main() -> None:
+    args = _parse_args()
     _check_installation()
 
     API_ID = os.getenv("TELEGRAM_API_ID")
@@ -128,10 +149,15 @@ def main() -> None:
         .lower()
     )
 
-    print("\nChoose login method:")
-    print("  1) QR code login (recommended -- scan from your Telegram app)")
-    print("  2) Phone number + verification code")
-    method = input("\nEnter 1 or 2 [default: 1]: ").strip() or "1"
+    if args.qr:
+        method = "1"
+    elif args.phone:
+        method = "2"
+    else:
+        print("\nChoose login method:")
+        print("  1) QR code login (recommended -- scan from your Telegram app)")
+        print("  2) Phone number + verification code")
+        method = input("\nEnter 1 or 2 [default: 1]: ").strip() or "1"
 
     try:
         client = TelegramClient(StringSession(), API_ID, API_HASH)
