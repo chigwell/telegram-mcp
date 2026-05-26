@@ -3,6 +3,60 @@
 from telegram_mcp.runtime import *
 
 
+def get_media_label(msg) -> str:
+    """Short label of attached media for a message, or "" if none.
+
+    The media object is already present on the fetched message (msg.media /
+    msg.photo / msg.document etc.) — no extra API call needed. Surfacing it in
+    listings prevents the classic miss where a photo/file WITH a caption shows
+    up looking like a plain text message (Telethon puts the caption in
+    msg.message but the media stays in msg.media).
+    """
+    try:
+        # стикер/голос/видео/аудио/гиф — это тоже document, поэтому проверяем их РАНЬШЕ document
+        sticker = getattr(msg, "sticker", None)
+        if sticker is not None:
+            alt = ""
+            for attr in getattr(sticker, "attributes", []) or []:
+                a = getattr(attr, "alt", None)
+                if a:
+                    alt = a
+                    break
+            return f"sticker {alt}".strip()
+        if getattr(msg, "photo", None) is not None:
+            return "photo"
+        if getattr(msg, "voice", None) is not None:
+            return "voice"
+        if getattr(msg, "video_note", None) is not None:
+            return "video_note"
+        if getattr(msg, "video", None) is not None:
+            return "video"
+        if getattr(msg, "audio", None) is not None:
+            return "audio"
+        if getattr(msg, "gif", None) is not None:
+            return "gif"
+        if getattr(msg, "document", None) is not None:
+            name = None
+            f = getattr(msg, "file", None)
+            if f is not None:
+                name = getattr(f, "name", None)
+            return f"document: {name}" if name else "document"
+        if getattr(msg, "contact", None) is not None:
+            return "contact"
+        if getattr(msg, "geo", None) is not None:
+            return "geo"
+        if getattr(msg, "poll", None) is not None:
+            return "poll"
+        # web-превью ссылки — это не вложение, не флагуем
+        if getattr(msg, "web_preview", None) is not None:
+            return ""
+        if getattr(msg, "media", None) is not None:
+            return "media"
+        return ""
+    except Exception:
+        return ""
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Get Messages", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
 @validate_id("chat_id")
@@ -34,9 +88,11 @@ async def get_messages(
 
             engagement_info = get_engagement_info(msg)
             safe_text = sanitize_user_content(msg.message).replace("\n", "\\n")
+            media_label = get_media_label(msg)
+            media_info = f" | 📎 {media_label}" if media_label else ""
 
             lines.append(
-                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info} | Message: {safe_text}"
+                f"ID: {msg.id} | {sender_name} | Date: {msg.date}{reply_info}{engagement_info}{media_info} | Message: {safe_text}"
             )
         return "\n".join(lines)
     except Exception as e:
@@ -1192,6 +1248,9 @@ async def get_history(chat_id: Union[int, str], limit: int = 100, account: str =
             reply_to_id = getattr(msg.reply_to, "reply_to_msg_id", None) if msg.reply_to else None
             if reply_to_id:
                 record["reply_to"] = reply_to_id
+            media_label = get_media_label(msg)
+            if media_label:
+                record["media"] = media_label
             records.append(record)
         return format_tool_result(records)
     except Exception as e:
