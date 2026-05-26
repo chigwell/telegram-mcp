@@ -84,6 +84,18 @@ uv run session_string_generator.py
 
 Follow the prompts. Save the generated session string securely.
 
+For scripted setup or operational runbooks, choose the login method explicitly:
+
+```bash
+# QR login, recommended when you already have Telegram open on another device
+uv run session_string_generator.py --qr
+
+# Phone number + verification code login
+uv run session_string_generator.py --phone
+```
+
+Without a flag, the generator keeps the interactive method prompt.
+
 ### 3. Configure Environment
 
 Copy the example file and fill in your real values:
@@ -380,10 +392,11 @@ Telegram messages, display names, chat titles, and button labels are untrusted c
 ## Troubleshooting
 
 - **No Telegram session configured:** set `TELEGRAM_SESSION_STRING`, `TELEGRAM_SESSION_NAME`, or suffixed multi-account variants.
-- **Session is not authorized:** run `uv run session_string_generator.py` outside
-  the MCP server, use QR login when possible, then set `TELEGRAM_SESSION_STRING`
-  in `.env`. The MCP server does not perform interactive phone-code login over
-  stdio.
+- **Session is not authorized:** run `uv run session_string_generator.py --qr` outside
+  the MCP server when you can scan from an existing Telegram app, or
+  `uv run session_string_generator.py --phone` when you need phone-code login.
+  Then set `TELEGRAM_SESSION_STRING` in `.env`. The MCP server does not perform
+  interactive phone-code login over stdio.
 - **Invalid API credentials:** verify `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` at [my.telegram.org/apps](https://my.telegram.org/apps).
 - **Database is locked:** prefer string sessions, or make sure no other process is using the same file session.
 - **File tools are disabled:** pass allowed roots or configure MCP Roots in your client.
