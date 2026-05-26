@@ -268,6 +268,23 @@ async def get_full_user(username: Union[int, str], account: str = None) -> str:
             except Exception:
                 personal_channel = str(personal_channel_id)
 
+        # Birthday is exposed in UserFull for Premium users who set it and allow
+        # contacts to see it. The `year` component is optional (often hidden).
+        # Returns ISO `YYYY-MM-DD` when year is present, else `--MM-DD` (vCard
+        # RFC 6350 style for year-less dates); None when not available.
+        birthday = getattr(full_user, "birthday", None)
+        birthday_str = None
+        if birthday is not None:
+            b_day = getattr(birthday, "day", None)
+            b_month = getattr(birthday, "month", None)
+            b_year = getattr(birthday, "year", None)
+            if b_day and b_month:
+                birthday_str = (
+                    f"{b_year:04d}-{b_month:02d}-{b_day:02d}"
+                    if b_year
+                    else f"--{b_month:02d}-{b_day:02d}"
+                )
+
         result = {
             "id": user.id if user else None,
             "first_name": sanitize_name(getattr(user, "first_name", None)) if user else None,
@@ -276,6 +293,7 @@ async def get_full_user(username: Union[int, str], account: str = None) -> str:
             "phone": getattr(user, "phone", None) if user else None,
             "bio": sanitize_user_content(full_user.about or "", max_length=1024),
             "personal_channel": personal_channel,
+            "birthday": birthday_str,
             "bot": getattr(user, "bot", False) if user else False,
             "verified": getattr(user, "verified", False) if user else False,
             "premium": getattr(user, "premium", False) if user else False,
