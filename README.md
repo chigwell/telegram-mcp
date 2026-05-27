@@ -112,6 +112,21 @@ TELEGRAM_API_HASH=your_api_hash_here
 TELEGRAM_SESSION_STRING=your_session_string_here
 ```
 
+By default, all Telegram MCP tools are exposed. If you want to prevent MCP
+clients from sending messages or performing chat/account mutations, set
+`TELEGRAM_EXPOSED_TOOLS=read-only` to expose only tools annotated with
+`readOnlyHint=True`:
+
+```env
+TELEGRAM_EXPOSED_TOOLS=read-only
+```
+
+This is an MCP tool-surface restriction, not a Telegram session sandbox or
+reduced Telegram account permission. The Telegram session string still has its
+normal authority inside the server process; read-only mode only prevents
+non-read-only tools from being registered and exposed through MCP. Accepted
+values are `all` (the default) and `read-only`.
+
 Run the server locally:
 
 ```bash
@@ -142,6 +157,13 @@ this project:
     }
   }
 }
+```
+
+To expose only read-only tools in Claude Desktop or Cursor, add this to the
+server `env` block:
+
+```json
+"TELEGRAM_EXPOSED_TOOLS": "read-only"
 ```
 
 Alternatively, install this repository directly from GitHub into a virtual

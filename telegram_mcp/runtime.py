@@ -137,6 +137,40 @@ def _install_annotation_hook() -> None:
 _install_annotation_hook()
 
 
+_EXPOSED_TOOLS_MODES = {"all", "read-only"}
+
+
+def _get_exposed_tools_mode(value: Optional[str] = None) -> str:
+    """Return the configured MCP tool exposure mode.
+
+    ``TELEGRAM_EXPOSED_TOOLS=read-only`` keeps only tools annotated with
+    ``readOnlyHint=True``. The default is ``all`` for backward compatibility.
+    """
+    raw_value = os.getenv("TELEGRAM_EXPOSED_TOOLS", "all") if value is None else value
+    mode = raw_value.strip().lower()
+    if mode not in _EXPOSED_TOOLS_MODES:
+        accepted = ", ".join(sorted(_EXPOSED_TOOLS_MODES))
+        raise SystemExit(
+            f"Invalid TELEGRAM_EXPOSED_TOOLS '{raw_value}'. Expected one of: {accepted}."
+        )
+    return mode
+
+
+def _apply_exposed_tools_mode(server: FastMCP = mcp, mode: Optional[str] = None) -> list[str]:
+    """Prune registered MCP tools according to the configured exposure mode."""
+    selected_mode = _get_exposed_tools_mode() if mode is None else _get_exposed_tools_mode(mode)
+    if selected_mode == "all":
+        return []
+
+    removed: list[str] = []
+    for tool in list(server._tool_manager.list_tools()):
+        annotations = getattr(tool, "annotations", None)
+        if not getattr(annotations, "readOnlyHint", False):
+            server._tool_manager.remove_tool(tool.name)
+            removed.append(tool.name)
+    return removed
+
+
 # ---------------------------------------------------------------------------
 # Multi-account configuration
 # ---------------------------------------------------------------------------
