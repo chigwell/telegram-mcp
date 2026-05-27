@@ -4,8 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from mcp.server.fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
-from mcp.types import ErrorData
+from mcp.types import ErrorData, ToolAnnotations
 from telethon.tl.types import Channel, Chat, PeerUser, User
 
 import main
@@ -22,6 +23,60 @@ class _FakeTelegramClient:
     def __init__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
+
+
+def _tool_names(server):
+    return {tool.name for tool in server._tool_manager.list_tools()}
+
+
+def _synthetic_mcp():
+    server = FastMCP("test")
+
+    @server.tool(annotations=ToolAnnotations(title="Read", readOnlyHint=True))
+    def read_tool():
+        return "read"
+
+    @server.tool(annotations=ToolAnnotations(title="Write", destructiveHint=True))
+    def write_tool():
+        return "write"
+
+    return server
+
+
+def test_get_exposed_tools_mode_defaults_to_all(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_EXPOSED_TOOLS", raising=False)
+
+    assert runtime._get_exposed_tools_mode() == "all"
+
+
+def test_apply_exposed_tools_all_keeps_tools():
+    server = _synthetic_mcp()
+
+    removed = runtime._apply_exposed_tools_mode(server, "all")
+
+    assert removed == []
+    assert _tool_names(server) == {"read_tool", "write_tool"}
+
+
+def test_apply_exposed_tools_read_only_removes_non_read_only_tools():
+    server = _synthetic_mcp()
+
+    removed = runtime._apply_exposed_tools_mode(server, "read-only")
+
+    assert removed == ["write_tool"]
+    assert _tool_names(server) == {"read_tool"}
+
+
+def test_get_exposed_tools_mode_rejects_invalid_value(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_EXPOSED_TOOLS", "send-everything")
+
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._get_exposed_tools_mode()
+
+    message = str(excinfo.value)
+    assert "TELEGRAM_EXPOSED_TOOLS" in message
+    assert "all" in message
+    assert "read-only" in message
 
 
 def test_discover_accounts_supports_suffixed_and_default_sessions(monkeypatch):
