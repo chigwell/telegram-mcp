@@ -13,12 +13,13 @@ def get_media_label(msg) -> str:
     msg.message but the media stays in msg.media).
     """
     try:
-        # Веб-превью ссылки — НЕ вложение. Проверяем ПЕРВЫМ: у сообщения со
-        # ссылкой Telethon отдаёт картинку превью через msg.photo, иначе она
-        # ложно пометилась бы как "photo".
+        # Link web preview is NOT an attachment. Check it FIRST: for a message with a
+        # link, Telethon returns the preview image via msg.photo; otherwise it would
+        # be incorrectly classified as a "photo".
         if getattr(msg, "web_preview", None) is not None:
             return ""
-        # Стикер/голос/видео/аудио/гиф — это тоже document, проверяем РАНЬШЕ document.
+        # Sticker/voice/video/audio/GIF are also represented as documents, so check
+        # them BEFORE the generic document handler.
         sticker = getattr(msg, "sticker", None)
         if sticker is not None:
             alt = ""
@@ -60,10 +61,10 @@ def get_media_label(msg) -> str:
 
 
 def _inline_button_texts(msg):
-    """Тексты inline-кнопок сообщения (плоским списком), [] если нет."""
+    """Inline button texts of the message (flat list), [] if none."""
     out = []
     try:
-        for row in (getattr(msg, "buttons", None) or []):
+        for row in getattr(msg, "buttons", None) or []:
             for b in row:
                 t = getattr(b, "text", None)
                 if t:
@@ -74,10 +75,10 @@ def _inline_button_texts(msg):
 
 
 def _link_urls(msg):
-    """Явные URL из entities (скрытые за текстом ссылки), [] если нет."""
+    """Explicit URLs from entities (links hidden behind text), [] if none."""
     out = []
     try:
-        for e in (getattr(msg, "entities", None) or []):
+        for e in getattr(msg, "entities", None) or []:
             u = getattr(e, "url", None)
             if u:
                 out.append(u)
@@ -87,11 +88,12 @@ def _link_urls(msg):
 
 
 def message_to_dict(msg) -> dict:
-    """API-полный, но компактный вид сообщения Telethon (пустые поля опускаем).
+    """API-complete but compact Telethon message view (omit empty fields).
 
-    Цель — чтобы вывод MCP по полноте соответствовал объекту API, а не терял
-    данные (медиа, альбомы, пересылки, правки, кнопки, реакции и т.п.).
-    Все эти поля уже приходят в объекте сообщения тем же запросом get_messages.
+    The goal is for the MCP output to match the API object in completeness, rather
+    than losing data such as media, albums, forwards, edits, buttons, reactions,
+    and so on. All these fields are already present in the message object returned
+    by the same get_messages request.
     """
     d = {"id": msg.id, "sender": get_sender_name(msg), "date": msg.date}
 
@@ -111,9 +113,11 @@ def message_to_dict(msg) -> dict:
 
     grouped_id = getattr(msg, "grouped_id", None)
     if grouped_id:
-        d["grouped_id"] = grouped_id  # альбом: сообщения с одним grouped_id — одна группа
+        d["grouped_id"] = grouped_id  # album: messages sharing one grouped_id form a single group
 
-    reply_to_id = getattr(msg.reply_to, "reply_to_msg_id", None) if getattr(msg, "reply_to", None) else None
+    reply_to_id = (
+        getattr(msg.reply_to, "reply_to_msg_id", None) if getattr(msg, "reply_to", None) else None
+    )
     if reply_to_id:
         d["reply_to"] = reply_to_id
 
@@ -159,7 +163,7 @@ def message_to_dict(msg) -> dict:
 
     action = getattr(msg, "action", None)
     if action is not None:
-        d["action"] = type(action).__name__  # сервисное сообщение (вступил/закрепил/…)
+        d["action"] = type(action).__name__  # service message (joined/pinned/…)
 
     ttl = getattr(msg, "ttl_period", None)
     if ttl:
@@ -169,10 +173,12 @@ def message_to_dict(msg) -> dict:
 
 
 def format_message_line(msg) -> str:
-    """Однострочный человекочитаемый вид сообщения со ВСЕМИ ключевыми флагами."""
+    """Single-line human-readable message representation with ALL key flags."""
     parts = [f"ID: {msg.id}", get_sender_name(msg), f"Date: {msg.date}"]
 
-    reply_to_id = getattr(msg.reply_to, "reply_to_msg_id", None) if getattr(msg, "reply_to", None) else None
+    reply_to_id = (
+        getattr(msg.reply_to, "reply_to_msg_id", None) if getattr(msg, "reply_to", None) else None
+    )
     if reply_to_id:
         parts.append(f"reply to {reply_to_id}")
 
