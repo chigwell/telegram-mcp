@@ -1,13 +1,14 @@
 """Contacts MCP tools."""
 
 from telegram_mcp.runtime import *
+from typing import Optional
 
 
 @mcp.tool(
     annotations=ToolAnnotations(title="List Contacts", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
-async def list_contacts(account: str = None) -> str:
+async def list_contacts(account: Optional[str] = None) -> str:
     """
     List all contacts in your Telegram account.
 
@@ -43,7 +44,7 @@ async def list_contacts(account: str = None) -> str:
     annotations=ToolAnnotations(title="Search Contacts", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
-async def search_contacts(query: str, account: str = None) -> str:
+async def search_contacts(query: str, account: Optional[str] = None) -> str:
     """
     Search for contacts by name, username, or phone number using Telethon's SearchRequest.
     Args:
@@ -81,7 +82,7 @@ async def search_contacts(query: str, account: str = None) -> str:
     annotations=ToolAnnotations(title="Get Contact Ids", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
-async def get_contact_ids(account: str = None) -> str:
+async def get_contact_ids(account: Optional[str] = None) -> str:
     """
     Get all contact IDs in your Telegram account.
     """
@@ -102,7 +103,7 @@ async def get_contact_ids(account: str = None) -> str:
     )
 )
 @with_account(readonly=True)
-async def get_direct_chat_by_contact(contact_query: str, account: str = None) -> str:
+async def get_direct_chat_by_contact(contact_query: str, account: Optional[str] = None) -> str:
     """
     Find a direct chat with a specific contact by name, username, or phone.
 
@@ -168,7 +169,7 @@ async def get_direct_chat_by_contact(contact_query: str, account: str = None) ->
 )
 @with_account(readonly=True)
 @validate_id("contact_id")
-async def get_contact_chats(contact_id: Union[int, str], account: str = None) -> str:
+async def get_contact_chats(contact_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     List all chats involving a specific contact.
 
@@ -237,7 +238,7 @@ async def get_contact_chats(contact_id: Union[int, str], account: str = None) ->
 )
 @with_account(readonly=True)
 @validate_id("contact_id")
-async def get_last_interaction(contact_id: Union[int, str], account: str = None) -> str:
+async def get_last_interaction(contact_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Get the most recent message with a contact.
 
@@ -291,7 +292,7 @@ async def get_last_interaction(contact_id: Union[int, str], account: str = None)
 )
 @with_account(readonly=False)
 async def add_contact(
-    account: str = None,
+    account: Optional[str] = None,
     phone: Optional[str] = None,
     first_name: str = "",
     last_name: str = "",
@@ -428,7 +429,7 @@ async def add_contact(
 )
 @with_account(readonly=False)
 @validate_id("user_id")
-async def delete_contact(user_id: Union[int, str], account: str = None) -> str:
+async def delete_contact(user_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Delete a contact by user ID.
     Args:
@@ -450,7 +451,7 @@ async def delete_contact(user_id: Union[int, str], account: str = None) -> str:
 )
 @with_account(readonly=False)
 @validate_id("user_id")
-async def block_user(user_id: Union[int, str], account: str = None) -> str:
+async def block_user(user_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Block a user by user ID.
     Args:
@@ -472,7 +473,7 @@ async def block_user(user_id: Union[int, str], account: str = None) -> str:
 )
 @with_account(readonly=False)
 @validate_id("user_id")
-async def unblock_user(user_id: Union[int, str], account: str = None) -> str:
+async def unblock_user(user_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Unblock a user by user ID.
     Args:
@@ -491,7 +492,7 @@ async def unblock_user(user_id: Union[int, str], account: str = None) -> str:
     annotations=ToolAnnotations(title="Import Contacts", openWorldHint=True, destructiveHint=True)
 )
 @with_account(readonly=False)
-async def import_contacts(contacts: list, account: str = None) -> str:
+async def import_contacts(contacts: list, account: Optional[str] = None) -> str:
     """
     Import a list of contacts. Each contact should be a dict with phone, first_name, last_name.
     """
@@ -517,7 +518,7 @@ async def import_contacts(contacts: list, account: str = None) -> str:
     annotations=ToolAnnotations(title="Export Contacts", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
-async def export_contacts(account: str = None) -> str:
+async def export_contacts(account: Optional[str] = None) -> str:
     """
     Export all contacts as a JSON string.
     """
@@ -535,7 +536,7 @@ async def export_contacts(account: str = None) -> str:
     annotations=ToolAnnotations(title="Get Blocked Users", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
-async def get_blocked_users(account: str = None) -> str:
+async def get_blocked_users(account: Optional[str] = None) -> str:
     """
     Get a list of blocked users.
     """
@@ -559,7 +560,7 @@ async def send_contact(
     first_name: str,
     last_name: str = "",
     vcard: str = "",
-    account: str = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Send a contact to a chat.
