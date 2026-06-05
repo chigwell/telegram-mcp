@@ -1092,6 +1092,8 @@ async def get_message_link(
 __all__ = [
     "get_chats",
     "list_topics",
+    "enable_forum_topics",
+    "create_forum_topic",
     "list_chats",
     "get_chat",
     "subscribe_public_channel",
