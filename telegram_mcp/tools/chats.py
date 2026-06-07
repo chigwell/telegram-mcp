@@ -1,5 +1,6 @@
 """Chats MCP tools."""
 
+import secrets
 import struct
 
 from telethon.tl.tlobject import TLObject, TLRequest
@@ -68,6 +69,87 @@ class GetForumTopicsRequest(TLRequest):
             offset_topic=offset_topic,
             limit=limit,
             q=q,
+        )
+
+
+class CreateForumTopicRequest(TLRequest):
+    """Raw request for messages.createForumTopic missing in Telethon 1.42."""
+
+    CONSTRUCTOR_ID = 0x2F98C3D5
+    SUBCLASS_OF_ID = 0x0
+
+    def __init__(
+        self,
+        peer,
+        title,
+        random_id,
+        icon_color=None,
+        icon_emoji_id=None,
+        send_as=None,
+    ):
+        self.peer = peer
+        self.title = title
+        self.icon_color = icon_color
+        self.icon_emoji_id = icon_emoji_id
+        self.random_id = random_id
+        self.send_as = send_as
+
+    async def resolve(self, client, utils):
+        self.peer = utils.get_input_peer(await client.get_input_entity(self.peer))
+        if self.send_as is not None:
+            self.send_as = utils.get_input_peer(await client.get_input_entity(self.send_as))
+
+    def to_dict(self):
+        return {
+            "_": "CreateForumTopicRequest",
+            "peer": self.peer.to_dict() if isinstance(self.peer, TLObject) else self.peer,
+            "title": self.title,
+            "icon_color": self.icon_color,
+            "icon_emoji_id": self.icon_emoji_id,
+            "random_id": self.random_id,
+            "send_as": (
+                self.send_as.to_dict() if isinstance(self.send_as, TLObject) else self.send_as
+            ),
+        }
+
+    def _bytes(self):
+        flags = 0
+        if self.icon_color is not None:
+            flags |= 1 << 0
+        if self.send_as is not None:
+            flags |= 1 << 2
+        if self.icon_emoji_id is not None:
+            flags |= 1 << 3
+
+        return b"".join(
+            (
+                struct.pack("<I", self.CONSTRUCTOR_ID),
+                struct.pack("<I", flags),
+                self.peer._bytes(),
+                self.serialize_bytes(self.title),
+                b"" if self.icon_color is None else struct.pack("<i", self.icon_color),
+                b"" if self.icon_emoji_id is None else struct.pack("<q", self.icon_emoji_id),
+                struct.pack("<q", self.random_id),
+                b"" if self.send_as is None else self.send_as._bytes(),
+            )
+        )
+
+    @classmethod
+    def from_reader(cls, reader):
+        flags = reader.read_int()
+        peer = reader.tgread_object()
+        title = reader.tgread_string()
+        icon_color = reader.read_int() if flags & (1 << 0) else None
+        icon_emoji_id = reader.read_long() if flags & (1 << 3) else None
+        random_id = reader.read_long()
+        send_as = reader.tgread_object() if flags & (1 << 2) else None
+        return cls(
+            peer=peer,
+            title=title,
+            random_id=random_id,
+            icon_color=icon_color,
+            icon_emoji_id=icon_emoji_id,
+            send_as=send_as,
         )
 
 
@@ -229,6 +311,139 @@ async def list_topics(
             offset_topic=offset_topic,
             search_query=search_query,
         )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Enable Forum Topics", openWorldHint=True, destructiveHint=True, idempotentHint=True
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def enable_forum_topics(
+    chat_id: Union[int, str], tabs: bool = True, account: str = None
+) -> str:
+    """
+    Enable Telegram forum topics for a supergroup.
+
+    Args:
+        chat_id: The supergroup ID or username.
+        tabs: Whether Telegram should display topics as tabs (default True).
+
+    The caller must be an admin with permission to change chat info.
+    """
+    try:
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+
+        if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
+            return "The specified chat is not a supergroup."
+
+        if getattr(entity, "forum", False):
+            title = sanitize_name(getattr(entity, "title", str(chat_id)))
+            return f"Forum topics already enabled for {title}."
+
+        await cl(functions.channels.ToggleForumRequest(channel=entity, enabled=True, tabs=tabs))
+        # Keep the resolved entity in sync for callers/tests that reuse it.
+        try:
+            entity.forum = True
+        except Exception:
+            pass
+
+        title = sanitize_name(getattr(entity, "title", str(chat_id)))
+        return f"Forum topics enabled for {title}."
+    except Exception as e:
+        return log_and_format_error("enable_forum_topics", e, chat_id=chat_id, tabs=tabs)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Create Forum Topic", openWorldHint=True, destructiveHint=True
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def create_forum_topic(
+    chat_id: Union[int, str],
+    title: str,
+    icon_color: int = None,
+    icon_emoji_id: int = None,
+    account: str = None,
+) -> str:
+    """
+    Create a Telegram forum topic in a forum-enabled supergroup.
+
+    Args:
+        chat_id: The forum-enabled supergroup ID or username.
+        title: Topic title.
+        icon_color: Optional Telegram topic icon color integer.
+        icon_emoji_id: Optional custom emoji document ID for the topic icon.
+
+    Returns a JSON result with chat_id, topic_id (when Telegram returns it), and title.
+    """
+    try:
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+
+        if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
+            return "The specified chat is not a supergroup."
+
+        if not getattr(entity, "forum", False):
+            return (
+                "The specified supergroup does not have forum topics enabled. "
+                "Use enable_forum_topics first."
+            )
+
+        clean_title = sanitize_user_content(title, max_length=128)
+        result = await cl(
+            CreateForumTopicRequest(
+                peer=entity,
+                title=clean_title,
+                random_id=secrets.randbits(63),
+                icon_color=icon_color,
+                icon_emoji_id=icon_emoji_id,
+            )
+        )
+
+        topic_id = _extract_created_topic_id(result)
+        record = {
+            "chat_id": get_marked_id(entity),
+            "title": clean_title,
+        }
+        if topic_id is not None:
+            record["topic_id"] = topic_id
+
+        return format_tool_result([record])
+    except Exception as e:
+        return log_and_format_error(
+            "create_forum_topic",
+            e,
+            chat_id=chat_id,
+            title=title,
+            icon_color=icon_color,
+            icon_emoji_id=icon_emoji_id,
+        )
+
+
+def _extract_created_topic_id(result) -> Optional[int]:
+    """Best-effort extraction of the top message/topic ID from Updates."""
+    updates = getattr(result, "updates", None) or []
+    for update in updates:
+        message = getattr(update, "message", None)
+        message_id = getattr(message, "id", None)
+        if isinstance(message_id, int):
+            return message_id
+
+        update_id = getattr(update, "id", None)
+        if isinstance(update_id, int):
+            return update_id
+
+    message = getattr(result, "message", None)
+    message_id = getattr(message, "id", None)
+    if isinstance(message_id, int):
+        return message_id
+
+    return None
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List Chats", openWorldHint=True, readOnlyHint=True))
@@ -877,6 +1092,8 @@ async def get_message_link(
 __all__ = [
     "get_chats",
     "list_topics",
+    "enable_forum_topics",
+    "create_forum_topic",
     "list_chats",
     "get_chat",
     "subscribe_public_channel",
