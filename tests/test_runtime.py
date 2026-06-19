@@ -722,3 +722,72 @@ def test_main_compatibility_wrappers_are_exported():
     assert main.send_message is not None
     assert main.validate_id is runtime.validate_id
     assert main.log_file_path.endswith("mcp_errors.log")
+
+
+class _FakeRootsSession:
+    def __init__(self, roots):
+        self._roots = roots
+
+    async def list_roots(self):
+        return SimpleNamespace(roots=list(self._roots))
+
+
+def _ctx_with_roots(roots):
+    return SimpleNamespace(session=_FakeRootsSession(roots))
+
+
+def test_server_roots_fallback_enabled_parsing(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", raising=False)
+    assert runtime._server_roots_fallback_enabled() is False
+    assert runtime._server_roots_fallback_enabled("1") is True
+    assert runtime._server_roots_fallback_enabled("true") is True
+    assert runtime._server_roots_fallback_enabled("off") is False
+    monkeypatch.setenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", "yes")
+    assert runtime._server_roots_fallback_enabled() is True
+
+
+@pytest.mark.asyncio
+async def test_empty_client_roots_denies_by_default(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root.resolve()])
+    monkeypatch.delenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", raising=False)
+
+    roots, status = await runtime._get_effective_allowed_roots_with_status(
+        _ctx_with_roots([])
+    )
+    assert roots == []
+    assert status == runtime.ROOTS_STATUS_CLIENT_DENY_ALL
+
+
+@pytest.mark.asyncio
+async def test_empty_client_roots_falls_back_to_server_when_enabled(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root.resolve()])
+    monkeypatch.setenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", "1")
+
+    roots, status = await runtime._get_effective_allowed_roots_with_status(
+        _ctx_with_roots([])
+    )
+    assert roots == [root.resolve()]
+    assert status == runtime.ROOTS_STATUS_SERVER_FALLBACK
+
+    # _ensure_allowed_roots must accept the fallback roots without an error.
+    resolved, error = await runtime._ensure_allowed_roots(
+        _ctx_with_roots([]), "download_media"
+    )
+    assert error is None
+    assert resolved == [root.resolve()]
+
+
+@pytest.mark.asyncio
+async def test_empty_client_roots_fallback_noop_without_server_roots(monkeypatch):
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [])
+    monkeypatch.setenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", "1")
+
+    roots, status = await runtime._get_effective_allowed_roots_with_status(
+        _ctx_with_roots([])
+    )
+    assert roots == []
+    assert status == runtime.ROOTS_STATUS_CLIENT_DENY_ALL
