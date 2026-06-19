@@ -504,6 +504,7 @@ ROOTS_STATUS_READY = "ready"
 ROOTS_STATUS_NOT_CONFIGURED = "not_configured"
 ROOTS_STATUS_UNSUPPORTED_FALLBACK = "unsupported_fallback"
 ROOTS_STATUS_CLIENT_DENY_ALL = "client_deny_all"
+ROOTS_STATUS_SERVER_FALLBACK = "server_fallback"
 ROOTS_STATUS_ERROR = "error"
 
 
@@ -957,6 +958,18 @@ def _is_roots_unsupported_error(error: Exception) -> bool:
     return False
 
 
+def _server_roots_fallback_enabled(value: Optional[str] = None) -> bool:
+    """Whether an empty client roots list should fall back to server CLI roots.
+
+    Opt-in via the ``TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK`` environment variable.
+    Defaults to ``False`` to preserve the safe deny-all behavior.
+    """
+    raw_value = (
+        os.getenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK") if value is None else value
+    )
+    return _parse_bool_env(raw_value, False)
+
+
 async def _get_effective_allowed_roots_with_status(
     ctx: Optional[Context],
 ) -> tuple[List[Path], str]:
@@ -989,7 +1002,13 @@ async def _get_effective_allowed_roots_with_status(
     if client_roots:
         return _dedupe_paths(client_roots), ROOTS_STATUS_READY
 
-    # Roots API succeeded; an empty roots list is treated as explicit deny-all.
+    # Roots API succeeded but returned an empty list. By default this is an
+    # explicit deny-all. Some clients (e.g. ones that implement the Roots
+    # capability but expose no roots) advertise an empty list even though the
+    # operator configured server-side CLI roots; for those, an opt-in lets the
+    # server-side roots take effect instead of disabling file tools entirely.
+    if fallback_roots and _server_roots_fallback_enabled():
+        return fallback_roots, ROOTS_STATUS_SERVER_FALLBACK
     return [], ROOTS_STATUS_CLIENT_DENY_ALL
 
 
