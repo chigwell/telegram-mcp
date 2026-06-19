@@ -964,9 +964,7 @@ def _server_roots_fallback_enabled(value: Optional[str] = None) -> bool:
     Opt-in via the ``TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK`` environment variable.
     Defaults to ``False`` to preserve the safe deny-all behavior.
     """
-    raw_value = (
-        os.getenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK") if value is None else value
-    )
+    raw_value = os.getenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK") if value is None else value
     return _parse_bool_env(raw_value, False)
 
 

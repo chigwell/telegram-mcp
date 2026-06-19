@@ -753,9 +753,7 @@ async def test_empty_client_roots_denies_by_default(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root.resolve()])
     monkeypatch.delenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", raising=False)
 
-    roots, status = await runtime._get_effective_allowed_roots_with_status(
-        _ctx_with_roots([])
-    )
+    roots, status = await runtime._get_effective_allowed_roots_with_status(_ctx_with_roots([]))
     assert roots == []
     assert status == runtime.ROOTS_STATUS_CLIENT_DENY_ALL
 
@@ -767,16 +765,12 @@ async def test_empty_client_roots_falls_back_to_server_when_enabled(tmp_path, mo
     monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root.resolve()])
     monkeypatch.setenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", "1")
 
-    roots, status = await runtime._get_effective_allowed_roots_with_status(
-        _ctx_with_roots([])
-    )
+    roots, status = await runtime._get_effective_allowed_roots_with_status(_ctx_with_roots([]))
     assert roots == [root.resolve()]
     assert status == runtime.ROOTS_STATUS_SERVER_FALLBACK
 
     # _ensure_allowed_roots must accept the fallback roots without an error.
-    resolved, error = await runtime._ensure_allowed_roots(
-        _ctx_with_roots([]), "download_media"
-    )
+    resolved, error = await runtime._ensure_allowed_roots(_ctx_with_roots([]), "download_media")
     assert error is None
     assert resolved == [root.resolve()]
 
@@ -786,8 +780,6 @@ async def test_empty_client_roots_fallback_noop_without_server_roots(monkeypatch
     monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [])
     monkeypatch.setenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", "1")
 
-    roots, status = await runtime._get_effective_allowed_roots_with_status(
-        _ctx_with_roots([])
-    )
+    roots, status = await runtime._get_effective_allowed_roots_with_status(_ctx_with_roots([]))
     assert roots == []
     assert status == runtime.ROOTS_STATUS_CLIENT_DENY_ALL
