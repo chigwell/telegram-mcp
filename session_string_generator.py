@@ -26,12 +26,17 @@ import getpass
 import io
 import os
 import sys
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from telethon import errors
 from telethon.sessions import StringSession
 from telethon.sync import TelegramClient
+from telegram_mcp.client_identity import client_identity_kwargs
 from telegram_mcp.install_guard import UnsafeInstallationError, assert_safe_distribution
+
+# How many times the QR code is regenerated after expiry before giving up.
+_QR_MAX_REFRESHES = 10
 
 load_dotenv()
 
@@ -62,10 +67,8 @@ def _check_installation() -> None:
         sys.exit(1)
 
 
-def _qr_login(client: TelegramClient) -> None:
+def _render_qr(qr) -> None:
     import qrcode
-
-    qr = client.qr_login()
 
     print("\n----- QR Code Login -----\n")
 
@@ -82,15 +85,38 @@ def _qr_login(client: TelegramClient) -> None:
     print(f"Expires at: {qr.expires.strftime('%H:%M:%S')}")
     print("Waiting for you to scan...")
 
-    try:
-        client.loop.run_until_complete(qr.wait(timeout=120))
-    except asyncio.TimeoutError:
-        print("\nQR code expired. Please try again.")
-        client.disconnect()
-        sys.exit(1)
-    except errors.SessionPasswordNeededError:
-        pw = getpass.getpass("\nTwo-factor authentication enabled. Please enter your password: ")
-        client.sign_in(password=pw)
+
+def _seconds_until_expiry(qr) -> float:
+    """Seconds left before this QR token expires, with a small safety margin."""
+    expires = qr.expires
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    remaining = (expires - datetime.now(timezone.utc)).total_seconds()
+    return max(1.0, remaining - 1.0)
+
+
+def _qr_login(client: TelegramClient) -> None:
+    qr = client.qr_login()
+    _render_qr(qr)
+
+    for _ in range(_QR_MAX_REFRESHES):
+        try:
+            client.loop.run_until_complete(qr.wait(timeout=_seconds_until_expiry(qr)))
+            return
+        except asyncio.TimeoutError:
+            client.loop.run_until_complete(qr.recreate())
+            print("\nQR code expired, here is a fresh one.")
+            _render_qr(qr)
+        except errors.SessionPasswordNeededError:
+            pw = getpass.getpass(
+                "\nTwo-factor authentication enabled. Please enter your password: "
+            )
+            client.sign_in(password=pw)
+            return
+
+    print("\nQR code expired too many times. Please run the generator again.")
+    client.disconnect()
+    sys.exit(1)
 
 
 def _phone_login(client: TelegramClient) -> None:
@@ -161,7 +187,7 @@ def main() -> None:
         method = input("\nEnter 1 or 2 [default: 1]: ").strip() or "1"
 
     try:
-        client = TelegramClient(StringSession(), API_ID, API_HASH)
+        client = TelegramClient(StringSession(), API_ID, API_HASH, **client_identity_kwargs())
         client.connect()
 
         if not client.is_user_authorized():
