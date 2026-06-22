@@ -30,6 +30,7 @@ Message sent successfully:
 - [Quick Start](#quick-start)
 - [MCP Client Configuration](#mcp-client-configuration)
 - [Multi-Account Setup](#multi-account-setup)
+- [Device Identity](#device-identity)
 - [Proxy Support](#proxy-support)
 - [File Path Security](#file-path-security)
 - [Docker](#docker)
@@ -221,6 +222,24 @@ Example prompts:
 - "List my accounts"
 - "Show unread messages from all accounts"
 - "Send this from my work account to @example"
+
+## Device Identity
+
+These optional variables control how the client appears in Telegram under
+**Settings > Devices** (the active-sessions list):
+
+```env
+TELEGRAM_DEVICE_MODEL=Telegram MCP
+TELEGRAM_SYSTEM_VERSION=1.0
+TELEGRAM_APP_VERSION=1.0
+```
+
+If left unset, Telethon falls back to the host platform (for example `arm64`).
+Because these values are re-sent on every connection, a long-running server
+would otherwise overwrite the name chosen during login on each reconnect, so
+set them to keep a stable, recognisable device name. The same variables are
+read both by the session string generator (at login) and by the server (on
+every connect), so set them in the same place as your other credentials.
 
 ## Proxy Support
 

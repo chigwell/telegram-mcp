@@ -257,6 +257,25 @@ def test_discover_accounts_passes_proxy_kwargs_to_client(monkeypatch):
     assert client.kwargs["connection"] is ConnectionTcpMTProxyRandomizedIntermediate
 
 
+def test_discover_accounts_passes_device_identity_kwargs_to_client(monkeypatch):
+    _clear_session_env(monkeypatch)
+    _clear_proxy_env(monkeypatch)
+    for key in ("TELEGRAM_DEVICE_MODEL", "TELEGRAM_SYSTEM_VERSION", "TELEGRAM_APP_VERSION"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("TELEGRAM_SESSION_STRING", "default-session")
+    monkeypatch.setenv("TELEGRAM_DEVICE_MODEL", "Telegram MCP")
+    monkeypatch.setenv("TELEGRAM_APP_VERSION", "3.1")
+    monkeypatch.setattr(runtime, "TelegramClient", _FakeTelegramClient)
+    monkeypatch.setattr(runtime, "StringSession", lambda value: f"StringSession:{value}")
+
+    accounts = runtime._discover_accounts()
+
+    client = accounts["default"]
+    assert client.kwargs["device_model"] == "Telegram MCP"
+    assert client.kwargs["app_version"] == "3.1"
+    assert "system_version" not in client.kwargs
+
+
 def test_get_client_single_and_multi_account_paths(monkeypatch):
     only = object()
     monkeypatch.setattr(runtime, "clients", {"only": only})

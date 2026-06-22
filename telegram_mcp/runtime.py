@@ -45,6 +45,7 @@ import re
 from functools import wraps
 import telethon.errors.rpcerrorlist
 from sanitize import sanitize_user_content, sanitize_name, sanitize_dict, format_tool_result
+from telegram_mcp.client_identity import client_identity_kwargs
 
 
 class ValidationError(Exception):
@@ -275,6 +276,7 @@ def _build_client(session: Any, label: str) -> TelegramClient:
         kwargs["proxy"] = proxy
     if connection is not None:
         kwargs["connection"] = connection
+    kwargs.update(client_identity_kwargs())
     return TelegramClient(session, TELEGRAM_API_ID, TELEGRAM_API_HASH, **kwargs)
 
 
