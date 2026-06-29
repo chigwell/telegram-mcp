@@ -831,6 +831,30 @@ def get_sender_name(message) -> str:
         return "Unknown"
 
 
+def get_sender_username(message) -> Optional[str]:
+    """Public @username of the message sender, if any (sanitized)."""
+    sender = getattr(message, "sender", None)
+    username = getattr(sender, "username", None) if sender else None
+    return sanitize_name(username) if username else None
+
+
+def get_sender_info(message) -> str:
+    """Sender display string: name (@username) [id=NNN].
+
+    Always exposes a numeric id (sender or from_id) so a user can be reached via
+    tg://user?id=<id> even when no public @username exists.
+    """
+    name = get_sender_name(message)
+    username = get_sender_username(message)
+    sid = getattr(message, "sender_id", None)
+    suffix = ""
+    if username:
+        suffix += f" (@{username})"
+    if sid:
+        suffix += f" [id={sid}]"
+    return f"{name}{suffix}"
+
+
 def get_engagement_info(message) -> str:
     """Helper function to get engagement metrics (views, forwards, reactions) from a message."""
     engagement_parts = []
