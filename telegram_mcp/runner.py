@@ -50,9 +50,22 @@ async def _main() -> None:
 
         warm_task = asyncio.create_task(_warm_caches())
 
-        print(f"Telegram client(s) started ({labels}). Running MCP server...", file=sys.stderr)
-        # Use the asynchronous entrypoint instead of mcp.run()
-        await mcp.run_stdio_async()
+        transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
+        print(
+            f"Telegram client(s) started ({labels}). Running MCP server ({transport})...",
+            file=sys.stderr,
+        )
+        # SSE transport: one long-lived process holds a single shared Telegram
+        # connection, while multiple local MCP clients (Claude Code via mcp-remote,
+        # Claude Desktop) connect over HTTP. This avoids spawning one Telethon
+        # session per client, which Telegram throttles/flags.
+        if transport == "sse":
+            mcp.settings.host = os.getenv("MCP_HOST", "127.0.0.1")
+            mcp.settings.port = int(os.getenv("MCP_PORT", "8765"))
+            await mcp.run_sse_async()
+        else:
+            # Use the asynchronous entrypoint instead of mcp.run()
+            await mcp.run_stdio_async()
     except Exception as e:
         print(f"Error starting client: {e}", file=sys.stderr)
         if isinstance(e, sqlite3.OperationalError) and "database is locked" in str(e):

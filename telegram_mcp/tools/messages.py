@@ -100,6 +100,9 @@ def message_to_dict(msg) -> dict:
     sender_id = getattr(msg, "sender_id", None)
     if sender_id is not None:
         d["sender_id"] = sender_id
+    username = get_sender_username(msg)
+    if username:
+        d["username"] = username
     if getattr(msg, "out", False):
         d["out"] = True
 
@@ -174,7 +177,7 @@ def message_to_dict(msg) -> dict:
 
 def format_message_line(msg) -> str:
     """Single-line human-readable message representation with ALL key flags."""
-    parts = [f"ID: {msg.id}", get_sender_name(msg), f"Date: {msg.date}"]
+    parts = [f"ID: {msg.id}", get_sender_info(msg), f"Date: {msg.date}"]
 
     reply_to_id = (
         getattr(msg.reply_to, "reply_to_msg_id", None) if getattr(msg, "reply_to", None) else None
@@ -772,7 +775,7 @@ async def list_messages(
         for msg in messages:
             record = {
                 "id": msg.id,
-                "sender": get_sender_name(msg),
+                "sender": get_sender_info(msg),
                 "date": msg.date,
                 "text": sanitize_user_content(msg.message),
             }
@@ -842,6 +845,11 @@ async def get_message_context(
                 "is_target": msg.id == message_id,
                 "text": sanitize_user_content(msg.message),
             }
+            if getattr(msg, "sender_id", None):
+                record["sender_id"] = msg.sender_id
+            _username = get_sender_username(msg)
+            if _username:
+                record["username"] = _username
             grouped_id = getattr(msg, "grouped_id", None)
             if grouped_id is not None:
                 record["grouped_id"] = grouped_id
@@ -852,15 +860,16 @@ async def get_message_context(
                 try:
                     replied_msg = await cl.get_messages(chat, ids=msg.reply_to.reply_to_msg_id)
                     if replied_msg:
-                        replied_sender = "Unknown"
-                        if replied_msg.sender:
-                            replied_sender = getattr(
-                                replied_msg.sender, "first_name", ""
-                            ) or getattr(replied_msg.sender, "title", "Unknown")
-                        record["replied_message"] = {
-                            "sender": sanitize_name(replied_sender),
+                        replied_record = {
+                            "sender": get_sender_name(replied_msg),
                             "text": sanitize_user_content(replied_msg.message),
                         }
+                        if getattr(replied_msg, "sender_id", None):
+                            replied_record["sender_id"] = replied_msg.sender_id
+                        _r_username = get_sender_username(replied_msg)
+                        if _r_username:
+                            replied_record["username"] = _r_username
+                        record["replied_message"] = replied_record
                 except Exception:
                     record["replied_message"] = None
 
@@ -1304,7 +1313,7 @@ async def search_messages(
         for msg in messages:
             record = {
                 "id": msg.id,
-                "sender": get_sender_name(msg),
+                "sender": get_sender_info(msg),
                 "date": msg.date,
                 "text": sanitize_user_content(msg.message),
             }
@@ -1354,7 +1363,7 @@ async def search_global(
                     "chat_name": sanitize_name(chat_name),
                     "chat_id": msg.chat_id,
                     "id": msg.id,
-                    "sender": get_sender_name(msg),
+                    "sender": get_sender_info(msg),
                     "date": msg.date,
                     "text": sanitize_user_content(msg.message),
                 }
@@ -1420,7 +1429,7 @@ async def get_pinned_messages(chat_id: Union[int, str], account: str = None) -> 
         for msg in messages:
             record = {
                 "id": msg.id,
-                "sender": get_sender_name(msg),
+                "sender": get_sender_info(msg),
                 "date": msg.date,
                 "text": sanitize_user_content(msg.message),
             }

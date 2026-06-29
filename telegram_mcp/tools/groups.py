@@ -253,15 +253,18 @@ async def get_participants(
         if not participants:
             return format_tool_result([])
 
-        records = [
-            {
+        records = []
+        for p in participants:
+            rec = {
                 "id": p.id,
                 "name": sanitize_name(
                     f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
                 ),
             }
-            for p in participants
-        ]
+            uname = getattr(p, "username", None)
+            if uname:
+                rec["username"] = sanitize_name(uname)
+            records.append(rec)
         result = format_tool_result(records)
 
         # Append pagination metadata; has_more indicates whether a next page likely exists
@@ -920,15 +923,18 @@ async def get_admins(chat_id: Union[int, str], account: str = None) -> str:
         await ensure_connected(cl)
         # Fix: Use the correct filter type ChannelParticipantsAdmins
         participants = await cl.get_participants(chat_id, filter=ChannelParticipantsAdmins())
-        records = [
-            {
+        records = []
+        for p in participants:
+            rec = {
                 "id": p.id,
                 "name": sanitize_name(
                     f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
                 ),
             }
-            for p in participants
-        ]
+            uname = getattr(p, "username", None)
+            if uname:
+                rec["username"] = sanitize_name(uname)
+            records.append(rec)
         return format_tool_result(records) if records else "No admins found."
     except Exception as e:
         logger.exception(f"get_admins failed (chat_id={chat_id})")
@@ -951,15 +957,18 @@ async def get_banned_users(chat_id: Union[int, str], account: str = None) -> str
         await ensure_connected(cl)
         # Fix: Use the correct filter type ChannelParticipantsKicked
         participants = await cl.get_participants(chat_id, filter=ChannelParticipantsKicked(q=""))
-        records = [
-            {
+        records = []
+        for p in participants:
+            rec = {
                 "id": p.id,
                 "name": sanitize_name(
                     f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
                 ),
             }
-            for p in participants
-        ]
+            uname = getattr(p, "username", None)
+            if uname:
+                rec["username"] = sanitize_name(uname)
+            records.append(rec)
         return format_tool_result(records) if records else "No banned users found."
     except Exception as e:
         logger.exception(f"get_banned_users failed (chat_id={chat_id})")
