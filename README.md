@@ -200,6 +200,48 @@ from GitHub explicitly:
 uvx --from "git+https://github.com/chigwell/telegram-mcp.git@<pinned-release-tag-or-commit>" telegram-mcp-generate-session
 ```
 
+### Transports
+
+The server speaks three MCP transports, selected with `MCP_TRANSPORT`:
+
+| Value   | Transport                  | Use case                                                        |
+| ------- | -------------------------- | --------------------------------------------------------------- |
+| `stdio` | stdio (default)            | One dedicated server process per MCP client                     |
+| `http`  | streamable HTTP            | One shared server for many clients (Claude Code, Codex, Cursor) |
+| `sse`   | SSE (legacy HTTP)          | Clients that only support the deprecated SSE transport          |
+
+For `http` and `sse`, the server binds `MCP_HOST`:`MCP_PORT` (default
+`127.0.0.1:8765`); the streamable HTTP endpoint is `/mcp`, the SSE endpoint is
+`/sse`.
+
+Prefer `http` when more than one MCP client (or many coding-agent sessions)
+will use the server: a single long-lived process holds one Telegram
+connection, instead of every client spawning its own Telethon session —
+Telegram throttles and may flag accounts that open many parallel sessions.
+
+Register the shared server with clients:
+
+```bash
+# Claude Code
+claude mcp add --transport http telegram http://127.0.0.1:8765/mcp
+
+# Codex
+codex mcp add telegram --url http://127.0.0.1:8765/mcp
+```
+
+For stdio-only clients, bridge with [mcp-remote](https://www.npmjs.com/package/mcp-remote):
+
+```json
+{
+  "mcpServers": {
+    "telegram-mcp": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:8765/mcp"]
+    }
+  }
+}
+```
+
 ## Multi-Account Setup
 
 Use suffixed session variables to configure multiple Telegram accounts:
@@ -355,21 +397,51 @@ Build the image:
 docker build -t telegram-mcp:latest .
 ```
 
-Run with Compose:
+### Shared server (recommended)
+
+Run one long-lived container serving streamable HTTP, and point every MCP
+client at it (see [Transports](#transports) for client registration):
 
 ```bash
-docker compose up --build
-```
-
-Run directly:
-
-```bash
-docker run -it --rm \
-  -e TELEGRAM_API_ID="YOUR_API_ID" \
-  -e TELEGRAM_API_HASH="YOUR_API_HASH" \
-  -e TELEGRAM_SESSION_STRING="YOUR_SESSION_STRING" \
+docker run -d --name telegram-mcp --restart unless-stopped \
+  --env-file .env \
+  -e MCP_TRANSPORT=http \
+  -e MCP_HOST=0.0.0.0 \
+  -p 127.0.0.1:8765:8765 \
   telegram-mcp:latest
 ```
+
+`MCP_HOST=0.0.0.0` binds inside the container so the published port works;
+`-p 127.0.0.1:8765:8765` keeps the server reachable only from the local
+machine — the endpoint is unauthenticated, so never publish it on a public
+interface.
+
+The bundled Compose file runs the same setup:
+
+```bash
+docker compose up --build -d
+```
+
+### One container per client (stdio)
+
+Alternatively, an MCP client can spawn a dedicated container itself:
+
+```json
+{
+  "mcpServers": {
+    "telegram-mcp": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "--env-file", "/full/path/to/.env", "telegram-mcp:latest"]
+    }
+  }
+}
+```
+
+This is fine for a single client, but with several clients (or coding agents
+that spawn subagent sessions) each one starts its own container and its own
+Telegram session, which Telegram throttles; a client that exits uncleanly can
+also leave its container running. Prefer the shared server above in those
+setups.
 
 For multiple accounts, pass variables such as `TELEGRAM_SESSION_STRING_WORK` and `TELEGRAM_SESSION_STRING_PERSONAL`.
 
