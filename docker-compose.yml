@@ -9,9 +9,15 @@ services:
     # Load environment variables from a .env file in the same directory
     env_file:
       - .env
-    # Keep stdin open and allocate a pseudo-TTY, crucial for stdio MCP servers
-    stdin_open: true
-    tty: true
+    # Serve streamable HTTP so one long-lived container is shared by all MCP
+    # clients (see the Transports section in README.md). MCP_HOST must be
+    # 0.0.0.0 inside the container for the published port to work.
+    environment:
+      MCP_TRANSPORT: http
+      MCP_HOST: 0.0.0.0
+    # The endpoint is unauthenticated — publish on localhost only.
+    ports:
+      - "127.0.0.1:8765:8765"
     # Optional: Uncomment the following lines to mount a local directory
     # for persisting the Telegram session file if NOT using TELEGRAM_SESSION_STRING.
     # Replace './telegram_sessions' with your desired host path.

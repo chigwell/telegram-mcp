@@ -26,6 +26,28 @@ async def _connect_authorized_client(label, client) -> None:
     )
 
 
+async def _serve(transport: str) -> None:
+    """Run the MCP server on the selected transport.
+
+    HTTP transports let one long-lived process hold a single shared Telegram
+    connection while multiple local MCP clients connect over HTTP, instead of
+    each client spawning its own Telethon session (which Telegram
+    throttles/flags). "http" is streamable HTTP — the current MCP transport
+    that Claude Code (`--transport http`) and Codex (`--url`) speak natively;
+    "sse" is kept for clients that only support the legacy SSE transport.
+    """
+    if transport in ("http", "sse"):
+        mcp.settings.host = os.getenv("MCP_HOST", "127.0.0.1")
+        mcp.settings.port = int(os.getenv("MCP_PORT", "8765"))
+        if transport == "http":
+            await mcp.run_streamable_http_async()
+        else:
+            await mcp.run_sse_async()
+    else:
+        # Use the asynchronous entrypoint instead of mcp.run()
+        await mcp.run_stdio_async()
+
+
 async def _main() -> None:
     try:
         labels = ", ".join(clients.keys())
@@ -55,17 +77,7 @@ async def _main() -> None:
             f"Telegram client(s) started ({labels}). Running MCP server ({transport})...",
             file=sys.stderr,
         )
-        # SSE transport: one long-lived process holds a single shared Telegram
-        # connection, while multiple local MCP clients (Claude Code via mcp-remote,
-        # Claude Desktop) connect over HTTP. This avoids spawning one Telethon
-        # session per client, which Telegram throttles/flags.
-        if transport == "sse":
-            mcp.settings.host = os.getenv("MCP_HOST", "127.0.0.1")
-            mcp.settings.port = int(os.getenv("MCP_PORT", "8765"))
-            await mcp.run_sse_async()
-        else:
-            # Use the asynchronous entrypoint instead of mcp.run()
-            await mcp.run_stdio_async()
+        await _serve(transport)
     except Exception as e:
         print(f"Error starting client: {e}", file=sys.stderr)
         if isinstance(e, sqlite3.OperationalError) and "database is locked" in str(e):

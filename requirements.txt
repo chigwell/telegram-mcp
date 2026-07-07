@@ -1,6 +1,6 @@
 dotenv>=0.9.9
 httpx>=0.28.1
-mcp[cli]>=1.4.1
+mcp[cli]>=1.8.0
 nest-asyncio>=1.6.0
 python-dotenv>=1.1.0
 python-json-logger>=3.3.0
