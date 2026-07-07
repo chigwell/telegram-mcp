@@ -30,7 +30,7 @@ dependencies = [
     "python-dotenv>=1.1.0",
     "python-json-logger>=3.3.0",
     "qrcode>=8.2",
-    "telethon>=1.42.0",
+    "telethon>=1.44.0",
 ]
 
 [project.optional-dependencies]
