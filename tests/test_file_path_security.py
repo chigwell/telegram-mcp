@@ -193,6 +193,18 @@ async def test_unexpected_roots_error_disables_file_path_tools(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_roots_error_falls_back_to_server_roots_when_opted_in(tmp_path, monkeypatch):
+    server_root = (tmp_path / "server_root").resolve()
+    server_root.mkdir(parents=True)
+    monkeypatch.setattr(main, "SERVER_ALLOWED_ROOTS", [server_root])
+    monkeypatch.setenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", "true")
+
+    ctx = _FailingContext(RuntimeError("transport failure"))
+    roots = await main._get_effective_allowed_roots(ctx)
+    assert roots == [server_root]
+
+
+@pytest.mark.asyncio
 async def test_writable_default_path_uses_downloads_subdir(tmp_path, monkeypatch):
     root = (tmp_path / "root").resolve()
     root.mkdir(parents=True)

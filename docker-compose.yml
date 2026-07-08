@@ -18,9 +18,15 @@ services:
     # The endpoint is unauthenticated — publish on localhost only.
     ports:
       - "127.0.0.1:8765:8765"
+    # Persist downloaded media (download_media writes into /data)
+    volumes:
+      - telegram_downloads:/data
     # Optional: Uncomment the following lines to mount a local directory
     # for persisting the Telegram session file if NOT using TELEGRAM_SESSION_STRING.
     # Replace './telegram_sessions' with your desired host path.
     # volumes:
     #   - ./telegram_sessions:/app
     restart: unless-stopped
+
+volumes:
+  telegram_downloads:
