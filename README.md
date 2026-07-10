@@ -227,7 +227,12 @@ claude mcp add --transport http telegram http://127.0.0.1:8765/mcp
 
 # Codex
 codex mcp add telegram --url http://127.0.0.1:8765/mcp
+
+# Autohand Code
+autohand mcp add --transport http telegram http://127.0.0.1:8765/mcp
 ```
+
+For a project-scoped [Autohand Code](https://github.com/autohandai/code-cli/) registration, add `--scope project` after `mcp add`.
 
 For stdio-only clients, bridge with [mcp-remote](https://www.npmjs.com/package/mcp-remote):
 
