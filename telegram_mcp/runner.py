@@ -7,13 +7,42 @@ try:
 except UnsafeInstallationError as exc:
     raise SystemExit(str(exc)) from None
 
+from telethon.errors import AuthKeyDuplicatedError
+
 from telegram_mcp import runtime as _runtime
 from telegram_mcp.runtime import *
 import telegram_mcp.tools  # noqa: F401 - registers MCP tools via decorators
 
 
 async def _connect_authorized_client(label, client) -> None:
-    await client.connect()
+    # Tolerate a transient AuthKeyDuplicatedError (the same session briefly seen
+    # from two IPs, e.g. during a VPN reconnect) with a bounded retry so a blip
+    # does not take the whole server down. Give each concurrent client its own
+    # session (TELEGRAM_SESSION_STRINGS pool or TELEGRAM_SESSION_STRING_<LABEL>)
+    # to avoid the collision entirely.
+    max_attempts = 4
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await client.connect()
+            break
+        except AuthKeyDuplicatedError:
+            if attempt >= max_attempts:
+                raise
+            delay = min(2 ** attempt, 15)
+            print(
+                f"AuthKeyDuplicatedError connecting '{label}' (attempt "
+                f"{attempt}/{max_attempts}): session in use from another IP. "
+                f"Retrying in {delay}s. If this persists, give each concurrent "
+                "client its own session via TELEGRAM_SESSION_STRINGS or "
+                "TELEGRAM_SESSION_STRING_<LABEL>.",
+                file=sys.stderr,
+            )
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            await asyncio.sleep(delay)
+
     if await client.is_user_authorized():
         return
 
