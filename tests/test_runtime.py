@@ -802,3 +802,95 @@ async def test_empty_client_roots_fallback_noop_without_server_roots(monkeypatch
     roots, status = await runtime._get_effective_allowed_roots_with_status(_ctx_with_roots([]))
     assert roots == []
     assert status == runtime.ROOTS_STATUS_CLIENT_DENY_ALL
+
+
+class _FailingRootsSession:
+    def __init__(self, error: Exception):
+        self._error = error
+
+    async def list_roots(self):
+        raise self._error
+
+
+def _ctx_with_list_roots_error(error: Exception):
+    return SimpleNamespace(session=_FailingRootsSession(error))
+
+
+def test_coerce_paths_from_list_roots_validation_error_recovers_bare_paths(tmp_path):
+    """Cursor-style bare absolute paths appear as pydantic url_parsing inputs."""
+    from pydantic import ValidationError
+    from mcp.types import ListRootsResult
+
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+
+    with pytest.raises(ValidationError) as exc_info:
+        ListRootsResult.model_validate(
+            {
+                "roots": [
+                    {"uri": str(root_a)},
+                    {"uri": str(root_b)},
+                    {"uri": "not-a-path"},
+                ]
+            }
+        )
+
+    recovered = runtime._coerce_paths_from_list_roots_validation_error(exc_info.value)
+    assert root_a.resolve() in recovered
+    assert root_b.resolve() in recovered
+
+
+@pytest.mark.asyncio
+async def test_list_roots_validation_error_recovers_client_paths(tmp_path, monkeypatch):
+    from pydantic import ValidationError
+    from mcp.types import ListRootsResult
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [])
+    monkeypatch.delenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", raising=False)
+
+    with pytest.raises(ValidationError) as exc_info:
+        ListRootsResult.model_validate({"roots": [{"uri": str(root)}]})
+
+    roots, status = await runtime._get_effective_allowed_roots_with_status(
+        _ctx_with_list_roots_error(exc_info.value)
+    )
+    assert status == runtime.ROOTS_STATUS_READY
+    assert roots == [root.resolve()]
+
+    resolved, error = await runtime._ensure_allowed_roots(
+        _ctx_with_list_roots_error(exc_info.value), "download_media"
+    )
+    assert error is None
+    assert resolved == [root.resolve()]
+
+
+@pytest.mark.asyncio
+async def test_list_roots_unexpected_error_falls_back_when_opt_in(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root.resolve()])
+    monkeypatch.setenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", "1")
+
+    roots, status = await runtime._get_effective_allowed_roots_with_status(
+        _ctx_with_list_roots_error(RuntimeError("boom"))
+    )
+    assert status == runtime.ROOTS_STATUS_SERVER_FALLBACK
+    assert roots == [root.resolve()]
+
+
+@pytest.mark.asyncio
+async def test_list_roots_unexpected_error_denies_without_opt_in(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root.resolve()])
+    monkeypatch.delenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", raising=False)
+
+    roots, status = await runtime._get_effective_allowed_roots_with_status(
+        _ctx_with_list_roots_error(RuntimeError("boom"))
+    )
+    assert status == runtime.ROOTS_STATUS_ERROR
+    assert roots == []

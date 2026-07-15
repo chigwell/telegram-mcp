@@ -984,10 +984,49 @@ def _is_roots_unsupported_error(error: Exception) -> bool:
     return False
 
 
+def _coerce_paths_from_list_roots_validation_error(error: Exception) -> List[Path]:
+    """Recover absolute filesystem roots when a client sends bare paths.
+
+    Some MCP clients (notably Cursor) return workspace roots as plain absolute
+    paths instead of ``file://`` URIs. The MCP SDK then fails pydantic validation
+    of ``ListRootsResult`` even though the roots themselves are usable. Extract
+    those paths from the validation error payload so file-path tools keep working.
+    """
+    errors_fn = getattr(error, "errors", None)
+    if not callable(errors_fn):
+        return []
+
+    try:
+        details = errors_fn()
+    except Exception:
+        return []
+
+    recovered: List[Path] = []
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "url_parsing":
+            continue
+        value = item.get("input")
+        if not isinstance(value, str):
+            continue
+        candidate = value.strip()
+        if not (candidate.startswith("/") or (len(candidate) > 2 and candidate[1] == ":")):
+            # Unix absolute path, or Windows drive path like C:\...
+            continue
+        try:
+            recovered.append(Path(candidate).expanduser().resolve())
+        except Exception:
+            continue
+    return _dedupe_paths(recovered)
+
+
 def _server_roots_fallback_enabled(value: Optional[str] = None) -> bool:
-    """Whether an empty client roots list should fall back to server CLI roots.
+    """Whether server CLI roots may replace unusable/empty client Roots.
 
     Opt-in via the ``TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK`` environment variable.
+    Applies when the client returns an empty roots list, or when ``list_roots``
+    fails with an unexpected error (after any recoverable client paths are tried).
     Defaults to ``False`` to preserve the safe deny-all behavior.
     """
     raw_value = os.getenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK") if value is None else value
@@ -1006,10 +1045,26 @@ async def _get_effective_allowed_roots_with_status(
     try:
         list_roots_result = await ctx.session.list_roots()
     except Exception as error:
+        recovered_roots = _coerce_paths_from_list_roots_validation_error(error)
+        if recovered_roots:
+            logger.warning(
+                "MCP client returned non-URI roots; recovered %d path(s) from validation error.",
+                len(recovered_roots),
+            )
+            return recovered_roots, ROOTS_STATUS_READY
         if _is_roots_unsupported_error(error):
             if fallback_roots:
                 return fallback_roots, ROOTS_STATUS_UNSUPPORTED_FALLBACK
             return [], ROOTS_STATUS_NOT_CONFIGURED
+        # Unexpected list_roots failures (e.g. malformed client payloads that we
+        # could not recover). Match empty-list behavior: opt-in server fallback.
+        if fallback_roots and _server_roots_fallback_enabled():
+            logger.warning(
+                "MCP roots request failed; falling back to server CLI roots "
+                "(TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK).",
+                exc_info=True,
+            )
+            return fallback_roots, ROOTS_STATUS_SERVER_FALLBACK
         logger.error(
             "MCP roots request failed; disabling file-path tools for safety.", exc_info=True
         )
