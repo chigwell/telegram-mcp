@@ -347,11 +347,16 @@ Allowed roots can come from:
 Security behavior:
 
 - Client MCP Roots replace server CLI roots when available.
+- Some clients (notably Cursor) return workspace roots as bare absolute paths
+  instead of `file://` URIs. That breaks MCP SDK validation of `list_roots`;
+  the server recovers those absolute paths from the validation error so
+  file-path tools keep working.
 - Empty client Roots are treated as deny-all by default. Some clients implement
   the Roots capability but advertise an empty list, which disables file tools
   even when server CLI roots are configured. Set
   `TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK=1` to fall back to the server CLI roots
-  in that case (opt-in; the default stays deny-all).
+  in that case (opt-in; the default stays deny-all). The same opt-in also applies
+  when `list_roots` fails unexpectedly and no client paths could be recovered.
 - Paths are resolved through real paths and must stay inside an allowed root.
 - Traversal, wildcard-like, shell-like, and null-byte path patterns are rejected.
 - Relative paths resolve under the first allowed root.
