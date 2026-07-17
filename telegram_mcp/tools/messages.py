@@ -1585,22 +1585,61 @@ async def send_reaction(
     Args:
         chat_id: The chat ID or username
         message_id: The message ID to react to
-        emoji: The emoji to react with (e.g., "👍", "❤️", "🔥", "😂", "😮", "😢", "🎉", "💩", "👎")
+        emoji: A normal emoji (e.g. "👍") or ``custom:<document_id>`` as
+            returned by get_message_reactions.
         big: Whether to show a big animation for the reaction (default: False)
     """
     try:
         cl = get_client(account)
-        from telethon.tl.types import ReactionEmoji
+        from telethon.tl.types import ReactionCustomEmoji, ReactionEmoji
+
+        # get_message_reactions exposes custom reactions in this stable form.
+        # Accepting the same representation here makes reactions round-trip
+        # without guessing a visually similar Unicode fallback.
+        if emoji.startswith("custom:"):
+            document_id = emoji.removeprefix("custom:")
+            if not document_id.isdigit() or int(document_id) <= 0:
+                raise ValueError("Custom reaction must use custom:<positive document id>.")
+            reaction = ReactionCustomEmoji(document_id=int(document_id))
+            # Telegram rejects some Premium custom reactions as "only emoji are
+            # allowed" unless the client also asks to add the selected custom
+            # emoji to its recent-reactions list. Official clients set this flag
+            # when a custom reaction is chosen from the picker.
+            add_to_recent = True
+        else:
+            reaction = ReactionEmoji(emoticon=emoji)
+            add_to_recent = None
 
         peer = await resolve_input_entity(chat_id, cl)
-        await cl(
-            functions.messages.SendReactionRequest(
-                peer=peer,
-                msg_id=message_id,
-                big=big,
-                reaction=[ReactionEmoji(emoticon=emoji)],
+        try:
+            await cl(
+                functions.messages.SendReactionRequest(
+                    peer=peer,
+                    msg_id=message_id,
+                    big=big,
+                    add_to_recent=add_to_recent,
+                    reaction=[reaction],
+                )
             )
-        )
+        except telethon.errors.rpcerrorlist.ReactionInvalidError as first_error:
+            # Telegram's private-chat API currently rejects some otherwise valid
+            # custom reactions when add_to_recent is present, even though the
+            # same account can select them in the official client. Retry the
+            # identical reaction without that optional picker-state flag.
+            if not isinstance(reaction, ReactionCustomEmoji):
+                raise
+            logger.info(
+                "Custom reaction with add_to_recent was rejected; retrying without it: %s",
+                first_error,
+            )
+            await cl(
+                functions.messages.SendReactionRequest(
+                    peer=peer,
+                    msg_id=message_id,
+                    big=big,
+                    reaction=[reaction],
+                )
+            )
         return f"Reaction '{emoji}' sent to message {message_id} in chat {chat_id}."
     except Exception as e:
         logger.exception(
