@@ -636,30 +636,44 @@ async def get_chat(chat_id: Union[int, str], account: str = None) -> str:
             record["bot"] = bool(entity.bot)
             record["verified"] = bool(entity.verified)
 
-        # Get last activity if it's a dialog
+        # Get unread count + last activity for THIS specific peer.
+        #
+        # NOTE: do NOT use get_dialogs(limit=1, offset_peer=entity) here. In
+        # Telethon `offset_peer` is a pagination cursor, not a per-chat filter —
+        # with offset_id=0 it is effectively ignored, so limit=1 returns the
+        # account's top dialog and its unread/archived/last-message get wrongly
+        # attributed to the requested chat. GetPeerDialogsRequest resolves the
+        # dialog for exactly the requested peer instead.
         try:
-            # Using get_dialogs might be slow if there are many dialogs
-            # Alternative: Get entity again via get_dialogs if needed for unread count
-            dialog = await cl.get_dialogs(limit=1, offset_id=0, offset_peer=entity)
-            if dialog:
-                dialog = dialog[0]
-                record["unread"] = dialog.unread_count
-                record["archived"] = bool(getattr(dialog, "archived", False))
-                if dialog.message:
-                    last_msg = dialog.message
-                    sender_name = "Unknown"
-                    if last_msg.sender:
-                        sender_name = getattr(last_msg.sender, "first_name", "") or getattr(
-                            last_msg.sender, "title", "Unknown"
-                        )
-                        if hasattr(last_msg.sender, "last_name") and last_msg.sender.last_name:
-                            sender_name += f" {last_msg.sender.last_name}"
-                    sender_name = sanitize_name(sender_name.strip() or "Unknown")
-                    record["last_message"] = {
-                        "sender": sender_name,
-                        "date": last_msg.date,
-                        "text": sanitize_user_content(last_msg.message),
-                    }
+            input_peer = await cl.get_input_entity(entity)
+            peer_dialogs = await cl(
+                functions.messages.GetPeerDialogsRequest(
+                    peers=[types.InputDialogPeer(peer=input_peer)]
+                )
+            )
+            if getattr(peer_dialogs, "dialogs", None):
+                dialog = peer_dialogs.dialogs[0]
+                record["unread"] = getattr(dialog, "unread_count", 0)
+                # folder_id == 1 is the Archive folder (None/0 == main list)
+                record["archived"] = getattr(dialog, "folder_id", 0) == 1
+
+            last_messages = await cl.get_messages(entity, limit=1)
+            if last_messages:
+                last_msg = last_messages[0]
+                sender_name = "Unknown"
+                sender = getattr(last_msg, "sender", None)
+                if sender:
+                    sender_name = getattr(sender, "first_name", "") or getattr(
+                        sender, "title", "Unknown"
+                    )
+                    if getattr(sender, "last_name", None):
+                        sender_name += f" {sender.last_name}"
+                sender_name = sanitize_name(sender_name.strip() or "Unknown")
+                record["last_message"] = {
+                    "sender": sender_name,
+                    "date": last_msg.date,
+                    "text": sanitize_user_content(last_msg.message),
+                }
         except Exception as diag_ex:
             logger.warning(f"Could not get dialog info for {chat_id}: {diag_ex}")
 
