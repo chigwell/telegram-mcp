@@ -110,7 +110,10 @@ load_dotenv()
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID"))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
 
-mcp = FastMCP("telegram")
+# The shared HTTP service is consumed by several long-lived clients (Codex and Hermes).
+# Stateless requests keep those clients usable after a systemd restart instead of rejecting
+# their next call with "No valid session ID provided". Stdio transport remains unaffected.
+mcp = FastMCP("telegram", stateless_http=True)
 
 # Annotate all tool results with audience=["user"] so MCP clients know
 # the content is user-generated data, not instructions for the model.
