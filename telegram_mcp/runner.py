@@ -28,7 +28,7 @@ async def _connect_authorized_client(label, client) -> None:
         except AuthKeyDuplicatedError:
             if attempt >= max_attempts:
                 raise
-            delay = min(2 ** attempt, 15)
+            delay = min(2**attempt, 15)
             print(
                 f"AuthKeyDuplicatedError connecting '{label}' (attempt "
                 f"{attempt}/{max_attempts}): session in use from another IP. "

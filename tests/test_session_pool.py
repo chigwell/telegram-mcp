@@ -5,7 +5,6 @@ import pytest
 
 from telegram_mcp import runner, runtime
 
-
 # --- _parse_session_pool -----------------------------------------------------
 
 
