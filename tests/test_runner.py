@@ -44,6 +44,7 @@ class _FakeSettings:
     def __init__(self):
         self.host = None
         self.port = None
+        self.transport_security = None
 
 
 class _FakeMcp:
@@ -99,3 +100,30 @@ async def test_serve_http_uses_default_host_and_port(monkeypatch):
     assert fake.ran == "http"
     assert fake.settings.host == "127.0.0.1"
     assert fake.settings.port == 8765
+
+
+@pytest.mark.asyncio
+async def test_serve_http_leaves_transport_security_unset_by_default(monkeypatch):
+    fake = _FakeMcp()
+    monkeypatch.setattr(runner, "mcp", fake)
+    monkeypatch.delenv("MCP_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("MCP_ALLOWED_ORIGINS", raising=False)
+
+    await runner._serve("http")
+
+    assert fake.settings.transport_security is None
+
+
+@pytest.mark.asyncio
+async def test_serve_http_configures_allowed_hosts(monkeypatch):
+    fake = _FakeMcp()
+    monkeypatch.setattr(runner, "mcp", fake)
+    monkeypatch.setenv("MCP_ALLOWED_HOSTS", "mcp.example.com, localhost:8765")
+    monkeypatch.setenv("MCP_ALLOWED_ORIGINS", "https://mcp.example.com")
+
+    await runner._serve("http")
+
+    security = fake.settings.transport_security
+    assert security.enable_dns_rebinding_protection is True
+    assert security.allowed_hosts == ["mcp.example.com", "localhost:8765"]
+    assert security.allowed_origins == ["https://mcp.example.com"]
