@@ -263,6 +263,26 @@ Example prompts:
 
 - "List my accounts"
 - "Show unread messages from all accounts"
+
+### Session pool (one account, several concurrent clients)
+
+To run several MCP clients against the **same** Telegram account at once (for
+example the desktop app *and* a terminal CLI), give each client its own
+authorized session. Telegram forbids one session (auth key) being used from two
+IPs simultaneously, so on a VPN or dual-stack host two local clients can collide
+with `AuthKeyDuplicatedError`. List several interchangeable session strings in
+`TELEGRAM_SESSION_STRINGS` (separated by whitespace, comma or semicolon); each
+process claims a free one via an advisory file lock, so clients deterministically
+pick distinct sessions:
+
+```env
+TELEGRAM_SESSION_STRINGS=<session A> <session B> <session C>
+```
+
+Generate extra sessions with `uv run session_string_generator.py`. The pool
+takes precedence over `TELEGRAM_SESSION_STRING` for the default account. As an
+extra safety net, a transient `AuthKeyDuplicatedError` at connect time (e.g.
+during a VPN reconnect) is retried with backoff before the server gives up.
 - "Send this from my work account to @example"
 
 ## Device Identity
