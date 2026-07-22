@@ -127,7 +127,6 @@ async def _main() -> None:
 def main() -> None:
     _configure_allowed_roots_from_cli(sys.argv[1:])
     _runtime._apply_exposed_tools_mode()
-    nest_asyncio.apply()
     asyncio.run(_main())
 
 
