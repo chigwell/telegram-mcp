@@ -5,6 +5,9 @@ from telethon.tl.types import ReactionCustomEmoji, ReactionEmoji
 from telegram_mcp.tools import messages
 
 
+CUSTOM_DOCUMENT_ID = 1234567890123456789
+
+
 class _RecordingClient:
     """Capture reaction requests without contacting Telegram."""
 
@@ -53,14 +56,14 @@ async def test_send_reaction_accepts_round_trip_custom_document_id(reaction_clie
     result = await messages.send_reaction(
         chat_id=123,
         message_id=456,
-        emoji="custom:5206607081334906820",
+        emoji=f"custom:{CUSTOM_DOCUMENT_ID}",
     )
 
     assert "sent" in result
     assert len(reaction_client.requests) == 1
     request = reaction_client.requests[0]
     assert request.add_to_recent is True
-    assert request.reaction == [ReactionCustomEmoji(document_id=5206607081334906820)]
+    assert request.reaction == [ReactionCustomEmoji(document_id=CUSTOM_DOCUMENT_ID)]
 
 
 @pytest.mark.asyncio
@@ -77,7 +80,7 @@ async def test_send_reaction_retries_custom_emoji_without_picker_state(monkeypat
     result = await messages.send_reaction(
         chat_id=123,
         message_id=456,
-        emoji="custom:5206607081334906820",
+        emoji=f"custom:{CUSTOM_DOCUMENT_ID}",
     )
 
     assert "sent" in result
