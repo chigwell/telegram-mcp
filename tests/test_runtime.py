@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -770,6 +771,15 @@ def test_server_roots_fallback_enabled_parsing(monkeypatch):
     assert runtime._server_roots_fallback_enabled() is True
 
 
+def test_roots_request_timeout_parsing(monkeypatch):
+    """The reverse Roots request keeps a finite deadline even with bad config."""
+    monkeypatch.delenv("TELEGRAM_ROOTS_REQUEST_TIMEOUT_SECONDS", raising=False)
+    assert runtime._roots_request_timeout_seconds() == 1.0
+    assert runtime._roots_request_timeout_seconds("0.25") == 0.25
+    assert runtime._roots_request_timeout_seconds("0") == 1.0
+    assert runtime._roots_request_timeout_seconds("not-a-number") == 1.0
+
+
 @pytest.mark.asyncio
 async def test_empty_client_roots_denies_by_default(tmp_path, monkeypatch):
     root = tmp_path / "root"
@@ -819,6 +829,34 @@ class _FailingRootsSession:
 
 def _ctx_with_list_roots_error(error: Exception):
     return SimpleNamespace(session=_FailingRootsSession(error))
+
+
+class _HangingRootsSession:
+    async def list_roots(self):
+        """Model a stateless client that never answers server-to-client requests."""
+        await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_hanging_list_roots_times_out_and_uses_opt_in_fallback(
+    tmp_path, monkeypatch
+):
+    """File tools must fail over quickly instead of hanging the whole MCP call."""
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root.resolve()])
+    monkeypatch.setenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", "1")
+    monkeypatch.setenv("TELEGRAM_ROOTS_REQUEST_TIMEOUT_SECONDS", "0.01")
+
+    roots, status = await asyncio.wait_for(
+        runtime._get_effective_allowed_roots_with_status(
+            SimpleNamespace(session=_HangingRootsSession())
+        ),
+        timeout=0.25,
+    )
+
+    assert roots == [root.resolve()]
+    assert status == runtime.ROOTS_STATUS_SERVER_FALLBACK
 
 
 def test_coerce_paths_from_list_roots_validation_error_recovers_bare_paths(tmp_path):
