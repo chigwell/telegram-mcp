@@ -44,7 +44,7 @@ def _synthetic_mcp():
 
 
 def test_shared_server_uses_stateless_http_transport():
-    """A service restart must not invalidate long-lived Codex or Hermes HTTP clients."""
+    """A service restart must not invalidate long-lived Streamable HTTP clients."""
     assert runtime.mcp.settings.stateless_http is True
 
 
