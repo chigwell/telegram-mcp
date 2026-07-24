@@ -1124,6 +1124,29 @@ def _server_roots_fallback_enabled(value: Optional[str] = None) -> bool:
     return _parse_bool_env(raw_value, False)
 
 
+def _roots_request_timeout_seconds(value: Optional[str] = None) -> float:
+    """Return the deadline for the MCP client's reverse ``roots/list`` call.
+
+    Some stateless HTTP clients advertise an MCP session but cannot answer
+    server-to-client Roots requests. Without a deadline every file-path tool
+    remains pending until the outer tool call is aborted. A short deadline lets
+    the existing opt-in server-root fallback handle those clients while still
+    preferring real client roots whenever they are available.
+    """
+    raw_value = (
+        os.getenv("TELEGRAM_ROOTS_REQUEST_TIMEOUT_SECONDS")
+        if value is None
+        else value
+    )
+    if raw_value is None:
+        return 1.0
+    try:
+        timeout = float(raw_value)
+    except ValueError:
+        return 1.0
+    return timeout if timeout > 0 else 1.0
+
+
 async def _get_effective_allowed_roots_with_status(
     ctx: Optional[Context],
 ) -> tuple[List[Path], str]:
@@ -1134,7 +1157,10 @@ async def _get_effective_allowed_roots_with_status(
         return [], ROOTS_STATUS_NOT_CONFIGURED
 
     try:
-        list_roots_result = await ctx.session.list_roots()
+        list_roots_result = await asyncio.wait_for(
+            ctx.session.list_roots(),
+            timeout=_roots_request_timeout_seconds(),
+        )
     except Exception as error:
         recovered_roots = _coerce_paths_from_list_roots_validation_error(error)
         if recovered_roots:
