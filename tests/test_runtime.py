@@ -43,6 +43,11 @@ def _synthetic_mcp():
     return server
 
 
+def test_shared_server_uses_stateless_http_transport():
+    """A service restart must not invalidate long-lived Streamable HTTP clients."""
+    assert runtime.mcp.settings.stateless_http is True
+
+
 def test_get_exposed_tools_mode_defaults_to_all(monkeypatch):
     monkeypatch.delenv("TELEGRAM_EXPOSED_TOOLS", raising=False)
 
