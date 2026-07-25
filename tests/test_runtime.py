@@ -847,6 +847,28 @@ def test_coerce_paths_from_list_roots_validation_error_recovers_bare_paths(tmp_p
     assert root_b.resolve() in recovered
 
 
+def test_coerce_paths_from_list_roots_validation_error_recovers_windows_paths():
+    """A Windows drive letter is reported as url_scheme, not url_parsing.
+
+    ``C:\\Users\\dev\\workspace`` gets far enough through pydantic's URL parsing
+    for the drive letter to be taken as the scheme, so validation fails with
+    ``url_scheme``. The path is hardcoded rather than derived from ``tmp_path``
+    so this case is exercised on POSIX CI as well as on Windows.
+    """
+    from pydantic import ValidationError
+    from mcp.types import ListRootsResult
+
+    windows_root = r"C:\Users\dev\workspace"
+
+    with pytest.raises(ValidationError) as exc_info:
+        ListRootsResult.model_validate({"roots": [{"uri": windows_root}]})
+
+    assert any(item.get("type") == "url_scheme" for item in exc_info.value.errors())
+
+    recovered = runtime._coerce_paths_from_list_roots_validation_error(exc_info.value)
+    assert recovered == [Path(windows_root).expanduser().resolve()]
+
+
 @pytest.mark.asyncio
 async def test_list_roots_validation_error_recovers_client_paths(tmp_path, monkeypatch):
     from pydantic import ValidationError

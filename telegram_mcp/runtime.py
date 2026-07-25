@@ -1085,6 +1085,12 @@ def _coerce_paths_from_list_roots_validation_error(error: Exception) -> List[Pat
     paths instead of ``file://`` URIs. The MCP SDK then fails pydantic validation
     of ``ListRootsResult`` even though the roots themselves are usable. Extract
     those paths from the validation error payload so file-path tools keep working.
+
+    Which error pydantic reports depends on the path's shape. A POSIX path like
+    ``/home/dev/ws`` has no scheme at all and yields ``url_parsing``, but on a
+    Windows path like ``C:\\Users\\dev\\ws`` the drive letter parses as a scheme,
+    so pydantic gets far enough to reject it as ``url_scheme`` instead. Accept
+    both, or the Windows branch below is unreachable.
     """
     errors_fn = getattr(error, "errors", None)
     if not callable(errors_fn):
@@ -1099,7 +1105,7 @@ def _coerce_paths_from_list_roots_validation_error(error: Exception) -> List[Pat
     for item in details:
         if not isinstance(item, dict):
             continue
-        if item.get("type") != "url_parsing":
+        if item.get("type") not in ("url_parsing", "url_scheme"):
             continue
         value = item.get("input")
         if not isinstance(value, str):
