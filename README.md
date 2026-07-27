@@ -122,11 +122,22 @@ clients from sending messages or performing chat/account mutations, set
 TELEGRAM_EXPOSED_TOOLS=read-only
 ```
 
+If read-only is too strict but `all` is too broad, append `+` and a
+comma-separated list of tool names to also expose those specific write tools.
+Every other write tool stays unregistered:
+
+```env
+TELEGRAM_EXPOSED_TOOLS=read-only+send_message,reply_to_message,send_file
+```
+
+An unknown name in the allowlist aborts startup, so a typo cannot silently
+degrade into a narrower surface that looks like it worked.
+
 This is an MCP tool-surface restriction, not a Telegram session sandbox or
 reduced Telegram account permission. The Telegram session string still has its
 normal authority inside the server process; read-only mode only prevents
 non-read-only tools from being registered and exposed through MCP. Accepted
-values are `all` (the default) and `read-only`.
+values are `all` (the default), `read-only`, and `read-only+<tool>,<tool>`.
 
 Run the server locally:
 
@@ -165,6 +176,12 @@ server `env` block:
 
 ```json
 "TELEGRAM_EXPOSED_TOOLS": "read-only"
+```
+
+Or keep read-only as the baseline and allow a few write tools on top:
+
+```json
+"TELEGRAM_EXPOSED_TOOLS": "read-only+send_message,reply_to_message"
 ```
 
 Alternatively, install this repository directly from GitHub into a virtual

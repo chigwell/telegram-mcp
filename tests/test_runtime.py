@@ -84,6 +84,55 @@ def test_get_exposed_tools_mode_rejects_invalid_value(monkeypatch):
     assert "read-only" in message
 
 
+def _synthetic_mcp_with_two_writes():
+    server = _synthetic_mcp()
+
+    @server.tool(annotations=ToolAnnotations(title="Send", destructiveHint=True))
+    def send_tool():
+        return "send"
+
+    return server
+
+
+def test_get_exposed_tools_mode_normalises_allowlist(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_EXPOSED_TOOLS", " Read-Only+ send_tool , write_tool ")
+
+    assert runtime._get_exposed_tools_mode() == "read-only+send_tool,write_tool"
+
+
+def test_apply_exposed_tools_allowlist_keeps_named_write_tools():
+    server = _synthetic_mcp_with_two_writes()
+
+    removed = runtime._apply_exposed_tools_mode(server, "read-only+send_tool")
+
+    assert removed == ["write_tool"]
+    assert _tool_names(server) == {"read_tool", "send_tool"}
+
+
+def test_apply_exposed_tools_allowlist_rejects_unknown_tool():
+    server = _synthetic_mcp_with_two_writes()
+
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._apply_exposed_tools_mode(server, "read-only+send_mesage")
+
+    assert "send_mesage" in str(excinfo.value)
+    assert _tool_names(server) == {"read_tool", "write_tool", "send_tool"}
+
+
+def test_get_exposed_tools_mode_rejects_allowlist_with_all():
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._get_exposed_tools_mode("all+send_tool")
+
+    assert "read-only" in str(excinfo.value)
+
+
+def test_get_exposed_tools_mode_rejects_empty_allowlist():
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._get_exposed_tools_mode("read-only+")
+
+    assert "at least one tool" in str(excinfo.value)
+
+
 def test_discover_accounts_supports_suffixed_and_default_sessions(monkeypatch):
     _clear_session_env(monkeypatch)
     monkeypatch.setenv("TELEGRAM_SESSION_STRING_WORK", "work-session")
