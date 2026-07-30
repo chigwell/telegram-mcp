@@ -108,11 +108,15 @@ def _qr_login(client: TelegramClient) -> None:
             print("\nQR code expired, here is a fresh one.")
             _render_qr(qr)
         except errors.SessionPasswordNeededError:
-            pw = getpass.getpass(
-                "\nTwo-factor authentication enabled. Please enter your password: "
-            )
-            client.sign_in(password=pw)
-            return
+            while True:
+                pw = getpass.getpass(
+                    "\nTwo-factor authentication enabled. Please enter your password: "
+                )
+                try:
+                    client.sign_in(password=pw)
+                    return
+                except errors.PasswordHashInvalidError:
+                    print("Invalid password, please try again.")
 
     print("\nQR code expired too many times. Please run the generator again.")
     client.disconnect()
@@ -170,11 +174,15 @@ def main() -> None:
         "\nYour credentials will NOT be stored on any server and are only used for local authentication.\n"
     )
 
-    label = (
-        input("Account label (optional, e.g. 'work', 'personal'; leave empty for default): ")
-        .strip()
-        .lower()
-    )
+    try:
+        label = (
+            input("Account label (optional, e.g. 'work', 'personal'; leave empty for default): ")
+            .strip()
+            .lower()
+        )
+    except EOFError:
+        # Non-interactive stdin (piped/scripted runs): fall back to the default label.
+        label = ""
 
     if args.qr:
         method = "1"
@@ -210,9 +218,12 @@ def main() -> None:
         print(f"{env_var}={session_string}")
         print("\nIMPORTANT: Keep this string private and never share it with anyone!")
 
-        choice = input(
-            "\nWould you like to automatically update your .env file with this session string? (y/N): "
-        )
+        try:
+            choice = input(
+                "\nWould you like to automatically update your .env file with this session string? (y/N): "
+            )
+        except EOFError:
+            choice = "n"
         if choice.lower() == "y":
             try:
                 with open(".env", "r") as file:

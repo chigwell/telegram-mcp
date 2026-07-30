@@ -816,6 +816,31 @@ def format_entity(entity) -> Dict[str, Any]:
     return result
 
 
+_ALIASES_FILE = Path(__file__).resolve().parent.parent / "aliases.json"
+
+
+def load_aliases() -> Dict[str, int]:
+    try:
+        with open(_ALIASES_FILE, "r", encoding="utf-8") as f:
+            return {k.lower(): int(v) for k, v in json.load(f).items()}
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_aliases(aliases: Dict[str, int]) -> None:
+    with open(_ALIASES_FILE, "w", encoding="utf-8") as f:
+        json.dump(aliases, f, ensure_ascii=False, indent=2)
+
+
+def apply_alias(identifier: Union[int, str]) -> Union[int, str]:
+    """If identifier matches a saved alias (case-insensitive), return its chat ID."""
+    if isinstance(identifier, str):
+        alias_id = load_aliases().get(identifier.strip().lstrip("@").lower())
+        if alias_id is not None:
+            return alias_id
+    return identifier
+
+
 def _marked_id_candidates(identifier: Union[int, str]) -> list[int]:
     """Return marked chat/channel ID variants for a bare positive integer ID."""
     if not isinstance(identifier, int) or identifier <= 0:
@@ -839,6 +864,7 @@ async def resolve_entity(identifier: Union[int, str], client=None) -> Any:
 
     On ConnectionError, reconnects and retries once.
     """
+    identifier = apply_alias(identifier)
     if client is None:
         client = get_client()
     await ensure_connected(client)
@@ -882,6 +908,7 @@ async def resolve_input_entity(identifier: Union[int, str], client=None) -> Any:
 
     Uses the same cache warming, marked-ID fallback, and reconnect behavior.
     """
+    identifier = apply_alias(identifier)
     if client is None:
         client = get_client()
     await ensure_connected(client)
