@@ -112,6 +112,25 @@ def test_qr_login_uses_hidden_password_prompt_for_2fa(monkeypatch):
     assert client.sign_in_calls == ["secret"]
 
 
+def test_qr_login_retries_2fa_on_invalid_password(monkeypatch):
+    qr = _FakeQR([session_string_generator.errors.SessionPasswordNeededError(request=None)])
+    client = _FakeClient(qr)
+    attempts = []
+
+    def sign_in(password=None):
+        attempts.append(password)
+        if len(attempts) == 1:
+            raise session_string_generator.errors.PasswordHashInvalidError(request=None)
+
+    client.sign_in = sign_in
+    entered = iter(["wrong", "right"])
+    monkeypatch.setattr("getpass.getpass", lambda prompt: next(entered))
+
+    session_string_generator._qr_login(client)
+
+    assert attempts == ["wrong", "right"]
+
+
 def test_phone_login_uses_hidden_password_prompt_for_2fa(monkeypatch):
     class _Client:
         def __init__(self):

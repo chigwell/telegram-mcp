@@ -47,6 +47,7 @@ async def list_contacts(account: Optional[str] = None) -> str:
 async def search_contacts(query: str, account: Optional[str] = None) -> str:
     """
     Search for contacts by name, username, or phone number using Telethon's SearchRequest.
+    Saved favorite aliases matching the query are checked first and returned at the top.
     Args:
         query: The search term to look for in contact names, usernames, or phone numbers.
 
@@ -55,11 +56,17 @@ async def search_contacts(query: str, account: Optional[str] = None) -> str:
     try:
         cl = get_client(account)
         await ensure_connected(cl)
+        q = query.strip().lstrip("@").lower()
+        alias_records = [
+            {"alias": alias, "id": chat_id, "favorite": True}
+            for alias, chat_id in load_aliases().items()
+            if q and (q in alias or alias in q)
+        ]
         result = await cl(functions.contacts.SearchRequest(q=query, limit=50))
         users = result.users
-        if not users:
+        if not users and not alias_records:
             return f"No contacts found matching '{query}'."
-        records = []
+        records = alias_records
         for user in users:
             name = f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}".strip()
             record = {
@@ -596,6 +603,57 @@ async def send_contact(
         return log_and_format_error("send_contact", e, chat_id=chat_id, phone_number=phone_number)
 
 
+@mcp.tool(annotations=ToolAnnotations(title="Set Contact Alias", openWorldHint=True))
+@with_account(readonly=True)
+async def set_contact_alias(alias: str, chat_id: str, account: Optional[str] = None) -> str:
+    """
+    Save a favorite alias for a contact or chat. After this, the alias can be used
+    anywhere a chat_id is accepted (e.g. alias "андрей" -> send_message("андрей", ...)).
+    Args:
+        alias: Short name to remember (case-insensitive, e.g. "андрей").
+        chat_id: Chat ID, username (@user), or phone of the target.
+    """
+    try:
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        marked_id = get_marked_id(entity)
+        aliases = load_aliases()
+        aliases[alias.strip().lstrip("@").lower()] = marked_id
+        save_aliases(aliases)
+        return format_tool_result(
+            {"alias": alias.strip().lower(), "resolved": format_entity(entity)}
+        )
+    except Exception as e:
+        return log_and_format_error("set_contact_alias", e, alias=alias, chat_id=chat_id)
+
+
+@mcp.tool(annotations=ToolAnnotations(title="List Contact Aliases", readOnlyHint=True))
+@with_account(readonly=True)
+async def list_contact_aliases(account: Optional[str] = None) -> str:
+    """List all saved favorite aliases and their chat IDs."""
+    try:
+        aliases = load_aliases()
+        return format_tool_result(aliases) if aliases else "No aliases saved."
+    except Exception as e:
+        return log_and_format_error("list_contact_aliases", e)
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Delete Contact Alias", openWorldHint=True))
+@with_account(readonly=True)
+async def delete_contact_alias(alias: str, account: Optional[str] = None) -> str:
+    """Delete a saved favorite alias."""
+    try:
+        aliases = load_aliases()
+        key = alias.strip().lstrip("@").lower()
+        if key not in aliases:
+            return f"Alias '{alias}' not found."
+        del aliases[key]
+        save_aliases(aliases)
+        return f"Alias '{alias}' deleted."
+    except Exception as e:
+        return log_and_format_error("delete_contact_alias", e, alias=alias)
+
+
 __all__ = [
     "list_contacts",
     "search_contacts",
@@ -611,4 +669,7 @@ __all__ = [
     "export_contacts",
     "get_blocked_users",
     "send_contact",
+    "set_contact_alias",
+    "list_contact_aliases",
+    "delete_contact_alias",
 ]
