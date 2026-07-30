@@ -8,11 +8,12 @@ class _DummyClient:
     def __init__(self):
         self.sent = None
 
-    async def send_file(self, entity, file_paths, caption=None):
+    async def send_file(self, entity, file_paths, caption=None, reply_to=None):
         self.sent = {
             "entity": entity,
             "file_paths": file_paths,
             "caption": caption,
+            "reply_to": reply_to,
         }
 
 
@@ -52,7 +53,82 @@ async def test_album_mode_sends_multiple_files_as_one_media_group(
         "entity": "entity:AgenticAIChat",
         "file_paths": [str(first), str(second)],
         "caption": "pick one",
+        "reply_to": None,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["send_album", "send_file"])
+async def test_album_forwards_reply_to_so_media_can_target_a_forum_topic(
+    tmp_path, monkeypatch, tool_name
+):
+    root = (tmp_path / "root").resolve()
+    root.mkdir()
+    (root / "one.png").write_bytes(b"png-one")
+    (root / "two.png").write_bytes(b"png-two")
+
+    client = _DummyClient()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root])
+    monkeypatch.setattr(media, "clients", {"default": client})
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+
+    async def _resolve_entity(chat_id, cl):
+        return "entity:forum"
+
+    monkeypatch.setattr(media, "resolve_entity", _resolve_entity)
+
+    tool = getattr(media, tool_name)
+    result = await tool(-100123, ["one.png", "two.png"], reply_to=458)
+
+    # Telegram addresses forum topics through the reply/thread field, so the id
+    # has to reach Telethon or the album silently lands in General instead.
+    assert client.sent["reply_to"] == 458
+    assert result == "Album sent to chat -100123 (reply_to 458) with 2 files."
+
+
+@pytest.mark.asyncio
+async def test_send_file_forwards_reply_to_for_a_single_file(tmp_path, monkeypatch):
+    root = (tmp_path / "root").resolve()
+    root.mkdir()
+    (root / "one.png").write_bytes(b"png-one")
+
+    client = _DummyClient()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root])
+    monkeypatch.setattr(media, "clients", {"default": client})
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+
+    async def _resolve_entity(chat_id, cl):
+        return "entity:forum"
+
+    monkeypatch.setattr(media, "resolve_entity", _resolve_entity)
+
+    result = await media.send_file(-100123, "one.png", caption="cover", reply_to=458)
+
+    assert client.sent["reply_to"] == 458
+    assert client.sent["file_paths"] == str(root / "one.png")
+    assert result == f"File sent to chat -100123 (reply_to 458) from {root / 'one.png'}."
+
+
+@pytest.mark.asyncio
+async def test_send_file_without_reply_to_keeps_the_original_message(tmp_path, monkeypatch):
+    root = (tmp_path / "root").resolve()
+    root.mkdir()
+    (root / "one.png").write_bytes(b"png-one")
+
+    client = _DummyClient()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root])
+    monkeypatch.setattr(media, "clients", {"default": client})
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+
+    async def _resolve_entity(chat_id, cl):
+        return "entity:chat"
+
+    monkeypatch.setattr(media, "resolve_entity", _resolve_entity)
+
+    result = await media.send_file("AgenticAIChat", "one.png")
+
+    assert client.sent["reply_to"] is None
+    assert result == f"File sent to chat AgenticAIChat from {root / 'one.png'}."
 
 
 @pytest.mark.asyncio
