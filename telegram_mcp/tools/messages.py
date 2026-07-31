@@ -1542,6 +1542,9 @@ async def create_poll(
                 PollAnswer(text=TextWithEntities(text=option, entities=[]), option=bytes([i]))
                 for i, option in enumerate(options)
             ],
+            # Telethon 1.44 made `hash` a required argument on Poll. It caches
+            # server-side results, so a poll being created sends 0.
+            hash=0,
             multiple_choice=multiple_choice,
             quiz=quiz_mode,
             public_voters=public_votes,

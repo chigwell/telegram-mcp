@@ -735,17 +735,35 @@ async def get_full_chat(chat_id: Union[int, str], account: str = None) -> str:
         cl = get_client(account)
         await ensure_connected(cl)
         entity = await resolve_entity(chat_id, cl)
-        full = await cl(functions.channels.GetFullChannelRequest(channel=entity))
+
+        # Basic ("legacy") groups are not channels: GetFullChannelRequest cannot
+        # cast an InputPeerChat and raises TypeError. They are served by
+        # messages.GetFullChatRequest instead.
+        if isinstance(entity, (Chat, InputPeerChat)):
+            basic_id = getattr(entity, "chat_id", None) or getattr(entity, "id", None)
+            full = await cl(functions.messages.GetFullChatRequest(chat_id=basic_id))
+        else:
+            full = await cl(functions.channels.GetFullChannelRequest(channel=entity))
 
         chat = full.chats[0] if full.chats else None
         full_chat = full.full_chat
+
+        # Channels carry participants_count on the full object; basic groups only
+        # carry the member list, so count that instead.
+        participants_count = getattr(full_chat, "participants_count", None)
+        if participants_count is None:
+            members = getattr(getattr(full_chat, "participants", None), "participants", None)
+            if members is not None:
+                participants_count = len(members)
 
         result = {
             "id": get_marked_id(chat) if chat else None,
             "title": sanitize_name(getattr(chat, "title", None)) if chat else None,
             "username": getattr(chat, "username", None) if chat else None,
-            "about": sanitize_user_content(full_chat.about or "", max_length=1024),
-            "participants_count": getattr(full_chat, "participants_count", None),
+            "about": sanitize_user_content(
+                getattr(full_chat, "about", None) or "", max_length=1024
+            ),
+            "participants_count": participants_count,
             "linked_chat_id": getattr(full_chat, "linked_chat_id", None),
         }
 
