@@ -17,6 +17,36 @@ class _DummyClient:
 
 
 @pytest.mark.asyncio
+async def test_get_media_returns_native_image_content(monkeypatch):
+    class Client:
+        async def get_messages(self, entity, ids):
+            assert (entity, ids) == ("chat", 42)
+            return type(
+                "Message",
+                (),
+                {"media": object(), "photo": object(), "file": type("File", (), {"mime_type": None})()},
+            )()
+
+        async def download_media(self, message, output):
+            assert output is bytes
+            return b"image-bytes"
+
+    client = Client()
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+
+    async def resolve(chat_id, cl):
+        assert (chat_id, cl) == (123, client)
+        return "chat"
+
+    monkeypatch.setattr(media, "resolve_entity", resolve)
+
+    result = await media.get_media(123, 42)
+
+    assert result.data == b"image-bytes"
+    assert result._format == "jpeg"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("tool_name", ["send_album", "send_file"])
 async def test_album_mode_sends_multiple_files_as_one_media_group(
     tmp_path, monkeypatch, tool_name

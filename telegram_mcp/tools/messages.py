@@ -1,5 +1,7 @@
 """Messages MCP tools."""
 
+import secrets
+
 from telegram_mcp.runtime import *
 
 
@@ -190,6 +192,10 @@ def message_to_dict(msg) -> dict:
     if urls:
         d["link_urls"] = urls
 
+    rich_message = getattr(msg, "rich_message", None)
+    if rich_message is not None:
+        d["rich_message"] = sanitize_dict(rich_message.to_dict())
+
     action = getattr(msg, "action", None)
     if action is not None:
         d["action"] = type(action).__name__  # service message (joined/pinned/…)
@@ -272,8 +278,7 @@ async def get_messages(
         messages = await cl.get_messages(entity, limit=page_size, add_offset=offset)
         if not messages:
             return "No messages found for this page."
-        lines = [format_message_line(msg) for msg in messages]
-        return "\n".join(lines)
+        return format_tool_result([message_to_dict(msg) for msg in messages])
     except Exception as e:
         return log_and_format_error(
             "get_messages", e, chat_id=chat_id, page=page, page_size=page_size
@@ -307,6 +312,93 @@ async def send_message(
         return "Message sent successfully."
     except Exception as e:
         return log_and_format_error("send_message", e, chat_id=chat_id)
+
+
+def _build_rich_message(
+    html: Optional[str], markdown: Optional[str], is_rtl: bool, skip_entity_detection: bool
+):
+    """Build Telegram's native rich payload from exactly one supported markup form."""
+    if bool(html) == bool(markdown):
+        raise ValidationError("Provide exactly one of html or markdown.")
+    kwargs = {"rtl": is_rtl or None, "noautolink": skip_entity_detection or None}
+    if html:
+        return types.InputRichMessageHTML(html=html, **kwargs)
+    return types.InputRichMessageMarkdown(markdown=markdown, **kwargs)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Send Rich Message", openWorldHint=True, destructiveHint=True)
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def send_rich_message(
+    chat_id: Union[int, str],
+    html: Optional[str] = None,
+    markdown: Optional[str] = None,
+    is_rtl: bool = False,
+    skip_entity_detection: bool = False,
+    account: str = None,
+) -> str:
+    """Send a native Telegram Rich Message using HTML or Markdown markup.
+
+    Rich markup supports Telegram's structured blocks, lists, tables, quotations,
+    formulas and media references; provide exactly one of ``html`` or ``markdown``.
+    """
+    try:
+        cl = get_client(account)
+        peer = await resolve_input_entity(chat_id, cl)
+        rich_message = _build_rich_message(html, markdown, is_rtl, skip_entity_detection)
+        await cl(
+            functions.messages.SendMessageRequest(
+                peer=peer,
+                message="",
+                random_id=secrets.randbits(63),
+                rich_message=rich_message,
+            )
+        )
+        return "Rich message sent successfully."
+    except Exception as e:
+        return log_and_format_error("send_rich_message", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Stream Rich Message Draft",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=False,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def send_rich_message_draft(
+    chat_id: Union[int, str],
+    draft_id: int,
+    html: Optional[str] = None,
+    markdown: Optional[str] = None,
+    is_rtl: bool = False,
+    skip_entity_detection: bool = False,
+    account: str = None,
+) -> str:
+    """Update the native Rich Message draft identified by ``draft_id``."""
+    try:
+        if draft_id < 0:
+            raise ValidationError("draft_id must be a non-negative integer.")
+        cl = get_client(account)
+        peer = await resolve_input_entity(chat_id, cl)
+        rich_message = _build_rich_message(html, markdown, is_rtl, skip_entity_detection)
+        await cl(
+            functions.messages.SetTypingRequest(
+                peer=peer,
+                action=types.InputSendMessageRichMessageDraftAction(
+                    rich_message=rich_message,
+                    random_id=draft_id,
+                ),
+            )
+        )
+        return "Rich message draft updated successfully."
+    except Exception as e:
+        return log_and_format_error("send_rich_message_draft", e, chat_id=chat_id)
 
 
 @mcp.tool(

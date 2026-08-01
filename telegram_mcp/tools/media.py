@@ -1,6 +1,45 @@
 """Media MCP tools."""
 
+from mcp.server.fastmcp import Audio, Image
+
 from telegram_mcp.runtime import *
+
+
+MAX_INLINE_MEDIA_BYTES = 20 * 1024 * 1024
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Get Media", openWorldHint=True, readOnlyHint=True))
+@with_account(readonly=True)
+@validate_id("chat_id")
+async def get_media(
+    chat_id: Union[int, str], message_id: int, account: str = None
+) -> Any:
+    """Return a Telegram image or audio attachment as native MCP media content."""
+    try:
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        msg = await cl.get_messages(entity, ids=message_id)
+        if not msg or not msg.media:
+            return "No media found in the specified message."
+
+        mime = getattr(getattr(msg, "file", None), "mime_type", None)
+        if not mime and getattr(msg, "photo", None) is not None:
+            mime = "image/jpeg"
+        if not mime or not (mime.startswith("image/") or mime.startswith("audio/")):
+            return "Native MCP media is available for images and audio only."
+
+        data = await cl.download_media(msg, bytes)
+        if not data:
+            return f"Download failed for message {message_id}."
+        if len(data) > MAX_INLINE_MEDIA_BYTES:
+            return f"Media is too large for inline MCP delivery ({len(data)} bytes)."
+
+        media_type, media_format = mime.split("/", 1)
+        if media_type == "image":
+            return Image(data=data, format=media_format)
+        return Audio(data=data, format=media_format)
+    except Exception as e:
+        return log_and_format_error("get_media", e, chat_id=chat_id, message_id=message_id)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Send File", openWorldHint=True, destructiveHint=True))
