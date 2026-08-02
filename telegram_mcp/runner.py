@@ -73,7 +73,11 @@ async def _main() -> None:
 def main() -> None:
     _configure_allowed_roots_from_cli(sys.argv[1:])
     _runtime._apply_exposed_tools_mode()
-    nest_asyncio.apply()
+    # Do NOT call nest_asyncio.apply() here. Patching the loop stops
+    # mcp.run_stdio_async() from returning when stdin reaches EOF, so the
+    # server outlives the MCP client that spawned it and is reparented to
+    # init — every closed client session then leaks a server process that
+    # nothing reaps. Nothing in this package needs re-entrant loops.
     asyncio.run(_main())
 
 
