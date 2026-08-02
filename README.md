@@ -50,8 +50,20 @@ The server currently includes 80+ MCP tools grouped into these areas:
 - **Media:** send files, download media, upload files, send voice notes, stickers, GIFs, and inspect message media.
 - **Profile and privacy:** get your own account info, update profile fields, set or delete profile photos, inspect privacy settings, get user info/photos/status, and manage bot commands.
 - **Folders and drafts:** list, create, update, reorder, and delete Telegram folders; save, list, and clear drafts.
+- **Events:** wait for incoming messages with debounce (`wait_for_new_message`, `wait_for_settled_message`), or enable the opt-in incoming event feed for callback-style delivery (see below).
 
 All tool results that include Telegram user-controlled content are sanitized and, where practical, returned as structured JSON.
+
+### Incoming Event Feed (callback mode, Claude Code only)
+
+By default, an agent waits for replies by calling `wait_for_settled_message`, which blocks up to the MCP tool timeout and must be re-called — that works everywhere (Codex, Cursor, etc.) and is unchanged.
+
+Clients that can wake an agent on external output (Claude Code's persistent `Monitor` on `tail -f`) can switch to callback mode instead:
+
+1. The agent calls `enable_incoming_feed` (or set `TELEGRAM_EVENT_FEED=1` in the environment to auto-enable). Each settled incoming burst is appended as one JSON line to `incoming_feed.jsonl` (path configurable via `TELEGRAM_EVENT_FEED_FILE`).
+2. The agent arms a persistent Monitor with the `watch_command` returned by the tool. Every new line re-invokes the agent with the burst summary; no blocking tool call is held open, and the chat stays free.
+
+`disable_incoming_feed` switches back; `incoming_feed_status` reports the current mode. While the feed is enabled it consumes settled bursts, so don't combine it with `wait_for_settled_message`. Feed lines contain user-generated `name` fields — treat them as untrusted data.
 
 ## Requirements
 
