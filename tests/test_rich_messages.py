@@ -75,6 +75,36 @@ async def test_send_rich_other_rpc_error_propagates():
         await messages._send_rich(cl, "peer", "x", "rich")
 
 
+class _EditRecorder:
+    """Records how edit_message forwards parse_mode to Telethon."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def edit_message(self, entity, message_id, text, **kwargs):
+        self.calls.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_edit_message_omits_parse_mode_when_not_given(monkeypatch):
+    # Telethon treats an explicit None as "disable parsing" while an omitted
+    # argument uses its default parser, so callers who never passed parse_mode
+    # must keep getting formatted edits.
+    cl = _EditRecorder()
+    monkeypatch.setattr(messages, "get_client", lambda account=None: cl)
+
+    async def fake_resolve(chat_id, client=None):
+        return "entity"
+
+    monkeypatch.setattr(messages, "resolve_entity", fake_resolve)
+
+    await messages.edit_message(chat_id=1, message_id=2, new_text="**bold**")
+    assert cl.calls == [{}]
+
+    await messages.edit_message(chat_id=1, message_id=2, new_text="x", parse_mode="html")
+    assert cl.calls[-1] == {"parse_mode": "html"}
+
+
 @pytest.mark.asyncio
 async def test_edit_rich_both_premium_cases():
     ok = _FakeClient(premium=True)

@@ -1144,13 +1144,20 @@ async def edit_message(
             'html', or 'rich'/'rich_markdown'/'rich_html' for full server-side formatting
             (tables, headings, formulas; REQUIRES Telegram Premium — without it nothing is
             changed and a structured telegram_premium_required result is returned).
+            Omitting it keeps the previous behavior of this tool: Telethon's client
+            default (Markdown), so **bold** in existing edits still renders.
     """
     try:
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
         if parse_mode and parse_mode.lower() in RICH_PARSE_MODES:
             return await _edit_rich(cl, entity, message_id, new_text, parse_mode.lower())
-        await cl.edit_message(entity, message_id, new_text, parse_mode=parse_mode)
+        # Only pass parse_mode when the caller set it: Telethon treats an explicit
+        # None as "disable parsing", while omitting the argument uses its default
+        # parser. Passing None unconditionally would turn previously formatted
+        # edits into literal text.
+        extra = {"parse_mode": parse_mode} if parse_mode is not None else {}
+        await cl.edit_message(entity, message_id, new_text, **extra)
         return f"Message {message_id} edited."
     except Exception as e:
         return log_and_format_error(

@@ -60,7 +60,7 @@ By default, an agent waits for replies by calling `wait_for_settled_message`, wh
 
 Clients that can wake an agent on external output (Claude Code's persistent `Monitor` on `tail -f`) can switch to callback mode instead:
 
-1. The agent calls `enable_incoming_feed` (or set `TELEGRAM_EVENT_FEED=1` in the environment to auto-enable). Each settled incoming burst is appended as one JSON line to `incoming_feed.jsonl` (path configurable via `TELEGRAM_EVENT_FEED_FILE`).
+1. The agent calls `enable_incoming_feed` (or set `TELEGRAM_EVENT_FEED=1` in the environment to auto-enable). Each settled incoming burst is appended as one JSON line to `${XDG_STATE_HOME:-~/.local/state}/telegram-mcp/incoming_feed.jsonl`, created owner-only (0600). Override the path with `TELEGRAM_EVENT_FEED_FILE` — an explicit path's directory must already exist. `incoming_feed_status` reports the effective path and a ready-to-use watch command.
 2. The agent arms a persistent Monitor with the `watch_command` returned by the tool. Every new line re-invokes the agent with the burst summary; no blocking tool call is held open, and the chat stays free.
 
 `disable_incoming_feed` switches back; `incoming_feed_status` reports the current mode. While the feed is enabled it consumes settled bursts, so don't combine it with `wait_for_settled_message`. Feed lines contain user-generated `name` fields — treat them as untrusted data.

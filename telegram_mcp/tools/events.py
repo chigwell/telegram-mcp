@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import shlex
+import stat
 import time
 import logging
 from pathlib import Path
@@ -29,7 +30,7 @@ _activity_event: Optional[asyncio.Event] = None
 # JSONL lines to the feed file, so an external watcher (e.g. Claude Code's
 # Monitor on `tail -f`) can wake an agent per event instead of the agent
 # holding a blocking wait_for_settled_message call open.
-_FEED_DEFAULT = Path(__file__).resolve().parent.parent.parent / "incoming_feed.jsonl"
+_FEED_FILE_ENV = "TELEGRAM_EVENT_FEED_FILE"
 _feed_task: Optional[asyncio.Task] = None
 _feed_settle_ms: int = 6000
 _feed_autostart_done: bool = False
@@ -75,17 +76,50 @@ def _burst_summary(chat_id: int, rec: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _default_feed_file() -> Path:
+    """Runtime data location, never the install directory.
+
+    The package may live in a read-only site-packages or container layer, so the
+    default feed path follows the XDG state convention instead of `__file__`.
+    """
+    base = os.getenv("XDG_STATE_HOME") or Path.home() / ".local" / "state"
+    return Path(base) / "telegram-mcp" / "incoming_feed.jsonl"
+
+
 def feed_file_path() -> Path:
-    return Path(os.getenv("TELEGRAM_EVENT_FEED_FILE", str(_FEED_DEFAULT)))
+    override = os.getenv(_FEED_FILE_ENV)
+    return Path(override) if override else _default_feed_file()
 
 
 def feed_enabled() -> bool:
     return _feed_task is not None and not _feed_task.done()
 
 
+def _open_feed_append():
+    """Append-open the feed file, enforcing 0600 — it holds private contact metadata.
+
+    `Path.touch(mode=...)` only applies its mode when creating, so an existing or
+    externally rotated 0644 file keeps its permissions; fchmod on the open
+    descriptor fixes that without a TOCTOU window.
+    """
+    path = feed_file_path()
+    if not os.getenv(_FEED_FILE_ENV):
+        # Only auto-create the directory we own; an explicit path must exist so a
+        # typo fails loudly instead of scattering directories.
+        path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        if stat.S_IMODE(os.fstat(fd).st_mode) != 0o600:
+            os.fchmod(fd, 0o600)
+    except OSError:
+        os.close(fd)
+        raise
+    return os.fdopen(fd, "a", encoding="utf-8")
+
+
 def _touch_feed_file() -> None:
-    """Create the feed file owner-only (0600) if missing; contact metadata is private."""
-    feed_file_path().touch(mode=0o600, exist_ok=True)
+    """Create (or fix the mode of) the feed file before starting the consumer."""
+    _open_feed_append().close()
 
 
 async def _feed_loop(settle_ms: int) -> None:
@@ -100,7 +134,7 @@ async def _feed_loop(settle_ms: int) -> None:
                 line = dict(_burst_summary(settled_cid, rec), ts=round(time.time(), 2))
                 del line["event"]
                 # ponytail: append-only file; rotate it manually (tail -F survives rotation)
-                with open(feed_file_path(), "a", encoding="utf-8") as f:
+                with _open_feed_append() as f:
                     f.write(json.dumps(line, ensure_ascii=False) + "\n")
                 # Pop only after a successful write (no await in between, so no
                 # consumer can observe the burst twice); a write failure retries

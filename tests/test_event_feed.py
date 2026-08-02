@@ -2,7 +2,10 @@
 
 import asyncio
 import json
+import os
+import stat
 import time
+from pathlib import Path
 
 import pytest
 
@@ -170,6 +173,58 @@ async def test_write_failure_retains_burst(monkeypatch, tmp_path):
 
     await asyncio.sleep(0.3)
     assert 42 in events._pending_msgs  # not silently destroyed
+
+
+def test_default_feed_path_is_runtime_state_not_install_dir(monkeypatch, tmp_path):
+    monkeypatch.delenv("TELEGRAM_EVENT_FEED_FILE", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+
+    path = events.feed_file_path()
+
+    assert path == tmp_path / "telegram-mcp" / "incoming_feed.jsonl"
+    assert Path(events.__file__).parent not in path.parents
+
+
+def test_default_feed_path_creates_its_directory(monkeypatch, tmp_path):
+    monkeypatch.delenv("TELEGRAM_EVENT_FEED_FILE", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "fresh"))
+
+    events._touch_feed_file()
+
+    assert events.feed_file_path().exists()
+
+
+def test_feed_file_created_owner_only():
+    events._touch_feed_file()
+    mode = stat.S_IMODE(events.feed_file_path().stat().st_mode)
+    assert mode == 0o600
+
+
+def test_existing_world_readable_feed_file_is_tightened():
+    path = events.feed_file_path()
+    path.touch()
+    os.chmod(path, 0o644)
+
+    events._touch_feed_file()
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.asyncio
+async def test_rotated_world_readable_file_is_tightened_on_write():
+    path = events.feed_file_path()
+    path.touch()
+    os.chmod(path, 0o644)
+    events._pending_msgs[42] = _pending_record(_mono(1.0))
+    events._start_feed(settle_ms=50)
+
+    for _ in range(50):
+        await asyncio.sleep(0.02)
+        if not events._pending_msgs:
+            break
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert path.read_text(encoding="utf-8").strip()
 
 
 @pytest.mark.asyncio
