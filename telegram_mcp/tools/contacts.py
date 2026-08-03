@@ -56,12 +56,16 @@ async def search_contacts(query: str, account: Optional[str] = None) -> str:
     try:
         cl = get_client(account)
         await ensure_connected(cl)
+        # A lookalike is a suggestion, not a confirmed favourite — say which is which
+        # so the agent does not treat "лена" as a saved name for Леня.
+        exact_key = alias_key(query)
         alias_records = [
             {
                 "alias": alias,
                 "id": record["id"],
                 "name": record.get("name"),
                 "favorite": True,
+                "match": "exact" if alias == exact_key else "similar",
             }
             for alias, record in match_aliases(query)
         ]
@@ -648,31 +652,82 @@ async def set_contact_alias(
                 }
             )
 
-        aliases = load_aliases()
-        entity = await resolve_entity(chat_id, cl)
-        marked_id = get_marked_id(entity)
-        existing = aliases.get(key)
-        if existing and existing["id"] != marked_id and not replace:
+        # The target must be identified exactly. Resolving it through the same
+        # lookalike matcher would let one wrong guess become a permanent mapping.
+        if isinstance(chat_id, str) and not is_handle_like(chat_id):
+            target = apply_alias(chat_id)
+            if not isinstance(target, int):
+                return format_tool_result(
+                    {
+                        "saved": False,
+                        "reason": "ambiguous_target",
+                        "detail": (
+                            f"'{chat_id}' is not an exact identifier. Save the contact by "
+                            "@username, phone number, numeric ID, or an alias already saved "
+                            "for them — never by a name you have not confirmed with the user."
+                        ),
+                        "candidates": [
+                            {"alias": a, "id": r["id"], "name": r.get("name")}
+                            for a, r in match_aliases(chat_id)[:5]
+                        ],
+                    }
+                )
+        else:
+            target = chat_id
+
+        try:
+            entity = await resolve_entity(target, cl)
+        except AliasNeedsUser:
+            # Never re-emit an ask instruction from the save path: the agent would
+            # ask a second question and could re-target the alias mid-loop.
             return format_tool_result(
                 {
                     "saved": False,
-                    "reason": "alias_already_used",
+                    "reason": "target_not_found",
                     "detail": (
-                        f"'{key}' already points at {existing.get('name') or existing['id']}. "
-                        "Confirm with the user, then call again with replace=True."
+                        f"Could not find '{chat_id}' on Telegram, so nothing was saved. Ask "
+                        "the user for the contact's @username or phone number — a bare "
+                        "numeric ID only works for chats this account has already seen."
                     ),
-                    "current": existing,
                 }
             )
-
+        marked_id = get_marked_id(entity)
         formatted = format_entity(entity)
-        aliases[key] = {
-            "id": marked_id,
-            "name": formatted.get("name"),
-            "account": account or "default",
-        }
-        save_aliases(aliases)
-        return format_tool_result({"saved": True, "alias": key, "resolved": formatted})
+
+        def _store(aliases):
+            existing = aliases.get(key)
+            if existing and existing["id"] != marked_id and not replace:
+                return format_tool_result(
+                    {
+                        "saved": False,
+                        "reason": "alias_already_used",
+                        "detail": (
+                            f"'{key}' already points at "
+                            f"{existing.get('name') or existing['id']}. Confirm with the "
+                            "user, then call again with replace=True."
+                        ),
+                        "current": existing,
+                    }
+                )
+            aliases[key] = {
+                "id": marked_id,
+                "name": formatted.get("name"),
+                "account": account or "default",
+            }
+            return format_tool_result({"saved": True, "alias": key, "resolved": formatted})
+
+        return update_aliases(_store)
+    except AliasStoreUnreadable as e:
+        return format_tool_result(
+            {
+                "saved": False,
+                "reason": "alias_store_unreadable",
+                "detail": (
+                    f"The saved-contacts file could not be read ({e}); nothing was written "
+                    "so the existing memories are not destroyed. Ask the user to check it."
+                ),
+            }
+        )
     except Exception as e:
         return log_and_format_error("set_contact_alias", e, alias=alias, chat_id=chat_id)
 
@@ -713,13 +768,15 @@ async def delete_contact_alias(alias: str, account: Optional[str] = None) -> str
     list_contact_aliases first if unsure of the exact wording.
     """
     try:
-        aliases = load_aliases()
         key = alias_key(alias)
-        if key not in aliases:
-            return f"Alias '{alias}' not found."
-        del aliases[key]
-        save_aliases(aliases)
-        return f"Alias '{alias}' deleted."
+
+        def _forget(aliases):
+            if key not in aliases:
+                return f"Alias '{alias}' not found."
+            del aliases[key]
+            return f"Alias '{alias}' deleted."
+
+        return update_aliases(_forget)
     except Exception as e:
         return log_and_format_error("delete_contact_alias", e, alias=alias)
 

@@ -82,10 +82,23 @@ async def test_saved_alias_passes_validation(monkeypatch, tmp_path):
     monkeypatch.setenv("TELEGRAM_ALIASES_FILE", str(tmp_path / "aliases.json"))
     runtime.save_aliases({"чикичев игорь": 719969066})
 
-    result, kwargs = await dummy_function(user_id="Чикичеву Игорю")
+    result, kwargs = await dummy_function(user_id="Чикичев Игорь")
 
     assert result == "success"
     assert kwargs["user_id"] == 719969066
+    assert runtime.alias_wording(kwargs["user_id"]) == "Чикичев Игорь"
+
+
+@pytest.mark.asyncio
+async def test_lookalike_alias_is_not_substituted(monkeypatch, tmp_path):
+    # A near miss must reach the agent as a question, never as a resolved id.
+    monkeypatch.setenv("TELEGRAM_ALIASES_FILE", str(tmp_path / "aliases.json"))
+    runtime.save_aliases({"леня": {"id": 222, "name": "Леонид"}})
+
+    payload = json.loads(await dummy_function(user_id="Лена"))
+
+    assert payload["error"] == "confirm_contact"
+    assert payload["candidates"][0]["name"] == "Леонид"
 
 
 @pytest.mark.asyncio

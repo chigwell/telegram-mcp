@@ -8,6 +8,7 @@ import sqlite3
 import logging
 import mimetypes
 import unicodedata
+from contextlib import contextmanager
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -680,6 +681,11 @@ def log_and_format_error(
     Returns:
         A user-friendly error message with an error code.
     """
+    # An ask-the-user instruction is normal control flow, not a failure: return it
+    # verbatim and never log the user's nickname at ERROR level.
+    if isinstance(error, AliasNeedsUser):
+        return error.payload
+
     # Generate a consistent error code
     if isinstance(prefix, str) and prefix == "VALIDATION-001":
         # Special case for validation errors
@@ -694,10 +700,6 @@ def log_and_format_error(
 
         prefix_str = prefix.value if isinstance(prefix, ErrorCategory) else (prefix or "GEN")
         error_code = f"{prefix_str}-ERR-{abs(hash(function_name)) % 1000:03d}"
-
-    # An ask-the-user instruction is the answer, not an error to be masked.
-    if isinstance(error, AliasNeedsUser):
-        return error.payload
 
     # Format the additional context parameters
     context = ", ".join(f"{k}={v}" for k, v in kwargs.items())
@@ -894,7 +896,7 @@ def alias_key(text: str) -> str:
     return " ".join(key.split())
 
 
-def load_aliases() -> Dict[str, Dict[str, Any]]:
+def load_aliases(strict: bool = False) -> Dict[str, Dict[str, Any]]:
     """Return {key: {"id": int, "name": str|None, "account": str|None}}.
 
     Legacy `{alias: id}` files upgrade on read. Never raises: this runs inside
@@ -911,6 +913,10 @@ def load_aliases() -> Dict[str, Dict[str, Any]]:
         return {}
     except (OSError, ValueError, TypeError) as error:
         logger.warning("Ignoring unreadable aliases file %s: %s", path, error)
+        if strict:
+            # Refuse to write over data we could not read: a degraded read plus a
+            # write-back would silently delete every alias in the file.
+            raise AliasStoreUnreadable(str(error)) from error
         return {}
 
     records: Dict[str, Dict[str, Any]] = {}
@@ -920,7 +926,7 @@ def load_aliases() -> Dict[str, Dict[str, Any]]:
             record["id"] = int(record["id"])
         except (KeyError, TypeError, ValueError):
             continue  # skip the bad row, keep every good one
-        record["name"] = sanitize_name(record["name"]) if record.get("name") else None
+        record["name"] = sanitize_name(str(record["name"])) if record.get("name") else None
         record.setdefault("account", None)  # uniform shape for legacy rows
         records[alias_key(str(alias))] = record
     return records
@@ -933,8 +939,11 @@ def save_aliases(aliases: Dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         try:
-            json.loads(path.read_text(encoding="utf-8"))
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            recoverable = isinstance(existing, dict)
         except (OSError, ValueError):
+            recoverable = False
+        if not recoverable:
             # Never overwrite a file we could not parse; it may be hand-recoverable.
             path.replace(path.with_suffix(f".corrupt-{int(time.time())}"))
 
@@ -942,11 +951,50 @@ def save_aliases(aliases: Dict[str, Any]) -> None:
         alias_key(str(k)): (v if isinstance(v, dict) else {"id": int(v)})
         for k, v in aliases.items()
     }
-    tmp = path.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)  # atomic: a crash leaves the previous file intact
+    # mkstemp creates a fresh 0600 file with an unpredictable name: a fixed
+    # ".tmp" is both a symlink target and a collision point between processes.
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)  # atomic: a crash leaves the previous file intact
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
+class AliasStoreUnreadable(Exception):
+    """The alias file exists but could not be read, so writing would destroy it."""
+
+
+@contextmanager
+def _alias_lock(path: Path):
+    """Serialize read-modify-write cycles across processes (best effort)."""
+    if fcntl is None:  # pragma: no cover - Windows
+        yield
+        return
+    lock_fd = os.open(str(path) + ".lock", os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(lock_fd)
+
+
+def update_aliases(mutate):
+    """Apply `mutate(aliases)` to the alias file under an exclusive lock.
+
+    Two tool calls that each load, change and save the whole map would otherwise
+    lose one of the two writes — including a delete silently coming back.
+    """
+    path = aliases_file_path()
+    if not os.getenv(_ALIASES_ENV):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    with _alias_lock(path):
+        aliases = load_aliases(strict=True)
+        result = mutate(aliases)
+        save_aliases(aliases)
+        return result
 
 
 def is_handle_like(value: str) -> bool:
@@ -985,6 +1033,30 @@ def fuzzy_aliases_enabled() -> bool:
     return _parse_bool_env(os.getenv("TELEGRAM_CONTACT_FUZZY"), True)
 
 
+def _covers(query_tokens: List[str], alias_tokens: List[str]) -> bool:
+    """True when every query token claims a DISTINCT alias token.
+
+    Without the distinctness two query words could land on the same alias word, so
+    "андрей андреев" matched a stored "андрей" and the surname the user added to
+    name someone else was free. ponytail: Kuhn's algorithm, lists are 1-3 tokens.
+    """
+    if len(query_tokens) > len(alias_tokens):
+        return False
+    taken: Dict[int, str] = {}
+
+    def assign(token: str, seen: set) -> bool:
+        for index, alias_token in enumerate(alias_tokens):
+            if index in seen or not _same_word(token, alias_token):
+                continue
+            seen.add(index)
+            if index not in taken or assign(taken[index], seen):
+                taken[index] = token
+                return True
+        return False
+
+    return all(assign(token, set()) for token in query_tokens)
+
+
 def match_aliases(query: str) -> List[tuple]:
     """Return [(alias, record)] for a free-text reference.
 
@@ -1004,24 +1076,29 @@ def match_aliases(query: str) -> List[tuple]:
     return [
         (alias, record)
         for alias, record in aliases.items()
-        if all(any(_same_word(q, token) for token in alias.split()) for q in query_tokens)
+        if _covers(query_tokens, alias.split())
     ]
 
 
 def apply_alias(identifier: Union[int, str]) -> Union[int, str]:
-    """Resolve a saved alias to its chat ID, or return the identifier untouched.
+    """Resolve a SAVED alias to its chat ID, or return the identifier untouched.
 
-    Non-raising by contract: resolve_entity() depends on that. An ambiguous
-    reference resolves to nothing so the caller can ask the user instead of
-    guessing a recipient.
+    Exact keys only, deliberately: a fuzzy hit is a suggestion, never a recipient.
+    "лена"/"леня" and "иван"/"иванов" have exactly the shape of an inflection pair,
+    so silent fuzzy resolution cannot tell a case ending from a different person —
+    and when the intended person is not saved at all there is no second match to
+    make it look ambiguous. Near misses travel to the agent as candidates in
+    alias_ask_payload() instead, costing one confirmation the first time a wording
+    is used and nothing ever after.
+
+    Non-raising by contract: resolve_entity() depends on that.
     """
     if not isinstance(identifier, str):
         return identifier
-    matches = match_aliases(identifier)
-    ids = {record["id"] for _, record in matches}
-    if len(ids) == 1:
-        return ids.pop()
-    return identifier
+    if is_handle_like(identifier):
+        return identifier  # a real username/phone/id/self reference is never shadowed
+    record = load_aliases().get(alias_key(identifier))
+    return record["id"] if record else identifier
 
 
 class AliasID(int):
@@ -1059,8 +1136,12 @@ _PEER_ERRORS = (
 )
 
 
-class AliasNeedsUser(ValueError):
-    """Carries an agent-facing instruction to ask the human which contact is meant."""
+class AliasNeedsUser(Exception):
+    """Carries an agent-facing instruction to ask the human which contact is meant.
+
+    Deliberately NOT a ValueError: several tools wrap resolution in
+    `except ValueError` and would mangle the instruction into their own message.
+    """
 
     def __init__(self, payload: str):
         super().__init__(payload)
@@ -1079,14 +1160,24 @@ def alias_ask_payload(reference: str, kind: str = "unknown", stored_id: Optional
         {"alias": alias, "id": record["id"], "name": record.get("name")}
         for alias, record in matches[:5]
     ]
-    if kind == "unknown" and len({c["id"] for c in candidates}) > 1:
-        kind = "ambiguous"  # it did match — it matched too many people
+    if kind == "unknown" and candidates:
+        # It resembled something saved: one lookalike is a yes/no confirmation,
+        # several are a genuine choice.
+        kind = "ambiguous" if len({c["id"] for c in candidates}) > 1 else "confirm"
     if kind == "stale":
         instruction = (
             f"Nothing was sent. The saved contact for «{reference}» (id {stored_id}) no longer "
             f"resolves — the account may be deleted or the ID changed. Ask the user who "
             f"«{reference}» is now, then call set_contact_alias(alias='{reference}', "
             f"chat_id=<what they give>, replace=True) and retry this call once."
+        )
+    elif kind == "confirm":
+        instruction = (
+            f"Nothing was sent. «{reference}» is not saved, but it resembles the contact in "
+            f"candidates. Names like Лена/Леня or Иван/Иванов differ by one letter, so do NOT "
+            f"assume: ask the user whether that is who they mean, naming them. If yes, call "
+            f"set_contact_alias(alias='{reference}', chat_id=<that id>) and retry this call "
+            f"once — this exact wording then resolves by itself and you never ask again."
         )
     elif candidates:
         instruction = (
@@ -1143,7 +1234,9 @@ def alias_failure(original: Any, identifier: Any) -> Optional[AliasNeedsUser]:
     )
 
 
-async def _resolve_with_retries(getter: str, identifier: Union[int, str], client, label: str):
+async def _resolve_with_retries(
+    getter: str, identifier: Union[int, str], client, label: str, try_marked: bool = True
+):
     """Cache warming, reconnect, and marked-ID fallback shared by both resolvers.
 
     StringSession has no persistent entity cache, so a cold lookup raises ValueError;
@@ -1175,11 +1268,12 @@ async def _resolve_with_retries(getter: str, identifier: Union[int, str], client
             except ValueError as error:
                 last_error = error
 
-    for candidate in _marked_id_candidates(identifier):
-        try:
-            return await get(candidate)
-        except ValueError as error:
-            last_error = error
+    if try_marked:
+        for candidate in _marked_id_candidates(identifier):
+            try:
+                return await get(candidate)
+            except ValueError as error:
+                last_error = error
 
     raise ValueError(
         f"Could not resolve {label} for {identifier!r}, "
@@ -1198,7 +1292,12 @@ async def _resolve(getter: str, identifier: Union[int, str], client, label: str)
     if client is None:
         client = get_client()
     try:
-        return await _resolve_with_retries(getter, identifier, client, label)
+        # An id that came from a saved alias is exact; guessing marked variants of
+        # it could deliver to a completely unrelated chat.
+        from_alias = identifier is not original
+        return await _resolve_with_retries(
+            getter, identifier, client, label, try_marked=not from_alias
+        )
     except (ValueError, *_PEER_ERRORS) as error:
         # An unknown or stale nickname is a question for the user, not a dead end:
         # report the wording they used, never the opaque stored id.

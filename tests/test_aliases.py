@@ -68,12 +68,47 @@ def test_alias_key_folds_yo_case_and_whitespace():
     assert runtime.alias_key("@Андрей") == "андрей"
 
 
-def test_matching_tolerates_russian_case_endings_and_word_order():
+def test_inflections_are_suggested_but_never_sent_to_silently():
+    # Fuzzy matching suggests; only an exact key resolves. "лена"/"леня" has the
+    # same shape as a declension pair, so a silent fuzzy send could reach the
+    # wrong person whenever the intended one is not saved yet.
     runtime.save_aliases({"андрей бекендер": {"id": 111, "name": "Андрей"}})
 
-    assert runtime.apply_alias("Андрею бекендеру") == 111
-    assert runtime.apply_alias("бекендер андрей") == 111
-    assert runtime.apply_alias("бекендеру") == 111  # a tag word alone is enough
+    for wording in ("Андрею бекендеру", "бекендер андрей", "бекендеру"):
+        assert runtime.apply_alias(wording) == wording
+        assert [alias for alias, _ in runtime.match_aliases(wording)] == ["андрей бекендер"]
+
+    assert runtime.apply_alias("андрей бекендер") == 111  # the saved wording is exact
+
+
+def test_near_miss_name_never_resolves_silently():
+    runtime.save_aliases({"леня": {"id": 222, "name": "Леонид"}})
+    assert runtime.apply_alias("Лена") == "Лена"  # Елена is not Леонид
+
+    runtime.save_aliases({"иван": {"id": 100}})
+    assert runtime.apply_alias("Иванов") == "Иванов"  # -ов is a surname, not an ending
+
+    runtime.save_aliases({"максим": {"id": 777}})
+    assert runtime.apply_alias("макс") == "макс"
+
+
+def test_single_lookalike_asks_for_confirmation_not_identification():
+    runtime.save_aliases({"леня": {"id": 222, "name": "Леонид"}})
+
+    payload = json.loads(runtime.alias_ask_payload("Лена"))
+
+    assert payload["error"] == "confirm_contact"
+    assert payload["candidates"] == [{"alias": "леня", "id": 222, "name": "Леонид"}]
+    assert "do NOT" in payload["instruction"]
+
+
+def test_extra_query_word_cannot_reuse_a_matched_alias_word():
+    # Both query words used to land on the single stored token, so the surname
+    # naming a different Андрей was ignored.
+    runtime.save_aliases({"андрей": {"id": 111, "name": "Андрей Петров"}})
+
+    assert runtime.apply_alias("андрей андреев") == "андрей андреев"
+    assert runtime.match_aliases("андрей андреев") == []
 
 
 def test_every_query_token_must_match():
@@ -91,10 +126,12 @@ def test_ambiguous_reference_never_resolves():
     assert len(runtime.match_aliases("андрей")) == 2
 
 
-def test_same_id_under_two_aliases_is_not_ambiguous():
+def test_same_id_under_two_aliases_is_a_confirmation_not_a_choice():
     runtime.save_aliases({"андрей бекендер": {"id": 111}, "бекендер": {"id": 111}})
 
-    assert runtime.apply_alias("бекендер андрей") == 111
+    payload = json.loads(runtime.alias_ask_payload("бекендеру"))
+    assert payload["error"] == "confirm_contact"  # two aliases, one person
+    assert {c["id"] for c in payload["candidates"]} == {111}
 
 
 def test_handle_shaped_input_skips_fuzzy():
@@ -229,6 +266,59 @@ def test_is_handle_like():
     assert runtime.is_handle_like("-1001234567890")
     assert not runtime.is_handle_like("андрей бекендер")
     assert not runtime.is_handle_like("bob")  # too short for a username
+
+
+def test_update_aliases_does_not_lose_a_concurrent_write():
+    runtime.save_aliases({"первый": 1})
+
+    runtime.update_aliases(lambda a: a.__setitem__("второй", {"id": 2}))
+    runtime.update_aliases(lambda a: a.__setitem__("третий", {"id": 3}))
+
+    assert _ids(runtime.load_aliases()) == {"первый": 1, "второй": 2, "третий": 3}
+
+
+def test_update_aliases_refuses_to_write_over_an_unreadable_file():
+    path = runtime.aliases_file_path()
+    runtime.save_aliases({"важный": 1})
+    os.chmod(path, 0o000)
+    try:
+        with pytest.raises(runtime.AliasStoreUnreadable):
+            runtime.update_aliases(lambda a: a.__setitem__("новый", {"id": 2}))
+    finally:
+        os.chmod(path, 0o600)
+
+    assert _ids(runtime.load_aliases()) == {"важный": 1}  # nothing destroyed
+
+
+def test_wrong_shaped_json_is_quarantined():
+    path = runtime.aliases_file_path()
+    path.write_text('["not", "an", "object"]', encoding="utf-8")
+
+    runtime.save_aliases({"андрей": 1})
+
+    assert list(path.parent.glob("aliases.corrupt-*"))
+
+
+def test_temp_file_name_is_unpredictable():
+    runtime.save_aliases({"андрей": 1})
+    path = runtime.aliases_file_path()
+
+    assert not path.with_suffix(".tmp").exists()
+    assert not list(path.parent.glob("*.tmp"))  # nothing left behind
+
+
+def test_non_string_name_in_file_does_not_raise():
+    runtime.aliases_file_path().write_text('{"андрей": {"id": 1, "name": 42}}', encoding="utf-8")
+
+    assert runtime.load_aliases()["андрей"]["name"] == "42"
+
+
+def test_handle_shaped_key_in_the_file_cannot_hijack_a_real_identifier():
+    # Legacy files may already contain such keys; resolution must ignore them.
+    runtime.save_aliases({"me": 555, "artemis": 556})
+
+    assert runtime.apply_alias("me") == "me"
+    assert runtime.apply_alias("artemis") == "artemis"
 
 
 def test_alias_id_keeps_the_wording_behind_a_resolved_id():
