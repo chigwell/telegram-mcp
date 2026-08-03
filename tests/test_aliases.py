@@ -115,11 +115,49 @@ def test_fuzzy_kill_switch(monkeypatch):
     assert runtime.apply_alias("андрей бекендер") == 111  # exact still works
 
 
-def test_same_word_rejects_look_alike_names():
-    assert runtime._same_word("андрею", "андрей")
-    assert runtime._same_word("бекендеру", "бекендер")
-    assert not runtime._same_word("артем", "артур")
-    assert not runtime._same_word("макс", "марк")
+# The whole safety of fuzzy matching rests on these two lists: an inflection of the
+# same name must match, a different person's name must not. Pinned as a table so a
+# threshold tweak cannot silently start misrouting messages.
+INFLECTIONS = [
+    ("андрею", "андрей"),
+    ("игорю", "игорь"),
+    ("марии", "мария"),
+    ("бекендеру", "бекендер"),
+    ("контакту", "контакт"),
+    ("мертвому", "мертвый"),  # adjectives swap 3 chars, not 1
+    ("главному", "главный"),
+    ("старшему", "старший"),
+    ("лена", "лене"),  # short names swap a single character
+    ("саша", "сашу"),
+    ("иван", "ивана"),
+    ("александру", "александр"),
+]
+
+DIFFERENT_PEOPLE = [
+    ("артем", "артур"),
+    ("макс", "марк"),
+    ("ольга", "олег"),
+    ("олег", "олеся"),  # looks exactly like an inflection, is not
+    ("анна", "антон"),
+    ("иван", "игорь"),
+    ("смирнов", "сидоров"),
+    ("бекендер", "фронтендер"),
+    ("дима", "дина"),
+    ("инна", "инга"),
+    ("вера", "вероника"),
+    ("владимир", "владислав"),
+    ("сергей", "сергеевич"),
+]
+
+
+@pytest.mark.parametrize("query,stored", INFLECTIONS)
+def test_same_word_accepts_inflections(query, stored):
+    assert runtime._same_word(query, stored)
+
+
+@pytest.mark.parametrize("query,stored", DIFFERENT_PEOPLE)
+def test_same_word_rejects_different_people(query, stored):
+    assert not runtime._same_word(query, stored)
 
 
 def test_ask_payload_is_actionable_json():
@@ -142,6 +180,7 @@ def test_ask_payload_lists_candidates_when_ambiguous():
     )
 
     payload = json.loads(runtime.alias_ask_payload("андрей"))
+    assert payload["error"] == "ambiguous_contact"  # matched too many, not "unknown"
     assert {c["id"] for c in payload["candidates"]} == {111, 222}
     assert "which one" in payload["instruction"]
 
@@ -190,6 +229,65 @@ def test_is_handle_like():
     assert runtime.is_handle_like("-1001234567890")
     assert not runtime.is_handle_like("андрей бекендер")
     assert not runtime.is_handle_like("bob")  # too short for a username
+
+
+def test_alias_id_keeps_the_wording_behind_a_resolved_id():
+    # @validate_id substitutes the id before a tool body runs; without the wording
+    # a stale mapping could only be reported as an opaque number.
+    value = runtime.AliasID(111, "андрею бекендеру")
+
+    assert value == 111 and isinstance(value, int)
+    assert runtime.alias_wording(value) == "андрею бекендеру"
+    assert json.loads(json.dumps({"id": value}))["id"] == 111
+
+
+def test_alias_wording_ignores_real_identifiers():
+    assert runtime.alias_wording("андрей бекендер") == "андрей бекендер"
+    assert runtime.alias_wording("@artemis") is None  # a real handle, not a nickname
+    assert runtime.alias_wording(12345) is None
+
+
+def test_alias_failure_reports_stale_for_a_resolved_id():
+    runtime.save_aliases({"мертвый контакт": {"id": 999, "name": "Gone"}})
+
+    stale = json.loads(
+        runtime.alias_failure(runtime.AliasID(999, "мертвому контакту"), 999).payload
+    )
+    assert stale["error"] == "stale_contact"
+    assert stale["reference"] == "мертвому контакту"  # never the bare id
+
+    unknown = json.loads(runtime.alias_failure("кто-то", "кто-то").payload)
+    assert unknown["error"] == "unknown_contact"
+
+    assert runtime.alias_failure("@artemis", "@artemis") is None  # not an alias problem
+
+
+@pytest.mark.asyncio
+async def test_resolver_turns_a_dead_peer_into_a_repoint_request(monkeypatch):
+    # A dead peer answers with an RPC error, not a ValueError — that must still
+    # reach the agent as "your saved contact is stale", not a generic failure.
+    import telethon
+
+    class _Client:
+        async def get_entity(self, identifier):
+            raise telethon.errors.rpcerrorlist.ChatIdInvalidError(request=None)
+
+        async def get_dialogs(self):
+            return []
+
+    monkeypatch.setattr(runtime, "ensure_connected", lambda client: _noop())
+    runtime.save_aliases({"мертвый контакт": {"id": 999}})
+
+    with pytest.raises(runtime.AliasNeedsUser) as excinfo:
+        await runtime.resolve_entity(runtime.AliasID(999, "мертвому контакту"), _Client())
+
+    payload = json.loads(excinfo.value.payload)
+    assert payload["error"] == "stale_contact"
+    assert "replace=True" in payload["instruction"]
+
+
+async def _noop():
+    return None
 
 
 def test_unreadable_alias_file_does_not_raise(monkeypatch, tmp_path):

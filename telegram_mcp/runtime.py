@@ -754,7 +754,9 @@ def validate_id(*param_names_to_validate):
                             # ever reaches resolve_entity.
                             resolved = apply_alias(value)
                             if isinstance(resolved, int):
-                                return resolved, None
+                                # Keep the wording: if the mapping turns out to be
+                                # stale, the resolver must name it, not the bare id.
+                                return AliasID(resolved, value), None
                             if is_handle_like(value):
                                 return value, None
                             # Unknown or ambiguous reference: hand the agent an
@@ -962,16 +964,21 @@ def is_handle_like(value: str) -> bool:
 def _same_word(a: str, b: str) -> bool:
     """True when two tokens are the same word, tolerating an inflected ending.
 
-    Russian inflects at the end ("Андрею" vs "андрей"), so a real inflection keeps
-    a long common prefix. ponytail: prefix alone accepts артем/артур, difflib alone
-    accepts макс/марк; together they reject both, which is what the tests pin.
+    Russian inflects at the end ("Андрею"/"андрей", "главному"/"главный"), so a real
+    inflection keeps a long shared stem and swaps a few trailing characters. Three
+    conditions, each pinned by a table of name pairs in tests/test_aliases.py: a stem
+    of >=4 chars (or a one-character swap on equal-length words, so "лена"/"лене"
+    works without letting "олег"/"олеся" through), endings of at most three
+    characters, and a similarity backstop.
     """
     if a == b:
         return True
     shared = len(os.path.commonprefix([a, b]))
-    if shared < 3 or len(a) - shared > 2 or len(b) - shared > 2:
+    if len(a) - shared > 3 or len(b) - shared > 3:
         return False
-    return SequenceMatcher(None, a, b).ratio() >= 0.75
+    if not (shared >= 4 or (len(a) == len(b) and shared == len(a) - 1)):
+        return False
+    return SequenceMatcher(None, a, b).ratio() >= 0.65
 
 
 def fuzzy_aliases_enabled() -> bool:
@@ -1017,6 +1024,41 @@ def apply_alias(identifier: Union[int, str]) -> Union[int, str]:
     return identifier
 
 
+class AliasID(int):
+    """An int that remembers the wording it was resolved from.
+
+    @validate_id substitutes the stored id before a tool body runs, so without this
+    a resolver could only report an opaque number and never tell the user which of
+    their nicknames has gone stale.
+    """
+
+    def __new__(cls, value: int, wording: str):
+        obj = super().__new__(cls, value)
+        obj.wording = wording
+        return obj
+
+
+def alias_wording(value: Any) -> Optional[str]:
+    """The free-text reference behind a value, if it came from one."""
+    wording = getattr(value, "wording", None)
+    if wording:
+        return wording
+    if isinstance(value, str) and not is_handle_like(value):
+        return value
+    return None
+
+
+# Telegram rejects a dead or malformed peer with an RPC error rather than a
+# ValueError; for an aliased reference that means the saved mapping is stale.
+_PEER_ERRORS = (
+    telethon.errors.rpcerrorlist.ChatIdInvalidError,
+    telethon.errors.rpcerrorlist.PeerIdInvalidError,
+    telethon.errors.rpcerrorlist.UserIdInvalidError,
+    telethon.errors.rpcerrorlist.ChannelInvalidError,
+    telethon.errors.rpcerrorlist.ChannelPrivateError,
+)
+
+
 class AliasNeedsUser(ValueError):
     """Carries an agent-facing instruction to ask the human which contact is meant."""
 
@@ -1037,6 +1079,8 @@ def alias_ask_payload(reference: str, kind: str = "unknown", stored_id: Optional
         {"alias": alias, "id": record["id"], "name": record.get("name")}
         for alias, record in matches[:5]
     ]
+    if kind == "unknown" and len({c["id"] for c in candidates}) > 1:
+        kind = "ambiguous"  # it did match — it matched too many people
     if kind == "stale":
         instruction = (
             f"Nothing was sent. The saved contact for «{reference}» (id {stored_id}) no longer "
@@ -1084,117 +1128,97 @@ def _marked_id_candidates(identifier: Union[int, str]) -> list[int]:
     ]
 
 
-async def resolve_entity(identifier: Union[int, str], client=None) -> Any:
-    """Resolve entity with automatic cache warming, marked-ID fallback, and reconnect.
+def alias_failure(original: Any, identifier: Any) -> Optional[AliasNeedsUser]:
+    """Ask-the-user error for a reference that failed to resolve, or None."""
+    wording = alias_wording(original)
+    if not wording:
+        return None
+    stale = isinstance(identifier, int)
+    return AliasNeedsUser(
+        alias_ask_payload(
+            wording,
+            kind="stale" if stale else "unknown",
+            stored_id=int(identifier) if stale else None,
+        )
+    )
 
-    StringSession has no persistent entity cache. If get_entity() fails
-    because the cache is cold (ValueError on PeerUser lookup for group IDs),
-    warm the cache via get_dialogs() and retry.
 
-    If the value is a bare positive channel/chat ID, try Telethon's marked
-    channel/chat ID variants before raising.
+async def _resolve_with_retries(getter: str, identifier: Union[int, str], client, label: str):
+    """Cache warming, reconnect, and marked-ID fallback shared by both resolvers.
 
-    On ConnectionError, reconnects and retries once.
+    StringSession has no persistent entity cache, so a cold lookup raises ValueError;
+    warming via get_dialogs() and retrying fixes it. A bare positive ID may also need
+    Telethon's marked chat/channel variants.
     """
-    original = identifier
-    identifier = apply_alias(identifier)
-    if client is None:
-        client = get_client()
     await ensure_connected(client)
+    get = getattr(client, getter)
     last_error = None
     try:
         try:
-            return await client.get_entity(identifier)
+            return await get(identifier)
         except ValueError as error:
             last_error = error
             await client.get_dialogs()
             try:
-                return await client.get_entity(identifier)
+                return await get(identifier)
             except ValueError as error:
                 last_error = error
     except ConnectionError:
         await ensure_connected(client)
         try:
-            return await client.get_entity(identifier)
+            return await get(identifier)
         except ValueError as error:
             last_error = error
             await client.get_dialogs()
             try:
-                return await client.get_entity(identifier)
+                return await get(identifier)
             except ValueError as error:
                 last_error = error
 
     for candidate in _marked_id_candidates(identifier):
         try:
-            return await client.get_entity(candidate)
+            return await get(candidate)
         except ValueError as error:
             last_error = error
 
-    # A free-text reference that failed is a question for the user, not a dead end:
-    # report the wording the caller used, never the opaque stored id.
-    if isinstance(original, str) and not is_handle_like(original):
-        kind = "stale" if isinstance(identifier, int) else "unknown"
-        raise AliasNeedsUser(
-            alias_ask_payload(
-                original, kind=kind, stored_id=identifier if kind == "stale" else None
-            )
-        ) from last_error
     raise ValueError(
-        f"Could not resolve entity for {identifier!r}, "
+        f"Could not resolve {label} for {identifier!r}, "
         f"including marked variants {_marked_id_candidates(identifier)}"
     ) from last_error
+
+
+async def _resolve(getter: str, identifier: Union[int, str], client, label: str) -> Any:
+    """Resolve an identifier, turning a failed free-text reference into a question.
+
+    A saved alias resolves here as well as in @validate_id, so tools without that
+    decorator understand nicknames too.
+    """
+    original = identifier
+    identifier = apply_alias(identifier)
+    if client is None:
+        client = get_client()
+    try:
+        return await _resolve_with_retries(getter, identifier, client, label)
+    except (ValueError, *_PEER_ERRORS) as error:
+        # An unknown or stale nickname is a question for the user, not a dead end:
+        # report the wording they used, never the opaque stored id.
+        needs_user = alias_failure(original, identifier)
+        if needs_user:
+            raise needs_user from error
+        raise
+
+
+async def resolve_entity(identifier: Union[int, str], client=None) -> Any:
+    """Resolve an entity, warming the cache and retrying as needed.
+
+    Accepts IDs, usernames, phone numbers, and saved contact aliases.
+    """
+    return await _resolve("get_entity", identifier, client, "entity")
 
 
 async def resolve_input_entity(identifier: Union[int, str], client=None) -> Any:
-    """Like resolve_entity() but returns an InputPeer.
-
-    Uses the same cache warming, marked-ID fallback, and reconnect behavior.
-    """
-    original = identifier
-    identifier = apply_alias(identifier)
-    if client is None:
-        client = get_client()
-    await ensure_connected(client)
-    last_error = None
-    try:
-        try:
-            return await client.get_input_entity(identifier)
-        except ValueError as error:
-            last_error = error
-            await client.get_dialogs()
-            try:
-                return await client.get_input_entity(identifier)
-            except ValueError as error:
-                last_error = error
-    except ConnectionError:
-        await ensure_connected(client)
-        try:
-            return await client.get_input_entity(identifier)
-        except ValueError as error:
-            last_error = error
-            await client.get_dialogs()
-            try:
-                return await client.get_input_entity(identifier)
-            except ValueError as error:
-                last_error = error
-
-    for candidate in _marked_id_candidates(identifier):
-        try:
-            return await client.get_input_entity(candidate)
-        except ValueError as error:
-            last_error = error
-
-    if isinstance(original, str) and not is_handle_like(original):
-        kind = "stale" if isinstance(identifier, int) else "unknown"
-        raise AliasNeedsUser(
-            alias_ask_payload(
-                original, kind=kind, stored_id=identifier if kind == "stale" else None
-            )
-        ) from last_error
-    raise ValueError(
-        f"Could not resolve input entity for {identifier!r}, "
-        f"including marked variants {_marked_id_candidates(identifier)}"
-    ) from last_error
+    """Like resolve_entity() but returns an InputPeer."""
+    return await _resolve("get_input_entity", identifier, client, "input entity")
 
 
 def format_message(message) -> Dict[str, Any]:
