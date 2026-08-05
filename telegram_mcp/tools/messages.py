@@ -130,6 +130,60 @@ def message_to_dict(msg) -> dict:
         fname = getattr(fwd, "from_name", None)
         if fname:
             finfo["from_name"] = sanitize_name(fname)
+
+        # from_name is set only when the original author hides their profile.
+        # For an ordinary channel forward the origin sits in fwd.from_id, and
+        # reading just from_name loses the attribution the Telegram UI shows as
+        # "Forwarded from …". Telethon's msg.forward wrapper resolves that peer
+        # from entities already present in the response — no extra API call.
+        fo = getattr(msg, "forward", None)
+        if fo is not None:
+            chat = getattr(fo, "chat", None)
+            if chat is not None:
+                title = getattr(chat, "title", None) or " ".join(
+                    x
+                    for x in (getattr(chat, "first_name", None), getattr(chat, "last_name", None))
+                    if x
+                )
+                if title:
+                    finfo["from_chat"] = sanitize_name(title)
+                uname = getattr(chat, "username", None)
+                if uname:
+                    finfo["from_username"] = uname
+            chat_id = getattr(fo, "chat_id", None)
+            if chat_id is not None:
+                finfo["from_chat_id"] = chat_id
+            sender = getattr(fo, "sender", None)
+            if sender is not None:
+                sname = " ".join(
+                    x
+                    for x in (
+                        getattr(sender, "first_name", None),
+                        getattr(sender, "last_name", None),
+                    )
+                    if x
+                )
+                if sname:
+                    finfo["from_user"] = sanitize_name(sname)
+
+        post_id = getattr(fwd, "channel_post", None)
+        if post_id is not None:
+            finfo["channel_post"] = post_id
+        author = getattr(fwd, "post_author", None)
+        if author:
+            finfo["post_author"] = sanitize_name(author)
+
+        # Canonical permalink, when the pieces are there: a public channel gives
+        # t.me/<username>/<post>, a private one the t.me/c/<id>/<post> form that
+        # only resolves for members.
+        if post_id is not None:
+            if finfo.get("from_username"):
+                finfo["post_link"] = f"https://t.me/{finfo['from_username']}/{post_id}"
+            elif finfo.get("from_chat_id") is not None:
+                finfo["post_link"] = (
+                    f"https://t.me/c/{abs(finfo['from_chat_id']) % 10**10}/{post_id}"
+                )
+
         d["forwarded"] = finfo or True
 
     via_bot_id = getattr(msg, "via_bot_id", None)
