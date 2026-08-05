@@ -2,6 +2,12 @@
 
 from telegram_mcp.runtime import *
 
+# Domain used to build message permalinks. Overridable because the default is a
+# single point of failure: on 2026-07-13 the .me registry put t.me on serverHold
+# over an OFAC listing and every t.me link on earth broke for about a day, while
+# telegram.me kept resolving. The domain has been ACTIVE again since 2026-07-14.
+LINK_DOMAIN = os.getenv("TELEGRAM_LINK_DOMAIN", "t.me")
+
 
 def get_media_label(msg) -> str:
     """Short label of attached media for a message, or "" if none.
@@ -174,14 +180,14 @@ def message_to_dict(msg) -> dict:
             finfo["post_author"] = sanitize_name(author)
 
         # Canonical permalink, when the pieces are there: a public channel gives
-        # t.me/<username>/<post>, a private one the t.me/c/<id>/<post> form that
-        # only resolves for members.
+        # <domain>/<username>/<post>, a private one the <domain>/c/<id>/<post>
+        # form that only resolves for members.
         if post_id is not None:
             if finfo.get("from_username"):
-                finfo["post_link"] = f"https://t.me/{finfo['from_username']}/{post_id}"
+                finfo["post_link"] = f"https://{LINK_DOMAIN}/{finfo['from_username']}/{post_id}"
             elif finfo.get("from_chat_id") is not None:
                 finfo["post_link"] = (
-                    f"https://t.me/c/{abs(finfo['from_chat_id']) % 10**10}/{post_id}"
+                    f"https://{LINK_DOMAIN}/c/{abs(finfo['from_chat_id']) % 10**10}/{post_id}"
                 )
 
         d["forwarded"] = finfo or True

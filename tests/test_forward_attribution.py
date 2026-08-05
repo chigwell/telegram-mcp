@@ -1,5 +1,6 @@
 import datetime
 
+from telegram_mcp.tools import messages
 from telegram_mcp.tools.messages import message_to_dict
 
 
@@ -106,3 +107,14 @@ def test_hidden_profile_forward_still_falls_back_to_from_name():
 
 def test_message_without_forward_header_is_unaffected():
     assert "forwarded" not in message_to_dict(_Msg())
+
+
+def test_link_domain_is_overridable(monkeypatch):
+    """t.me was unreachable for a day in July 2026; the domain must not be hardcoded."""
+    monkeypatch.setattr(messages, "LINK_DOMAIN", "telegram.me")
+    msg = _Msg(
+        fwd_from=_FwdHeader(date=FWD_DATE, channel_post=6279),
+        forward=_Forward(chat=_Chat(title="Полезный Парфун", username="ParfunA")),
+    )
+
+    assert message_to_dict(msg)["forwarded"]["post_link"] == "https://telegram.me/ParfunA/6279"
