@@ -1346,7 +1346,7 @@ dev = [
 requires-dist = [
     { name = "dotenv", specifier = ">=0.9.9" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.8.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.8.0,<2" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
     { name = "python-json-logger", specifier = ">=3.3.0" },
     { name = "python-socks", marker = "extra == 'proxy'", specifier = ">=2.4.3" },
