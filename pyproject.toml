@@ -25,7 +25,7 @@ requires-python = ">=3.10"
 dependencies = [
     "dotenv>=0.9.9",
     "httpx>=0.28.1",
-    "mcp[cli]>=1.8.0",
+    "mcp[cli]>=1.8.0,<2",
     "python-dotenv>=1.1.0",
     "python-json-logger>=3.3.0",
     "qrcode>=8.2",
