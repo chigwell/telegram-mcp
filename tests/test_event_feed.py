@@ -256,3 +256,62 @@ async def test_on_new_incoming_records_and_autostarts(monkeypatch):
     assert 42 in events._pending_msgs
     assert events._pending_msgs[42]["count"] == 1
     assert events.feed_enabled()  # env autostart ran from the handler
+
+
+@pytest.mark.asyncio
+async def test_wait_for_chat_ignores_other_chats(monkeypatch):
+    # The bug this fixes: an agent waiting for one person was woken by every
+    # unrelated conversation, burned the turn, and fell back to sleep-polling.
+    monkeypatch.setattr(events, "_wait_target", _target(42))
+    events._pending_msgs[999] = _pending_record(_mono(10))  # noise from someone else
+
+    result = json.loads(
+        await events.wait_for_settled_message(settle_ms=50, max_wait_ms=200, chat_id=42)
+    )
+
+    assert result["event"] is False  # the other chat did not wake it
+    assert result["waiting_for"] == 42
+    assert 999 in events._pending_msgs  # and its burst is still there for later
+
+
+@pytest.mark.asyncio
+async def test_wait_for_chat_returns_when_that_chat_speaks(monkeypatch):
+    monkeypatch.setattr(events, "_wait_target", _target(42))
+    events._pending_msgs[999] = _pending_record(_mono(10))
+    events._pending_msgs[42] = _pending_record(_mono(10))
+
+    result = json.loads(
+        await events.wait_for_settled_message(settle_ms=50, max_wait_ms=500, chat_id=42)
+    )
+
+    assert result["event"] is True and result["chat_id"] == 42
+    assert 999 in events._pending_msgs  # unrelated burst untouched
+
+
+@pytest.mark.asyncio
+async def test_wait_for_new_message_filters_by_chat(monkeypatch):
+    monkeypatch.setattr(events, "_wait_target", _target(42))
+    events._pending_msgs[999] = _pending_record(_mono(1))
+
+    timed_out = json.loads(await events.wait_for_new_message(timeout=0.2, chat_id=42))
+    assert timed_out["event"] is False
+
+    events._pending_msgs[42] = _pending_record(_mono(1))
+    hit = json.loads(await events.wait_for_new_message(timeout=0.2, chat_id=42))
+    assert [c["chat_id"] for c in hit["pending_chats"]] == [42]
+
+
+@pytest.mark.asyncio
+async def test_unfiltered_wait_still_sees_every_chat():
+    events._pending_msgs[999] = _pending_record(_mono(10))
+
+    result = json.loads(await events.wait_for_settled_message(settle_ms=50, max_wait_ms=500))
+
+    assert result["event"] is True and result["chat_id"] == 999
+
+
+def _target(chat_id):
+    async def _resolve(value, account=None):
+        return chat_id if value is not None else None
+
+    return _resolve

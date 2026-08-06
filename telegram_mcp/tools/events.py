@@ -14,7 +14,7 @@ import stat
 import time
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 from telethon import events as _events
 from telethon import utils
@@ -44,15 +44,20 @@ def _get_activity_event() -> asyncio.Event:
     return _activity_event
 
 
-def _scan_settled(now: float, settle: float) -> Tuple[Optional[int], Optional[float]]:
+def _scan_settled(
+    now: float, settle: float, only: Optional[int] = None
+) -> Tuple[Optional[int], Optional[float]]:
     """Find a chat whose burst has been quiet for `settle` seconds.
 
     Returns (settled_chat_id, seconds_until_soonest_chat_settles). The second
     value is None when nothing is pending; the first is None when no chat has
-    settled yet.
+    settled yet. With `only` set, every other chat is ignored — waiting for one
+    person must not be interrupted by unrelated conversations.
     """
     soonest_remaining = None
     for cid, rec in list(_pending_msgs.items()):
+        if only is not None and cid != only:
+            continue
         quiet = now - rec["last_ts"]
         if quiet >= settle:
             return cid, None
@@ -60,6 +65,17 @@ def _scan_settled(now: float, settle: float) -> Tuple[Optional[int], Optional[fl
         if soonest_remaining is None or rem < soonest_remaining:
             soonest_remaining = rem
     return None, soonest_remaining
+
+
+async def _wait_target(chat_id, account=None) -> Optional[int]:
+    """Marked chat id to wait for, or None to wait for any chat."""
+    if chat_id is None or chat_id == "":
+        return None
+    resolved = apply_alias(chat_id)
+    if isinstance(resolved, int):
+        return resolved
+    entity = await resolve_entity(resolved, get_client(account))
+    return get_marked_id(entity)
 
 
 def _burst_summary(chat_id: int, rec: Dict[str, Any]) -> Dict[str, Any]:
@@ -236,7 +252,11 @@ def register_incoming_handlers() -> None:
         title="Wait For New Message", openWorldHint=True, readOnlyHint=True
     )
 )
-async def wait_for_new_message(timeout: float = 50.0) -> str:
+async def wait_for_new_message(
+    timeout: float = 50.0,
+    chat_id: Optional[Union[int, str]] = None,
+    account: Optional[str] = None,
+) -> str:
     """
     Block until a new incoming private message from a non-bot user arrives, then
     return immediately with the list of chats that currently have pending
@@ -251,28 +271,51 @@ async def wait_for_new_message(timeout: float = 50.0) -> str:
 
     Args:
         timeout: Max seconds to block (default 50).
+        chat_id: Wait for THIS chat only (ID, username, or a saved contact alias).
+            Pass it whenever you are waiting for one person's reply: without it
+            any unrelated conversation wakes the call and you burn turns on
+            messages you are not waiting for. Other chats keep accumulating and
+            are still there when you ask for them.
     """
     try:
+        target = await _wait_target(chat_id, account)
         ev = _get_activity_event()
-        if not _pending_msgs:
+        deadline = time.monotonic() + timeout
+        while True:
+            pending = {
+                cid: rec for cid, rec in _pending_msgs.items() if target is None or cid == target
+            }
+            if pending:
+                chats = [
+                    {
+                        "chat_id": cid,
+                        "name": sanitize_name(rec["name"]),
+                        "username": rec["username"],
+                        "count": rec["count"],
+                        "last_message_id": rec["last_id"],
+                    }
+                    for cid, rec in pending.items()
+                ]
+                return json.dumps({"event": True, "pending_chats": chats}, ensure_ascii=False)
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return json.dumps(
+                    {"event": False, "reason": "timeout", "waiting_for": target},
+                    ensure_ascii=False,
+                )
             ev.clear()
             try:
-                await asyncio.wait_for(ev.wait(), timeout=timeout)
+                # Activity in another chat wakes the event but not this call:
+                # re-check and keep waiting for the chat that was asked for.
+                await asyncio.wait_for(ev.wait(), timeout=remaining)
             except asyncio.TimeoutError:
-                return json.dumps({"event": False, "reason": "timeout"}, ensure_ascii=False)
-        chats = [
-            {
-                "chat_id": cid,
-                "name": sanitize_name(rec["name"]),
-                "username": rec["username"],
-                "count": rec["count"],
-                "last_message_id": rec["last_id"],
-            }
-            for cid, rec in _pending_msgs.items()
-        ]
-        return json.dumps({"event": True, "pending_chats": chats}, ensure_ascii=False)
+                return json.dumps(
+                    {"event": False, "reason": "timeout", "waiting_for": target},
+                    ensure_ascii=False,
+                )
     except Exception as e:
-        return log_and_format_error("wait_for_new_message", e)
+        return log_and_format_error("wait_for_new_message", e, chat_id=chat_id)
 
 
 @mcp.tool(
@@ -280,7 +323,12 @@ async def wait_for_new_message(timeout: float = 50.0) -> str:
         title="Wait For Settled Message", openWorldHint=True, readOnlyHint=True
     )
 )
-async def wait_for_settled_message(settle_ms: int = 6000, max_wait_ms: int = 50000) -> str:
+async def wait_for_settled_message(
+    settle_ms: int = 6000,
+    max_wait_ms: int = 50000,
+    chat_id: Optional[Union[int, str]] = None,
+    account: Optional[str] = None,
+) -> str:
     """
     Event-driven, DEBOUNCED wait. Blocks until some private user chat has received
     one or more incoming messages AND then gone quiet for `settle_ms` — so a client
@@ -297,33 +345,46 @@ async def wait_for_settled_message(settle_ms: int = 6000, max_wait_ms: int = 500
         settle_ms: Quiet period after the LAST message before a burst is "settled"
             (default 6000 = 6s). Each new message in the chat resets this timer.
         max_wait_ms: Max total time to block before returning a timeout (default 50000).
+        chat_id: Wait for THIS chat only (ID, username, or a saved contact alias).
+            Use it when you are waiting for one person's answer — otherwise every
+            other conversation wakes the call, wastes a turn, and tempts you into
+            sleep-polling. Bursts from other chats stay pending and are returned by
+            later unfiltered calls.
     """
     try:
+        target = await _wait_target(chat_id, account)
         settle = settle_ms / 1000.0
         deadline = time.monotonic() + max_wait_ms / 1000.0
         ev = _get_activity_event()
         while True:
             now = time.monotonic()
-            settled_cid, soonest_remaining = _scan_settled(now, settle)
+            settled_cid, soonest_remaining = _scan_settled(now, settle, only=target)
             if settled_cid is not None:
                 rec = _pending_msgs.pop(settled_cid)
                 return json.dumps(_burst_summary(settled_cid, rec), ensure_ascii=False)
             remaining_total = deadline - now
             if remaining_total <= 0:
-                return json.dumps({"event": False, "reason": "timeout"}, ensure_ascii=False)
+                return json.dumps(
+                    {"event": False, "reason": "timeout", "waiting_for": target},
+                    ensure_ascii=False,
+                )
             if soonest_remaining is not None:
                 # A chat is pending but not yet quiet — sleep until it would settle,
                 # then re-check (a new message meanwhile resets its timer).
                 await asyncio.sleep(min(soonest_remaining, remaining_total))
             else:
-                # Nothing pending — block on new activity until deadline.
+                # Nothing pending for the target — block on new activity. Messages
+                # in other chats set the event, so re-check rather than return.
                 ev.clear()
                 try:
                     await asyncio.wait_for(ev.wait(), timeout=remaining_total)
                 except asyncio.TimeoutError:
-                    return json.dumps({"event": False, "reason": "timeout"}, ensure_ascii=False)
+                    return json.dumps(
+                        {"event": False, "reason": "timeout", "waiting_for": target},
+                        ensure_ascii=False,
+                    )
     except Exception as e:
-        return log_and_format_error("wait_for_settled_message", e)
+        return log_and_format_error("wait_for_settled_message", e, chat_id=chat_id)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Enable Incoming Feed", openWorldHint=True))
@@ -399,6 +460,9 @@ def incoming_feed_state() -> Dict[str, Any]:
         "settle_ms": _feed_settle_ms,
         # -F survives rotation/truncation and waits for a not-yet-created file.
         "watch_command": f"tail -n 0 -F {shlex.quote(str(path))}",
+        "watch_command_for_one_chat": (
+            f"tail -n 0 -F {shlex.quote(str(path))} | grep --line-buffered '\"chat_id\": <ID>'"
+        ),
         "autostart_pending": (
             not _feed_autostart_done
             and not feed_enabled()
