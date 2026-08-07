@@ -52,11 +52,13 @@ def test_acquire_session_skips_slot_locked_by_another_client(isolated_lock_dir):
         foreign.close()
 
 
-def test_acquire_session_falls_back_to_first_when_pool_exhausted(isolated_lock_dir):
+def test_acquire_session_raises_when_pool_exhausted(isolated_lock_dir):
     held = [_lock_slot(isolated_lock_dir, s) for s in ("AAA", "BBB")]
     try:
-        # Only two slots exist and both are taken -> reuse the first.
-        assert runtime._acquire_session(["AAA", "BBB"]) == "AAA"
+        # Only two slots exist and both are taken -> refuse rather than hand out
+        # a session another live client is already using.
+        with pytest.raises(RuntimeError, match="already claimed"):
+            runtime._acquire_session(["AAA", "BBB"])
     finally:
         for fh in held:
             fh.close()

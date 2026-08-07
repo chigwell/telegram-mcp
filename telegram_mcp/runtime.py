@@ -23,6 +23,7 @@ from mcp.types import Annotations, TextContent, ToolAnnotations
 from mcp.shared.exceptions import McpError
 from pythonjsonlogger import jsonlogger
 from telethon import TelegramClient, functions, types, utils
+from telethon.errors import AuthKeyDuplicatedError
 from telethon.sessions import StringSession
 from telethon.tl.types import (
     User,
@@ -396,13 +397,16 @@ def _acquire_session(pool: List[str]) -> str:
             pass
         print(f"Using Telegram session slot {idx + 1}/{len(pool)}.", file=sys.stderr)
         return session
-    print(
-        f"WARNING: all {len(pool)} pooled Telegram session(s) are already in use "
-        "by other clients; reusing the first (may raise AuthKeyDuplicatedError). "
-        "Add another session to TELEGRAM_SESSION_STRINGS to run more clients.",
-        file=sys.stderr,
+    # Handing out an already-claimed session here would make Telegram burn it
+    # with AuthKeyDuplicatedError — losing the slot for the client that owns it
+    # too. Refusing to start is recoverable; a burned session is not.
+    raise RuntimeError(
+        f"All {len(pool)} pooled Telegram session(s) are already claimed by other "
+        "live clients, so this one has no session to use. Add another session to "
+        "TELEGRAM_SESSION_STRINGS (generate it with "
+        "`uv run session_string_generator.py`) — one slot per concurrent client — "
+        "or stop one of the other clients."
     )
-    return pool[0]
 
 
 def _discover_accounts() -> dict[str, TelegramClient]:
@@ -524,6 +528,7 @@ def with_account(readonly=False):
 
 _last_conn_verified: dict[int, float] = {}
 _CONN_VERIFY_INTERVAL: float = 30.0  # seconds between live pings
+_RECONNECT_TIMEOUT: float = 30.0  # seconds before a reconnect attempt is abandoned
 
 
 async def _force_reconnect(cl: TelegramClient):
@@ -534,10 +539,26 @@ async def _force_reconnect(cl: TelegramClient):
         await cl.disconnect()
     except Exception:
         pass
-    await cl.connect()
+    try:
+        await asyncio.wait_for(cl.connect(), timeout=_RECONNECT_TIMEOUT)
+    except AuthKeyDuplicatedError as exc:
+        # Telegram permanently invalidates an auth key used from two IPs at
+        # once, so retrying here can never succeed — surface it instead of
+        # letting the caller sit in a reconnect loop.
+        raise RuntimeError(
+            "Telegram session is no longer usable: the same session string was "
+            "used by another client at the same time (AuthKeyDuplicatedError). "
+            "Give each concurrent client its own session via "
+            "TELEGRAM_SESSION_STRINGS or TELEGRAM_SESSION_STRING_<LABEL>, then "
+            "regenerate the burned session with `uv run session_string_generator.py`."
+        ) from exc
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError(
+            f"Reconnecting to Telegram timed out after {_RECONNECT_TIMEOUT:.0f}s."
+        ) from exc
     if not await cl.is_user_authorized():
         reconnect_logger.warning("Client not authorized after reconnect, calling start()...")
-        await cl.start()
+        await asyncio.wait_for(cl.start(), timeout=_RECONNECT_TIMEOUT)
     _last_conn_verified[id(cl)] = time.time()
     reconnect_logger.warning("Forced reconnect successful")
 
