@@ -10,6 +10,7 @@ async def send_file(
     chat_id: Union[int, str],
     file_path: Union[str, List[str]],
     caption: str = None,
+    reply_to: Optional[int] = None,
     ctx: Optional[Context] = None,
     account: str = None,
 ) -> str:
@@ -19,7 +20,13 @@ async def send_file(
         chat_id: The chat ID or username.
         file_path: Absolute or relative path to the file under allowed roots.
             Pass a list of 2-10 paths to send them as one Telegram media group.
-        caption: Optional caption for the file or media group.
+        caption: Optional caption for the file or media group. Markdown is
+            parsed, so `[text](url)` becomes a real hyperlink.
+        reply_to: Optional message ID to reply to. In a forum supergroup, pass
+            the TOPIC ID here to post the media inside that topic — this is the
+            only way to place media in a topic, since Telegram addresses topics
+            through the reply/thread field. Without it the media lands in the
+            group's General topic regardless of which topic you meant.
     """
     try:
         if isinstance(file_path, list):
@@ -27,6 +34,7 @@ async def send_file(
                 chat_id=chat_id,
                 file_paths=file_path,
                 caption=caption,
+                reply_to=reply_to,
                 ctx=ctx,
                 account=account,
             )
@@ -40,11 +48,17 @@ async def send_file(
         if path_error:
             return path_error
         entity = await resolve_entity(chat_id, cl)
-        await cl.send_file(entity, str(safe_path), caption=caption)
-        return f"File sent to chat {chat_id} from {safe_path}."
+        await cl.send_file(entity, str(safe_path), caption=caption, reply_to=reply_to)
+        target = f"chat {chat_id}" if reply_to is None else f"chat {chat_id} (reply_to {reply_to})"
+        return f"File sent to {target} from {safe_path}."
     except Exception as e:
         return log_and_format_error(
-            "send_file", e, chat_id=chat_id, file_path=file_path, caption=caption
+            "send_file",
+            e,
+            chat_id=chat_id,
+            file_path=file_path,
+            caption=caption,
+            reply_to=reply_to,
         )
 
 
@@ -52,6 +66,7 @@ async def _send_album(
     chat_id: Union[int, str],
     file_paths: List[str],
     caption: str = None,
+    reply_to: Optional[int] = None,
     ctx: Optional[Context] = None,
     account: str = None,
 ) -> str:
@@ -71,8 +86,9 @@ async def _send_album(
         safe_paths.append(str(safe_path))
 
     entity = await resolve_entity(chat_id, cl)
-    await cl.send_file(entity, safe_paths, caption=caption)
-    return f"Album sent to chat {chat_id} with {len(safe_paths)} files."
+    await cl.send_file(entity, safe_paths, caption=caption, reply_to=reply_to)
+    target = f"chat {chat_id}" if reply_to is None else f"chat {chat_id} (reply_to {reply_to})"
+    return f"Album sent to {target} with {len(safe_paths)} files."
 
 
 @mcp.tool(
@@ -84,6 +100,7 @@ async def send_album(
     chat_id: Union[int, str],
     file_paths: List[str],
     caption: str = None,
+    reply_to: Optional[int] = None,
     ctx: Optional[Context] = None,
     account: str = None,
 ) -> str:
@@ -94,6 +111,9 @@ async def send_album(
         chat_id: The chat ID or username.
         file_paths: 2-10 absolute or relative file paths under allowed roots.
         caption: Optional caption for the album. Telegram displays it on the first item.
+        reply_to: Optional message ID to reply to. In a forum supergroup, pass the
+            TOPIC ID here to post the album inside that topic; without it the
+            album lands in the group's General topic.
     """
     try:
         if not isinstance(file_paths, list):
@@ -102,12 +122,18 @@ async def send_album(
             chat_id=chat_id,
             file_paths=file_paths,
             caption=caption,
+            reply_to=reply_to,
             ctx=ctx,
             account=account,
         )
     except Exception as e:
         return log_and_format_error(
-            "send_album", e, chat_id=chat_id, file_paths=file_paths, caption=caption
+            "send_album",
+            e,
+            chat_id=chat_id,
+            file_paths=file_paths,
+            caption=caption,
+            reply_to=reply_to,
         )
 
 
