@@ -8,11 +8,12 @@ class _DummyClient:
     def __init__(self):
         self.sent = None
 
-    async def send_file(self, entity, file_paths, caption=None):
+    async def send_file(self, entity, file_paths, caption=None, reply_to=None):
         self.sent = {
             "entity": entity,
             "file_paths": file_paths,
             "caption": caption,
+            "reply_to": reply_to,
         }
 
 
@@ -52,6 +53,67 @@ async def test_album_mode_sends_multiple_files_as_one_media_group(
         "entity": "entity:AgenticAIChat",
         "file_paths": [str(first), str(second)],
         "caption": "pick one",
+        "reply_to": None,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["send_album", "send_file"])
+async def test_album_mode_passes_topic_id_as_reply_to(tmp_path, monkeypatch, tool_name):
+    root = (tmp_path / "root").resolve()
+    root.mkdir()
+    first = root / "one.png"
+    second = root / "two.png"
+    first.write_bytes(b"png-one")
+    second.write_bytes(b"png-two")
+
+    client = _DummyClient()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root])
+    monkeypatch.setattr(media, "clients", {"default": client})
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+
+    async def _resolve_entity(chat_id, cl):
+        return "entity:forum"
+
+    monkeypatch.setattr(media, "resolve_entity", _resolve_entity)
+
+    tool = getattr(media, tool_name)
+    result = await tool(
+        "ForumChat",
+        ["one.png", str(second)],
+        caption="topic post",
+        topic_id=777,
+    )
+
+    assert result == "Album sent to chat ForumChat with 2 files."
+    assert client.sent["reply_to"] == 777
+
+
+@pytest.mark.asyncio
+async def test_send_file_passes_topic_id_as_reply_to(tmp_path, monkeypatch):
+    root = (tmp_path / "root").resolve()
+    root.mkdir()
+    path = root / "doc.pdf"
+    path.write_bytes(b"%PDF")
+
+    client = _DummyClient()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root])
+    monkeypatch.setattr(media, "clients", {"default": client})
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+
+    async def _resolve_entity(chat_id, cl):
+        return "entity:forum"
+
+    monkeypatch.setattr(media, "resolve_entity", _resolve_entity)
+
+    result = await media.send_file("ForumChat", "doc.pdf", caption="hello", topic_id=42)
+
+    assert result == f"File sent to chat ForumChat from {path}."
+    assert client.sent == {
+        "entity": "entity:forum",
+        "file_paths": str(path),
+        "caption": "hello",
+        "reply_to": 42,
     }
 
 

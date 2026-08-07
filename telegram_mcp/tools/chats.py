@@ -235,8 +235,9 @@ async def list_topics(
     """
     Retrieve forum topics from a supergroup with the forum feature enabled.
 
-    Note for LLM: You can send a message to a selected topic via reply_to_message tool
-    by using Topic ID as the message_id parameter.
+    Note for LLM: Send into a topic by passing Topic ID as topic_id to send_file /
+    send_album / send_voice / send_sticker / send_gif, or as message_id to
+    reply_to_message for text.
 
     Args:
         chat_id: The ID of the forum-enabled chat (supergroup).
