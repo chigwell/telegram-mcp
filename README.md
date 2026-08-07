@@ -307,6 +307,11 @@ Generate extra sessions with `uv run session_string_generator.py`. The pool
 takes precedence over `TELEGRAM_SESSION_STRING` for the default account. As an
 extra safety net, a transient `AuthKeyDuplicatedError` at connect time (e.g.
 during a VPN reconnect) is retried with backoff before the server gives up.
+
+Size the pool to the number of clients you actually run concurrently. If every
+slot is already claimed, the server refuses to start with an explicit error
+rather than reusing a session another client holds — reuse would make Telegram
+permanently invalidate that session for both clients.
 - "Send this from my work account to @example"
 
 ## Device Identity

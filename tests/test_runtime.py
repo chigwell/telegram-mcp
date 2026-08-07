@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -428,6 +429,37 @@ async def test_ensure_connected_skips_recently_verified_client(monkeypatch):
     await runtime.ensure_connected(client)
 
     assert client.calls == ["is_connected"]
+
+
+class _HangingConnectClient(_ConnectivityClient):
+    async def connect(self):
+        self.calls.append("connect")
+        await asyncio.sleep(3600)
+
+
+class _DuplicatedKeyClient(_ConnectivityClient):
+    async def connect(self):
+        from telethon.errors import AuthKeyDuplicatedError
+
+        self.calls.append("connect")
+        raise AuthKeyDuplicatedError(request=None)
+
+
+@pytest.mark.asyncio
+async def test_force_reconnect_times_out_instead_of_hanging(monkeypatch):
+    client = _HangingConnectClient(connected=False, authorized=True)
+    monkeypatch.setattr(runtime, "_RECONNECT_TIMEOUT", 0.01)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        await runtime._force_reconnect(client)
+
+
+@pytest.mark.asyncio
+async def test_force_reconnect_reports_burned_session(monkeypatch):
+    client = _DuplicatedKeyClient(connected=False, authorized=True)
+
+    with pytest.raises(RuntimeError, match="no longer usable"):
+        await runtime._force_reconnect(client)
 
 
 class _ResolvingClient:
