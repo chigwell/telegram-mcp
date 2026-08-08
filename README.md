@@ -29,6 +29,7 @@ Message sent successfully:
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
 - [MCP Client Configuration](#mcp-client-configuration)
+- [Shared Server (SSE Transport)](#shared-server-sse-transport)
 - [Multi-Account Setup](#multi-account-setup)
 - [Device Identity](#device-identity)
 - [Proxy Support](#proxy-support)
@@ -287,6 +288,91 @@ For stdio-only clients, bridge with [mcp-remote](https://www.npmjs.com/package/m
   }
 }
 ```
+
+## Shared Server (SSE Transport)
+
+By default each MCP client starts its **own** `telegram-mcp` process over stdio.
+With several clients on one machine that means several Telethon sessions against
+Telegram, which Telegram throttles or flags, and one resident process per client.
+
+Set `MCP_TRANSPORT=sse` to run **one long-lived server per machine** instead. All
+clients then attach to it over HTTP and share a single Telegram connection.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MCP_TRANSPORT` | `stdio` | `sse` runs the shared HTTP server; anything else keeps stdio |
+| `MCP_HOST` | `127.0.0.1` | Bind address. Keep it on loopback unless you front it with a proxy |
+| `MCP_PORT` | `8765` | Port the server listens on |
+
+Start the server:
+
+```bash
+MCP_TRANSPORT=sse MCP_PORT=8765 uv run main.py
+```
+
+Point every client at it instead of giving each one a `command`:
+
+```json
+{
+  "mcpServers": {
+    "telegram-mcp": {
+      "type": "sse",
+      "url": "http://127.0.0.1:8765/sse"
+    }
+  }
+}
+```
+
+### Running it as a service
+
+The point of the shared server is that it outlives any single client, so run it
+under a service manager.
+
+**macOS (launchd)** — `~/Library/LaunchAgents/telegram-mcp-sse.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>telegram-mcp-sse</string>
+  <key>ProgramArguments</key><array>
+    <string>/full/path/to/telegram-mcp/.venv/bin/python</string>
+    <string>/full/path/to/telegram-mcp/main.py</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>MCP_TRANSPORT</key><string>sse</string>
+    <key>MCP_HOST</key><string>127.0.0.1</string>
+    <key>MCP_PORT</key><string>8765</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict></plist>
+```
+
+Load it with `launchctl load ~/Library/LaunchAgents/telegram-mcp-sse.plist`.
+
+**Linux (systemd user unit)** — `~/.config/systemd/user/telegram-mcp-sse.service`:
+
+```ini
+[Service]
+Environment=MCP_TRANSPORT=sse
+Environment=MCP_HOST=127.0.0.1
+Environment=MCP_PORT=8765
+WorkingDirectory=/full/path/to/telegram-mcp
+ExecStart=/full/path/to/telegram-mcp/.venv/bin/python main.py
+Restart=always
+
+[Install]
+WantedBy=default.target
+```
+
+Enable it with `systemctl --user enable --now telegram-mcp-sse`.
+
+> **If you run a process reaper on the same machine:** a daemon started by
+> launchd or systemd has **PPID 1**, which is also the signature of an orphaned
+> child process. Janitor scripts that kill "orphaned" MCP processes will kill the
+> shared server; a supervisor with `KeepAlive`/`Restart=always` then restarts it,
+> so the churn is easy to miss. Add the service to the janitor's allowlist.
 
 ## Multi-Account Setup
 
