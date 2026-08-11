@@ -732,7 +732,29 @@ def log_and_format_error(
     if user_message:
         return user_message
 
+    # MTProto schema drift must not hide behind the generic code. Telethon releases lag
+    # behind production Telegram, and when the server sends an object whose constructor
+    # the installed schema does not know, the read buffer desynchronises: some tools fail
+    # while their neighbours keep working. Reported as a generic error, that pattern is
+    # indistinguishable from "no such user/chat" and sends debugging the wrong way.
+    if _is_schema_drift(error):
+        return (
+            f"MTProto schema mismatch: the installed Telethon does not know an object the "
+            f"server sent ({error}). This is NOT a missing user or chat — the data arrived, "
+            f"parsing it failed. Upgrade Telethon; if it is already the latest release, its "
+            f"schema is behind the current layer (code: {error_code})."
+        )
+
     return f"An error occurred (code: {error_code}). Check mcp_errors.log for details."
+
+
+def _is_schema_drift(error: Exception) -> bool:
+    """True for TypeNotFoundError — the installed TL schema is older than what the server sends."""
+    try:
+        from telethon.errors.common import TypeNotFoundError
+    except Exception:  # telethon missing or moved — not this helper's problem
+        return False
+    return isinstance(error, TypeNotFoundError)
 
 
 def validate_id(*param_names_to_validate):
