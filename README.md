@@ -597,6 +597,39 @@ Telegram messages, display names, chat titles, and button labels are untrusted c
 - **Auth errors after password changes:** regenerate your session string.
 - **Bot-only tool rejected:** regular user accounts cannot manage bot command settings.
 - **Need details:** check your MCP client logs, terminal output, and `mcp_errors.log`.
+- **Some tools fail while neighbours work** (`list_chats`, `get_common_chats`, `resolve_username`,
+  `get_full_user` error out, but `get_chats` / `search_contacts` are fine) — this is MTProto
+  **schema drift**, not a missing user or chat. See below.
+
+### MTProto schema drift (`TypeNotFoundError`)
+
+Telethon releases lag behind production Telegram. As of 11.08.2026 the newest release
+(1.44.0, built for **LAYER 227**) does not know objects the server now sends on **LAYER 228**,
+where the `user` constructor changed (`0x31774388` → `0xb1b8cc83`).
+
+An unknown constructor does not just drop a field — it **desynchronises the whole read buffer**.
+So the reported constructor id is usually garbage that exists in no schema at all, only *some*
+calls break, and the failure reads like "no such user". Upgrading Telethon does not help: 1.44.0
+is already the latest published release.
+
+Fix — rebuild the TL classes against the current layer:
+
+```bash
+uv run python scripts/patch_telethon_layer.py            # apply
+uv run python scripts/patch_telethon_layer.py --check     # compare installed vs vendored layer
+uv run python scripts/patch_telethon_layer.py --restore   # roll back from the automatic backup
+```
+
+The script regenerates `telethon/tl/{types,functions,alltlobjects.py}` from
+`vendor/api-layer228.tl` (taken from the Telegram Desktop dev branch) using the vendored
+Telethon generator, and leaves the rest of the library untouched. A backup of the original
+is written next to the package on first run, so rollback needs no reinstall.
+
+⚠️ **Already running processes keep the old code in memory** — only newly started ones pick the
+patch up. Restart your MCP clients (or the sessions that spawned them) after applying.
+
+When Telethon ships a release for the current layer, drop the vendored schema and this script.
+
 
 ## Contributing
 
