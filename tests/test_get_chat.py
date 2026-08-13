@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from telethon.tl import types as tl_types
 
 from telegram_mcp.tools import chats
 
@@ -116,3 +117,29 @@ async def test_get_chat_marks_archived_from_folder_id(monkeypatch):
 
     assert payload["archived"] is True
     assert payload["last_message"]["sender"] == "Ada Lovelace"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "photo, expected",
+    [
+        # Any real ChatPhoto/UserProfilePhoto object means an avatar is set
+        (SimpleNamespace(photo_id=42), True),
+        (tl_types.ChatPhotoEmpty(), False),
+        (tl_types.UserProfilePhotoEmpty(), False),
+        (None, False),
+    ],
+)
+async def test_get_chat_reports_avatar_presence(monkeypatch, photo, expected):
+    entity = SimpleNamespace(title="Avatar Probe", username=None, photo=photo)
+    last_msg = SimpleNamespace(
+        date=datetime.datetime(2026, 7, 19, 1, 0, 0, tzinfo=datetime.timezone.utc),
+        message="hi",
+        sender=SimpleNamespace(first_name="Ada", last_name=None, title=None),
+    )
+    client = FakeChatClient(entity, last_msg)
+    _patch(monkeypatch, client, entity)
+
+    payload = _parse(await chats.get_chat(chat_id=-100123, account=None))
+
+    assert payload["has_photo"] is expected

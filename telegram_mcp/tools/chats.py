@@ -637,6 +637,14 @@ async def get_chat(chat_id: Union[int, str], account: str = None) -> str:
             record["bot"] = bool(entity.bot)
             record["verified"] = bool(entity.verified)
 
+        # Photo presence — the entity carries ChatPhoto/ChatPhotoEmpty (chats/channels)
+        # or UserProfilePhoto/UserProfilePhotoEmpty (users). Surfaced so callers can
+        # detect chats that have no avatar set.
+        photo = getattr(entity, "photo", None)
+        record["has_photo"] = photo is not None and not isinstance(
+            photo, (types.ChatPhotoEmpty, types.UserProfilePhotoEmpty)
+        )
+
         # Get unread count + last activity for THIS specific peer.
         #
         # NOTE: do NOT use get_dialogs(limit=1, offset_peer=entity) here. In
