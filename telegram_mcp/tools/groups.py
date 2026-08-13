@@ -100,17 +100,52 @@ async def invite_to_group(
                 return f"Error: User with ID {user_id} could not be found. {e}"
 
         try:
-            result = await cl(
-                functions.channels.InviteToChannelRequest(channel=entity, users=users_to_add)
-            )
+            if isinstance(entity, Channel):
+                # Supergroup or broadcast channel
+                result = await cl(
+                    functions.channels.InviteToChannelRequest(channel=entity, users=users_to_add)
+                )
 
-            invited_count = 0
-            if hasattr(result, "users") and result.users:
-                invited_count = len(result.users)
-            elif hasattr(result, "count"):
-                invited_count = result.count
+                invited_count = 0
+                if hasattr(result, "users") and result.users:
+                    invited_count = len(result.users)
+                elif hasattr(result, "count"):
+                    invited_count = result.count
 
-            return f"Successfully invited {invited_count} users to {sanitize_name(entity.title)}"
+                return (
+                    f"Successfully invited {invited_count} users to {sanitize_name(entity.title)}"
+                )
+            else:
+                # Basic group (telethon Chat): channels.InviteToChannel cannot be used
+                # (it casts to InputChannel and fails). Add each user individually via
+                # messages.AddChatUser instead.
+                invited_count = 0
+                already = 0
+                failures = []
+                for user in users_to_add:
+                    try:
+                        await cl(
+                            functions.messages.AddChatUserRequest(
+                                chat_id=entity.id, user_id=user, fwd_limit=100
+                            )
+                        )
+                        invited_count += 1
+                    except telethon.errors.rpcerrorlist.UserAlreadyParticipantError:
+                        already += 1
+                    except (
+                        telethon.errors.rpcerrorlist.UserNotMutualContactError,
+                        telethon.errors.rpcerrorlist.UserPrivacyRestrictedError,
+                    ) as ue:
+                        failures.append(f"{getattr(user, 'id', user)}: {type(ue).__name__}")
+
+                msg = (
+                    f"Successfully invited {invited_count} users to {sanitize_name(entity.title)}"
+                )
+                if already:
+                    msg += f" ({already} already a participant)"
+                if failures:
+                    msg += f" (failed: {'; '.join(failures)})"
+                return msg
         except telethon.errors.rpcerrorlist.UserNotMutualContactError:
             return "Error: Cannot invite users who are not mutual contacts. Please ensure the users are in your contacts and have added you back."
         except telethon.errors.rpcerrorlist.UserPrivacyRestrictedError:
