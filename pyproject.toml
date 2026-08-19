@@ -53,6 +53,9 @@ telegram-mcp-generate-session = "session_string_generator:main"
 [tool.black]
 line-length = 99
 target-version = ['py311']
+# vendor/ is third-party code (the Telethon generator) — keep it byte-identical to
+# upstream so it stays diffable when the vendored copy is refreshed.
+extend-exclude = '^/vendor/'
 
 [tool.flake8]
 ignore = ["E203", "E501", "W503"]
@@ -65,6 +68,7 @@ exclude = [
     "build",
     "dist",
     "docs/source/conf.py",
+    "vendor",
 ]
 
 [dependency-groups]
