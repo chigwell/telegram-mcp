@@ -1,6 +1,7 @@
 """Messages MCP tools."""
 
 from telegram_mcp.runtime import *
+from telegram_mcp import transcription
 
 # Domain used to build message permalinks. Overridable because the default is a
 # single point of failure: on 2026-07-13 the .me registry put t.me on serverHold
@@ -116,13 +117,17 @@ def get_reply_quote(msg) -> Optional[dict]:
     return quote
 
 
-def message_to_dict(msg) -> dict:
+def message_to_dict(msg, chat_id: Optional[int] = None) -> dict:
     """API-complete but compact Telethon message view (omit empty fields).
 
     The goal is for the MCP output to match the API object in completeness, rather
     than losing data such as media, albums, forwards, edits, buttons, reactions,
     and so on. All these fields are already present in the message object returned
     by the same get_messages request.
+
+    chat_id (the numeric chat this message belongs to) enables voice/video-note
+    transcript enrichment via the cache - omit it to get the old text-only
+    behavior (used by existing tests with bare fake messages).
     """
     d = {"id": msg.id, "sender": get_sender_name(msg), "date": msg.date}
 
@@ -142,6 +147,18 @@ def message_to_dict(msg) -> dict:
     media_label = get_media_label(msg)
     if media_label:
         d["media"] = media_label
+
+    if not text:
+        voice_info = transcription.voice_attachment_info(msg, chat_id)
+        if voice_info is not None:
+            if voice_info["duration"] is not None:
+                d["duration"] = voice_info["duration"]
+            if voice_info["transcript_status"] == "ready":
+                d["transcript"] = voice_info["transcript"]
+                d["transcript_source"] = voice_info["transcript_source"]
+                d["transcript_note"] = "Machine transcript, not a verbatim quote."
+            elif voice_info["transcript_status"] == "pending":
+                d["transcript_status"] = "pending"
 
     grouped_id = getattr(msg, "grouped_id", None)
     if grouped_id:
@@ -185,9 +202,9 @@ def message_to_dict(msg) -> dict:
                 uname = getattr(chat, "username", None)
                 if uname:
                     finfo["from_username"] = uname
-            chat_id = getattr(fo, "chat_id", None)
-            if chat_id is not None:
-                finfo["from_chat_id"] = chat_id
+            fwd_chat_id = getattr(fo, "chat_id", None)
+            if fwd_chat_id is not None:
+                finfo["from_chat_id"] = fwd_chat_id
             sender = getattr(fo, "sender", None)
             if sender is not None:
                 sname = " ".join(
@@ -261,8 +278,12 @@ def message_to_dict(msg) -> dict:
     return d
 
 
-def format_message_line(msg) -> str:
-    """Single-line human-readable message representation with ALL key flags."""
+def format_message_line(msg, chat_id: Optional[int] = None) -> str:
+    """Single-line human-readable message representation with ALL key flags.
+
+    chat_id enables voice/video-note transcript enrichment via the cache -
+    see message_to_dict for why it's optional.
+    """
     parts = [f"ID: {msg.id}", get_sender_info(msg), f"Date: {msg.date}"]
 
     reply_to_id = (
@@ -306,7 +327,11 @@ def format_message_line(msg) -> str:
         parts.append(engagement_info)
 
     raw = sanitize_user_content(msg.message) if getattr(msg, "message", None) else ""
-    safe_text = raw.replace("\n", "\\n") if raw else "[empty]"
+    if raw:
+        safe_text = raw.replace("\n", "\\n")
+    else:
+        voice_info = transcription.voice_attachment_info(msg, chat_id)
+        safe_text = transcription.render_voice_text(voice_info) if voice_info else "[empty]"
     return " | ".join(parts) + f" | Message: {safe_text}"
 
 
@@ -332,7 +357,9 @@ async def get_messages(
         messages = await cl.get_messages(entity, limit=page_size, add_offset=offset)
         if not messages:
             return "No messages found for this page."
-        lines = [format_message_line(msg) for msg in messages]
+        numeric_chat_id = get_marked_id(entity)
+        await transcription.prefetch_transcripts(cl, entity, numeric_chat_id, messages)
+        lines = [format_message_line(msg, numeric_chat_id) for msg in messages]
         return "\n".join(lines)
     except Exception as e:
         return log_and_format_error(
@@ -919,6 +946,9 @@ async def list_messages(
         if not messages:
             return "No messages found matching the criteria."
 
+        numeric_chat_id = get_marked_id(entity)
+        await transcription.prefetch_transcripts(cl, entity, numeric_chat_id, messages)
+
         records = []
         for msg in messages:
             record = {
@@ -934,6 +964,18 @@ async def list_messages(
             media_label = get_media_label(msg)
             if media_label:
                 record["media"] = media_label
+
+            if not getattr(msg, "message", None):
+                voice_info = transcription.voice_attachment_info(msg, numeric_chat_id)
+                if voice_info is not None:
+                    if voice_info["duration"] is not None:
+                        record["duration"] = voice_info["duration"]
+                    if voice_info["transcript_status"] == "ready":
+                        record["transcript"] = voice_info["transcript"]
+                        record["transcript_source"] = voice_info["transcript_source"]
+                        record["transcript_note"] = "Machine transcript, not a verbatim quote."
+                    elif voice_info["transcript_status"] == "pending":
+                        record["transcript_status"] = "pending"
 
             grouped_id = getattr(msg, "grouped_id", None)
             if grouped_id is not None:
@@ -952,6 +994,135 @@ async def list_messages(
         return format_tool_result(records)
     except Exception as e:
         return log_and_format_error("list_messages", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Transcribe Voice", openWorldHint=True, readOnlyHint=True)
+)
+@with_account(readonly=True)
+@validate_id("chat_id")
+async def transcribe_voice(
+    chat_id: Union[int, str],
+    message_id: int,
+    engine: str = None,
+    account: str = None,
+) -> str:
+    """
+    Transcribe a voice message or video note (video circle) to text.
+
+    Two engines behind one interface:
+    - "groq" (default, override with TELEGRAM_TRANSCRIBE_ENGINE): Groq-hosted
+      whisper-large-v3-turbo. Downloads the audio and sends it to Groq - not
+      free, and leaves the server. Does not drop the recording's last words.
+    - "telegram": native Telegram Premium transcription. Free, audio never
+      leaves Telegram, but empirically drops the last speech segment in
+      roughly 2 of 3 recordings (proven with per-segment timestamps). Use for
+      chats you don't want sent to a third party, or when Groq is unavailable.
+      Requires Telegram Premium on this account; polls briefly (up to ~20s)
+      while Telegram finishes a long recording.
+
+    Results are cached by (chat_id, message_id) - a repeat call for an
+    already-transcribed message returns the cached text without hitting
+    either API again.
+
+    The returned text is a machine transcript, not a verbatim quote: proper
+    names, punctuation and occasional words drift under both engines.
+
+    Args:
+        chat_id: The chat ID or username.
+        message_id: The message ID containing the voice/video-note media.
+        engine: "groq" or "telegram". Defaults to TELEGRAM_TRANSCRIBE_ENGINE
+            (groq unless configured otherwise).
+    """
+    try:
+        mode = transcription.transcribe_mode()
+        if mode == "off":
+            return json.dumps(
+                {"transcribed": False, "reason": "transcription_disabled"}, ensure_ascii=False
+            )
+
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        numeric_chat_id = get_marked_id(entity)
+
+        cached = transcription.get_cached_transcript(numeric_chat_id, message_id)
+        if cached is not None:
+            return json.dumps(
+                {
+                    "transcribed": True,
+                    "cached": True,
+                    "text": cached["text"],
+                    "source": cached["source"],
+                    "duration": cached["duration"],
+                    "note": "Machine transcript, not a verbatim quote.",
+                },
+                ensure_ascii=False,
+                default=json_serializer,
+            )
+
+        msg = await cl.get_messages(entity, ids=message_id)
+        if not msg:
+            return f"Message {message_id} not found."
+        if not transcription.is_transcribable(msg):
+            return f"Message {message_id} has no voice message or video note to transcribe."
+
+        chosen_engine = (engine or transcription.default_engine()).strip().lower()
+        if chosen_engine not in transcription.ENGINES:
+            return f"Invalid engine '{engine}'. Use 'telegram' or 'groq'."
+        if chosen_engine == "groq" and not os.getenv("GROQ_API_KEY"):
+            return (
+                "GROQ_API_KEY is not configured on this server. "
+                "Use engine='telegram' or set GROQ_API_KEY."
+            )
+
+        duration = transcription.voice_duration(msg)
+        result = await transcription.transcribe(cl, entity, msg, chosen_engine)
+
+        if result["status"] == "premium_required":
+            return premium_required_result("transcribe_voice (engine='telegram')")
+        if result["status"] == "pending":
+            return json.dumps(
+                {
+                    "transcribed": False,
+                    "reason": "pending",
+                    "duration": duration,
+                    "detail": "Telegram is still processing this recording. Retry shortly.",
+                },
+                ensure_ascii=False,
+            )
+        if result["status"] == "error":
+            return log_and_format_error(
+                "transcribe_voice",
+                RuntimeError(result.get("error", "unknown error")),
+                chat_id=chat_id,
+                message_id=message_id,
+                engine=chosen_engine,
+            )
+
+        transcription.save_transcript(
+            numeric_chat_id,
+            message_id,
+            chosen_engine,
+            result["text"],
+            duration=duration,
+            lang=result.get("lang"),
+        )
+        return json.dumps(
+            {
+                "transcribed": True,
+                "cached": False,
+                "text": result["text"],
+                "source": chosen_engine,
+                "duration": duration,
+                "note": "Machine transcript, not a verbatim quote.",
+            },
+            ensure_ascii=False,
+            default=json_serializer,
+        )
+    except Exception as e:
+        return log_and_format_error(
+            "transcribe_voice", e, chat_id=chat_id, message_id=message_id, engine=engine
+        )
 
 
 @mcp.tool(
@@ -1579,7 +1750,9 @@ async def get_history(chat_id: Union[int, str], limit: int = 100, account: str =
         entity = await resolve_entity(chat_id, cl)
         messages = await cl.get_messages(entity, limit=limit)
 
-        records = [message_to_dict(msg) for msg in messages]
+        numeric_chat_id = get_marked_id(entity)
+        await transcription.prefetch_transcripts(cl, entity, numeric_chat_id, messages)
+        records = [message_to_dict(msg, numeric_chat_id) for msg in messages]
         return format_tool_result(records)
     except Exception as e:
         return log_and_format_error("get_history", e, chat_id=chat_id, limit=limit)

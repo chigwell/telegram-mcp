@@ -57,7 +57,24 @@ The server currently includes 80+ MCP tools grouped into these areas:
 When a reference is unknown, resembles one contact, matches several, or points at a contact that no longer resolves, tools send nothing and return a structured instruction telling the agent exactly what to ask you, to save the answer with `set_contact_alias`, and to retry once. `list_contact_aliases` shows one row per person with all their aliases (use it to spot a wrong memory), `delete_contact_alias` forgets one, and repointing an alias at someone else requires `replace=True`. The save path itself refuses a target it would have to guess at: contacts are saved by @username, phone, numeric ID, or an alias already confirmed for them.
 
 Aliases live in `${XDG_STATE_HOME:-~/.local/state}/telegram-mcp/aliases.json` (owner-only, written atomically); `TELEGRAM_ALIASES_FILE` overrides the path, and a pre-existing `aliases.json` next to the code is still read as a fallback.
-- **Media:** send files, download media, upload files, send voice notes, stickers, GIFs, and inspect message media.
+- **Media:** send files, download media, upload files, send voice notes, stickers, GIFs, inspect message media, and transcribe voice messages/video notes (see below).
+
+### Voice transcription
+
+`transcribe_voice(chat_id, message_id, engine=None)` turns a voice message or video note into text. Two engines are available:
+
+- `groq` (default): uploads the recording to Groq's hosted `whisper-large-v3-turbo`. Leaves the server and costs a download+upload per call, but doesn't drop the recording's last few words the way native transcription does. Requires `GROQ_API_KEY`.
+- `telegram`: native Telegram Premium transcription (`messages.TranscribeAudioRequest`). Free and never leaves Telegram, but empirically drops the last speech segment in roughly 2 of 3 recordings and requires Telegram Premium on the account. Long recordings come back `pending` and are polled automatically.
+
+The engine is chosen per call via the `engine` argument, or otherwise defaults to `TELEGRAM_TRANSCRIBE_ENGINE` (`groq` or `telegram`). Results are cached by `(chat_id, message_id)` in a local SQLite file so repeat reads and repeat listings never re-transcribe the same message. Every transcript is returned with a `note` marking it as a machine transcript, not a verbatim quote — treat it as a paraphrase, not exact wording.
+
+`get_history`, `get_messages`, and `list_messages` fill in already-cached transcripts for voice messages instead of leaving the text empty, controlled by `TELEGRAM_TRANSCRIBE`:
+
+- `off`: `transcribe_voice` is disabled and listings never show transcripts.
+- `on-demand` (default): listings show cached transcripts but never spend an API call fetching a new one.
+- `auto`: listings also prefetch missing transcripts, bounded per call by `TELEGRAM_TRANSCRIBE_MAX_VOICES`/`TELEGRAM_TRANSCRIBE_MAX_SECONDS` (Groq isn't free, so this prefetch is budgeted rather than unbounded).
+
+The cache lives in `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default `data/transcripts`), written as a 700 directory / 600 file since it holds personal-chat text in plaintext — see [Docker](#docker) for why this needs its own volume mount in a container.
 - **Profile and privacy:** get your own account info, update profile fields, set or delete profile photos, inspect privacy settings, get user info/photos/status, and manage bot commands.
 - **Folders and drafts:** list, create, update, reorder, and delete Telegram folders; save, list, and clear drafts.
 - **Events:** wait for incoming messages with debounce (`wait_for_new_message`, `wait_for_settled_message`), optionally for one chat only via `chat_id` — without it any unrelated conversation wakes the wait — or enable the opt-in incoming event feed for callback-style delivery (see below).
@@ -160,6 +177,23 @@ reduced Telegram account permission. The Telegram session string still has its
 normal authority inside the server process; read-only mode only prevents
 non-read-only tools from being registered and exposed through MCP. Accepted
 values are `all` (the default), `read-only`, and `read-only+<tool>,<tool>`.
+
+Voice transcription (see [Voice transcription](#voice-transcription) above) is
+off by default in the sense that no transcript is ever fetched unless you ask
+for one — `transcribe_voice` is always available, and listings only pick up
+already-cached transcripts. Enable prefetching or pick an engine explicitly:
+
+```env
+TELEGRAM_TRANSCRIBE=on-demand       # off / on-demand (default) / auto
+TELEGRAM_TRANSCRIBE_ENGINE=groq     # groq (default) or telegram
+GROQ_API_KEY=your_groq_api_key_here # required whenever engine=groq is used
+```
+
+`engine=groq` requires `GROQ_API_KEY`; `engine=telegram` requires Telegram
+Premium on the account. `TELEGRAM_TRANSCRIBE_MAX_VOICES` (default 5) and
+`TELEGRAM_TRANSCRIBE_MAX_SECONDS` (default 300) bound how much `auto` mode
+prefetches per listing call; `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default
+`data/transcripts`) sets where the SQLite cache is written.
 
 Run the server locally:
 
@@ -496,6 +530,16 @@ The bundled Compose file runs the same setup:
 
 ```bash
 docker compose up --build -d
+```
+
+It also mounts `./transcript_cache` into the container at
+`/app/data/transcripts` so the voice-transcription SQLite cache (see
+[Voice transcription](#voice-transcription)) survives a rebuild instead of
+living in the container's writable layer. Create it once, owned by the
+container's `appuser` (uid 1000), before starting:
+
+```bash
+mkdir -p ./transcript_cache && chown 1000:1000 ./transcript_cache
 ```
 
 ### One container per client (stdio)
