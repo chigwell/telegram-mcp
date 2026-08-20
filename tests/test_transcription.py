@@ -107,6 +107,57 @@ def test_cache_keyed_by_chat_and_message_independently(transcript_cache_dir):
     assert transcription.get_cached_transcript(1, 999) is None
 
 
+def test_cache_pinned_to_an_engine_never_serves_the_other_engines_text(transcript_cache_dir):
+    """The whole point of choosing groq is that the native engine drops the
+    recording's last segment. A telegram transcript answering a groq request
+    would hand back that truncated text with no way to tell."""
+    transcription.save_transcript(1, 2, "telegram", "truncated tail")
+    assert transcription.get_cached_transcript(1, 2, source="groq") is None
+    assert transcription.get_cached_transcript(1, 2, source="telegram")["text"] == (
+        "truncated tail"
+    )
+
+
+def test_cache_keeps_both_engines_side_by_side(transcript_cache_dir):
+    transcription.save_transcript(1, 2, "telegram", "native text")
+    transcription.save_transcript(1, 2, "groq", "groq text")
+    assert transcription.get_cached_transcript(1, 2, source="telegram")["text"] == "native text"
+    assert transcription.get_cached_transcript(1, 2, source="groq")["text"] == "groq text"
+
+
+def test_legacy_cache_keyed_without_engine_is_migrated_in_place(transcript_cache_dir):
+    """Builds before the fix keyed on (chat_id, message_id) alone. Rows must
+    survive the rebuild, and the pinned lookup must start working on them."""
+    import sqlite3
+
+    path = transcription._cache_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.executescript(
+        """
+        CREATE TABLE transcripts (
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            text TEXT NOT NULL,
+            duration INTEGER,
+            lang TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (chat_id, message_id)
+        );
+        INSERT INTO transcripts VALUES (1, 2, 'telegram', 'old row', 23, 'ru', '2026-08-20');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    assert transcription.get_cached_transcript(1, 2, source="telegram")["text"] == "old row"
+    assert transcription.get_cached_transcript(1, 2, source="groq") is None
+    transcription.save_transcript(1, 2, "groq", "new row")
+    assert transcription.get_cached_transcript(1, 2, source="groq")["text"] == "new row"
+    assert transcription.get_cached_transcript(1, 2, source="telegram")["text"] == "old row"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permissions only")
 def test_cache_file_and_directory_get_restrictive_permissions(transcript_cache_dir):
     transcription.save_transcript(1, 2, "groq", "hi")

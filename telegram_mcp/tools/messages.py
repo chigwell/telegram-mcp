@@ -1021,9 +1021,11 @@ async def transcribe_voice(
       Requires Telegram Premium on this account; polls briefly (up to ~20s)
       while Telegram finishes a long recording.
 
-    Results are cached by (chat_id, message_id) - a repeat call for an
-    already-transcribed message returns the cached text without hitting
-    either API again.
+    Results are cached per engine, by (chat_id, message_id, engine) - a
+    repeat call with the same engine returns the cached text without
+    hitting either API again. Asking for an engine that has no cached
+    result transcribes with it, even when the other engine's text is
+    already cached.
 
     The returned text is a machine transcript, not a verbatim quote: proper
     names, punctuation and occasional words drift under both engines.
@@ -1045,7 +1047,16 @@ async def transcribe_voice(
         entity = await resolve_entity(chat_id, cl)
         numeric_chat_id = get_marked_id(entity)
 
-        cached = transcription.get_cached_transcript(numeric_chat_id, message_id)
+        chosen_engine = (engine or transcription.default_engine()).strip().lower()
+        if chosen_engine not in transcription.ENGINES:
+            return f"Invalid engine '{engine}'. Use 'telegram' or 'groq'."
+
+        # Pinned to the chosen engine on purpose: a cached telegram transcript
+        # must not answer a groq request. The native engine drops the last
+        # speech segment and the loss cannot be seen in the text.
+        cached = transcription.get_cached_transcript(
+            numeric_chat_id, message_id, source=chosen_engine
+        )
         if cached is not None:
             return json.dumps(
                 {
@@ -1066,9 +1077,6 @@ async def transcribe_voice(
         if not transcription.is_transcribable(msg):
             return f"Message {message_id} has no voice message or video note to transcribe."
 
-        chosen_engine = (engine or transcription.default_engine()).strip().lower()
-        if chosen_engine not in transcription.ENGINES:
-            return f"Invalid engine '{engine}'. Use 'telegram' or 'groq'."
         if chosen_engine == "groq" and not os.getenv("GROQ_API_KEY"):
             return (
                 "GROQ_API_KEY is not configured on this server. "
