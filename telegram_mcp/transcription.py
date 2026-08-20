@@ -118,10 +118,11 @@ def _connect() -> sqlite3.Connection:
             duration INTEGER,
             lang TEXT,
             created_at TEXT NOT NULL,
-            PRIMARY KEY (chat_id, message_id)
+            PRIMARY KEY (chat_id, message_id, source)
         )
         """
     )
+    _migrate_source_into_key(conn)
     conn.commit()
     try:
         os.chmod(path, 0o600)
@@ -130,14 +131,65 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-def get_cached_transcript(chat_id: int, message_id: int) -> Optional[dict]:
+def _migrate_source_into_key(conn: sqlite3.Connection) -> None:
+    """Older builds keyed the cache on (chat_id, message_id) alone, so a cheap
+    telegram transcript permanently shadowed the groq one - including for
+    callers that asked for groq explicitly. Rebuild such a table in place."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transcripts'"
+    ).fetchone()
+    if not row or not row[0]:
+        return
+    if "PRIMARY KEY (chat_id, message_id, source)" in row[0]:
+        return
+    conn.executescript(
+        """
+        ALTER TABLE transcripts RENAME TO transcripts_legacy;
+        CREATE TABLE transcripts (
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            text TEXT NOT NULL,
+            duration INTEGER,
+            lang TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (chat_id, message_id, source)
+        );
+        INSERT OR IGNORE INTO transcripts
+            (chat_id, message_id, source, text, duration, lang, created_at)
+        SELECT chat_id, message_id, source, text, duration, lang, created_at
+        FROM transcripts_legacy;
+        DROP TABLE transcripts_legacy;
+        """
+    )
+
+
+def get_cached_transcript(
+    chat_id: int, message_id: int, source: Optional[str] = None
+) -> Optional[dict]:
+    """Cached transcript for a message.
+
+    ``source`` pins the engine: asking for groq must never be answered with a
+    telegram transcript, because the native engine drops the recording's last
+    segment and the loss is invisible in the text. Callers that only want to
+    display whatever exists (listings, backfill skip checks) pass None and get
+    the default engine's row when there is one, any row otherwise.
+    """
     conn = _connect()
     try:
-        row = conn.execute(
-            "SELECT source, text, duration, lang, created_at FROM transcripts "
-            "WHERE chat_id = ? AND message_id = ?",
-            (chat_id, message_id),
-        ).fetchone()
+        if source is not None:
+            row = conn.execute(
+                "SELECT source, text, duration, lang, created_at FROM transcripts "
+                "WHERE chat_id = ? AND message_id = ? AND source = ?",
+                (chat_id, message_id, source),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT source, text, duration, lang, created_at FROM transcripts "
+                "WHERE chat_id = ? AND message_id = ? "
+                "ORDER BY source = ? DESC, created_at DESC LIMIT 1",
+                (chat_id, message_id, default_engine()),
+            ).fetchone()
     finally:
         conn.close()
     if row is None:
