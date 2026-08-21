@@ -927,6 +927,14 @@ async def list_messages(
                 "date": msg.date,
                 "text": sanitize_user_content(msg.message),
             }
+            # Upstream bug: this hand-built record never called get_media_label,
+            # so a voice/photo/etc. with no caption was indistinguishable from
+            # an actually-empty message. message_to_dict (used by get_history)
+            # already gets this right.
+            media_label = get_media_label(msg)
+            if media_label:
+                record["media"] = media_label
+
             grouped_id = getattr(msg, "grouped_id", None)
             if grouped_id is not None:
                 record["grouped_id"] = grouped_id
