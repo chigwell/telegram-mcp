@@ -53,6 +53,8 @@ try:
 except ImportError:  # pragma: no cover - Windows fallback
     fcntl = None
 
+from telegram_mcp.singleton import try_lock_exclusive
+
 from functools import wraps
 import telethon.errors.rpcerrorlist
 from sanitize import sanitize_user_content, sanitize_name, sanitize_dict, format_tool_result
@@ -366,11 +368,6 @@ def _parse_session_pool() -> List[str]:
 
 def _acquire_session(pool: List[str]) -> str:
     """Claim the first free session in the pool via an advisory file lock."""
-    if fcntl is None:
-        # No advisory locks (e.g. Windows): can't coordinate slots, so use the
-        # first session. For concurrent clients there, prefer distinct
-        # TELEGRAM_SESSION_STRING_<LABEL> accounts instead.
-        return pool[0]
     lock_dir = os.path.join(tempfile.gettempdir(), "telegram-mcp-session-locks")
     try:
         os.makedirs(lock_dir, exist_ok=True)
@@ -380,9 +377,12 @@ def _acquire_session(pool: List[str]) -> str:
         digest = hashlib.sha1(session.encode("utf-8")).hexdigest()[:16]
         lock_path = os.path.join(lock_dir, f"session-{digest}.lock")
         try:
-            fh = open(lock_path, "w")
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # "a+", not "w": on Windows the lock covers the first byte, and
+            # truncating a file another live client holds is refused.
+            fh = open(lock_path, "a+")
         except OSError:
+            continue
+        if not try_lock_exclusive(fh):
             # Locked by another live client — try the next session.
             try:
                 fh.close()
@@ -391,6 +391,8 @@ def _acquire_session(pool: List[str]) -> str:
             continue
         _SESSION_LOCKS.append(fh)
         try:
+            fh.seek(0)
+            fh.truncate()
             fh.write(f"pid={os.getpid()}\n")
             fh.flush()
         except OSError:
