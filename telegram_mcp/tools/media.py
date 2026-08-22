@@ -484,7 +484,9 @@ async def list_photos(
     Args:
         chat_id: The user, group, supergroup or channel ID or username.
         source: "avatars" for profile pictures, "messages" for photos posted in the chat.
-        limit: Maximum number of photos to index, newest first.
+        limit: Maximum number of photos to index. "avatars" follow the order the
+            peer arranged them in their profile, which is not chronological;
+            "messages" are newest first. Each entry carries its own date.
 
     Returns the id of each photo, which open_photo and get_photo_sheet accept.
     For "avatars" that id is a photo_id; for "messages" it is a message_id.
@@ -601,7 +603,8 @@ async def get_photo_sheet(
     Args:
         chat_id: The user, group, supergroup or channel ID or username.
         source: "avatars" for profile pictures, "messages" for photos posted in the chat.
-        limit: How many photos to place on the sheet, newest first.
+        limit: How many photos to place on the sheet. "avatars" follow profile
+            order, which is not chronological; "messages" are newest first.
         columns: Optional fixed column count; omitted lays out automatically.
 
     Each cell is labelled with the id to pass to open_photo for that photo at
