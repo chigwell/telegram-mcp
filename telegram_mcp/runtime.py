@@ -19,7 +19,7 @@ from urllib.parse import unquote, urlparse
 # Third-party libraries
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP, Context
-from mcp.types import Annotations, TextContent, ToolAnnotations
+from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
 from mcp.shared.exceptions import McpError
 from pythonjsonlogger import jsonlogger
 from telethon import TelegramClient, functions, types, utils
@@ -141,7 +141,8 @@ def _install_annotation_hook() -> None:
                 response.root.content = [
                     (
                         block.model_copy(update={"annotations": _USER_AUDIENCE})
-                        if isinstance(block, TextContent) and block.annotations is None
+                        if isinstance(block, (TextContent, ImageContent))
+                        and block.annotations is None
                         else block
                     )
                     for block in content
@@ -521,7 +522,14 @@ def with_account(readonly=False):
                 return label, await fn(*args, **kw)
 
             results = await asyncio.gather(*(_call_for(label) for label in clients))
-            return "\n\n".join(f"[{label}]\n{result}" for label, result in results)
+            if all(isinstance(result, str) for _, result in results):
+                return "\n\n".join(f"[{label}]\n{result}" for label, result in results)
+
+            account_labelled_content = []
+            for label, result in results:
+                account_labelled_content.append(f"[{label}]")
+                account_labelled_content.extend(result if isinstance(result, list) else [result])
+            return account_labelled_content
 
         return wrapper
 
