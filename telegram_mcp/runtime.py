@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlparse
 
 # Third-party libraries
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP, Context
+from mcp.server.fastmcp import FastMCP, Context, Image
 from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
 from mcp.shared.exceptions import McpError
 from pythonjsonlogger import jsonlogger
