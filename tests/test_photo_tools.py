@@ -41,7 +41,7 @@ def patched_media(monkeypatch):
         return entity
 
     monkeypatch.setattr(media, "resolve_entity", _resolve_entity)
-    monkeypatch.setattr(media, "get_marked_id", lambda _entity: 423841495)
+    monkeypatch.setattr(media, "get_marked_id", lambda _entity: 100200300)
     monkeypatch.setattr(media, "get_entity_type", lambda _entity: "User")
     return monkeypatch
 
@@ -53,7 +53,7 @@ async def test_list_photos_returns_text_only_and_exposes_openable_ids(patched_me
 
     patched_media.setattr(media, "list_photo_references", _list)
 
-    result = await media.list_photos("arinngl")
+    result = await media.list_photos("example_user")
 
     assert isinstance(result, str)
     indexed = json.loads(result)
@@ -98,7 +98,7 @@ async def test_open_photo_returns_viewable_image(patched_media):
     patched_media.setattr(media, "find_photo_reference", _find)
     patched_media.setattr(media, "download_photo_bytes", _download)
 
-    result = await media.open_photo("arinngl", photo_id=200)
+    result = await media.open_photo("example_user", photo_id=200)
 
     assert isinstance(result, Image)
     assert result._mime_type == "image/jpeg"
@@ -137,7 +137,7 @@ async def test_open_photo_reports_a_missing_identifier_instead_of_raising(patche
 
     patched_media.setattr(media, "find_photo_reference", _find)
 
-    result = await media.open_photo("arinngl", photo_id=404)
+    result = await media.open_photo("example_user", photo_id=404)
 
     assert "No avatars photo found" in result
     assert "404" in result
@@ -157,7 +157,7 @@ async def test_open_photo_save_path_keeps_a_copy_inside_allowed_roots(patched_me
         media, "download_photo_bytes", lambda cl, ref, thumbnail=False: _async(_jpeg_bytes())
     )
 
-    result = await media.open_photo("arinngl", save_path="kept.jpg")
+    result = await media.open_photo("example_user", save_path="kept.jpg")
 
     assert isinstance(result, Image)
     assert (root / "kept.jpg").read_bytes() == _jpeg_bytes()
@@ -177,7 +177,7 @@ async def test_open_photo_refuses_a_save_path_outside_allowed_roots(patched_medi
         media, "download_photo_bytes", lambda cl, ref, thumbnail=False: _async(_jpeg_bytes())
     )
 
-    result = await media.open_photo("arinngl", save_path=str(tmp_path / "outside.jpg"))
+    result = await media.open_photo("example_user", save_path=str(tmp_path / "outside.jpg"))
 
     assert "outside allowed roots" in result
 
@@ -194,7 +194,7 @@ async def test_photo_sheet_returns_one_labelled_image_with_a_text_preamble(patch
     patched_media.setattr(media, "list_photo_references", _list)
     patched_media.setattr(media, "download_photo_bytes", _download)
 
-    preamble, sheet = await media.get_photo_sheet("arinngl")
+    preamble, sheet = await media.get_photo_sheet("example_user")
 
     assert "2 avatars photo(s)" in preamble
     assert isinstance(sheet, Image)
@@ -228,7 +228,7 @@ async def test_photo_sheet_degrades_politely_when_pillow_is_missing(patched_medi
     )
     patched_media.setattr(media, "build_contact_sheet", _unavailable)
 
-    result = await media.get_photo_sheet("arinngl")
+    result = await media.get_photo_sheet("example_user")
 
     assert "Pillow is required" in result
 
@@ -246,7 +246,7 @@ async def test_photo_sheet_caps_the_number_of_tiles_it_will_request(patched_medi
         media, "download_photo_bytes", lambda cl, ref, thumbnail=False: _async(_jpeg_bytes())
     )
 
-    await media.get_photo_sheet("arinngl", limit=500)
+    await media.get_photo_sheet("example_user", limit=500)
 
     assert requested["limit"] == media.PHOTO_SHEET_MAXIMUM_TILES
 

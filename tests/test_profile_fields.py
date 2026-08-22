@@ -33,11 +33,11 @@ class _FullUser:
 
 def test_additional_usernames_exclude_the_primary_one():
     user = _User(
-        username="arinngl",
-        usernames=[_Username("arinngl"), _Username("arina"), _Username("")],
+        username="example_user",
+        usernames=[_Username("example_user"), _Username("example_alias"), _Username("")],
     )
 
-    assert profile._additional_usernames(user) == ["arina"]
+    assert profile._additional_usernames(user) == ["example_alias"]
 
 
 def test_additional_usernames_are_empty_without_collectibles():
