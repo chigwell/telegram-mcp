@@ -644,6 +644,8 @@ async def get_chat(chat_id: Union[int, str], account: str = None) -> str:
         record["has_photo"] = photo is not None and not isinstance(
             photo, (types.ChatPhotoEmpty, types.UserProfilePhotoEmpty)
         )
+        if record["has_photo"]:
+            record["current_avatar_id"] = getattr(photo, "photo_id", None)
 
         # Get unread count + last activity for THIS specific peer.
         #
