@@ -66,6 +66,14 @@ else:
             pass
 
 
+# Public names for the primitives above. The session pool in ``runtime`` needs
+# the same "try to take an exclusive lock, don't block" behaviour on both
+# platforms, and duplicating the msvcrt/fcntl split there is how one of the two
+# copies ends up POSIX-only.
+try_lock_exclusive = _try_lock
+release_lock = _unlock
+
+
 DEFAULT_LOCK_DIR = Path(tempfile.gettempdir()) / "telegram-mcp-locks"
 DEFAULT_GRACE_SECONDS = 20.0
 DEFAULT_POLL_INTERVAL = 0.5
