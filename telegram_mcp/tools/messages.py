@@ -1,7 +1,7 @@
 """Messages MCP tools."""
 
 from telegram_mcp.runtime import *
-from telegram_mcp import transcription
+from telegram_mcp import rich_messages, transcription
 
 # Domain used to build message permalinks. Overridable because the default is a
 # single point of failure: on 2026-07-13 the .me registry put t.me on serverHold
@@ -147,6 +147,19 @@ def message_to_dict(msg, chat_id: Optional[int] = None) -> dict:
     media_label = get_media_label(msg)
     if media_label:
         d["media"] = media_label
+
+    # A rich message keeps its content in page blocks, not in msg.message: without
+    # this the whole message reads as empty. The rendered Markdown goes where a
+    # reader looks for content, and is not repeated inside rich_message.
+    rich_payload = rich_messages.message_rich_payload(msg)
+    if rich_payload is not None:
+        markdown = rich_payload.pop("markdown", "")
+        if markdown:
+            if text:
+                rich_payload["markdown"] = markdown
+            else:
+                d["text"] = sanitize_user_content(markdown)
+        d["rich_message"] = rich_payload
 
     if not text:
         voice_info = transcription.voice_attachment_info(msg, chat_id)
@@ -415,6 +428,38 @@ async def _edit_rich(cl, entity, message_id: int, text: str, parse_mode: str):
     )
 
 
+async def _send_rich_draft(cl, entity, text: str, parse_mode: str, draft_id: Optional[int]):
+    """Push one state of a streaming rich draft. Returns a JSON result string.
+
+    Telegram carries a live, still-being-written rich message as a typing
+    action rather than as a message: peers see it update in place and nothing
+    is added to the history. Successive calls sharing one random_id are states
+    of the same draft, which is why the id is returned and accepted back.
+    """
+    import random
+
+    if not await account_is_premium(cl):
+        return premium_required_result("stream_rich_draft")
+    random_id = draft_id if draft_id is not None else random.randint(0, 2**62)
+    try:
+        await cl(
+            functions.messages.SetTypingRequest(
+                peer=entity,
+                action=types.InputSendMessageRichMessageDraftAction(
+                    rich_message=make_rich_input(parse_mode, text),
+                    random_id=random_id,
+                ),
+            )
+        )
+    except telethon.errors.RPCError as e:
+        if is_premium_rpc_error(e):
+            return premium_required_result("stream_rich_draft")
+        raise
+    return json.dumps(
+        {"sent": True, "rich": True, "draft": True, "draft_id": random_id}, ensure_ascii=False
+    )
+
+
 @mcp.tool(
     annotations=ToolAnnotations(title="Send Message", openWorldHint=True, destructiveHint=True)
 )
@@ -450,6 +495,66 @@ async def send_message(
         return "Message sent successfully."
     except Exception as e:
         return log_and_format_error("send_message", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Stream Rich Message Draft",
+        openWorldHint=True,
+        destructiveHint=False,
+        idempotentHint=False,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def stream_rich_draft(
+    chat_id: Union[int, str],
+    text: str,
+    parse_mode: str = "rich_md",
+    draft_id: Optional[int] = None,
+    account: str = None,
+) -> str:
+    """
+    Show a live, still-being-written rich message in a chat without posting it.
+
+    Peers see the draft update in place, the way a streamed answer appears; it
+    is a typing action, so nothing is written to the chat history and there is
+    nothing to delete. Send the finished text with send_message(parse_mode=
+    'rich') when it is ready.
+
+    Args:
+        chat_id: The ID or username of the chat.
+        text: The draft content so far, in the syntax named by parse_mode.
+        parse_mode: 'rich'/'rich_md'/'rich_markdown' for server-side Markdown,
+            or 'rich_html' for HTML. Plain 'md'/'html' are not draft formats.
+        draft_id: Pass the draft_id returned by the previous call to keep
+            updating the same draft. Omit it to start a new one.
+        account: Account label in multi-account mode.
+
+    Returns:
+        JSON with the draft_id to pass to the next call, or a structured
+        {"sent": false, "reason": "telegram_premium_required"} refusal - rich
+        drafts need Telegram Premium, re-checked on every call.
+    """
+    try:
+        mode = (parse_mode or "").lower()
+        if mode not in RICH_PARSE_MODES:
+            return json.dumps(
+                {
+                    "sent": False,
+                    "reason": "invalid_parse_mode",
+                    "detail": (
+                        f"stream_rich_draft needs a rich parse mode, got '{parse_mode}'. "
+                        f"Use one of: {', '.join(sorted(RICH_PARSE_MODES))}."
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        return await _send_rich_draft(cl, entity, text, mode, draft_id)
+    except Exception as e:
+        return log_and_format_error("stream_rich_draft", e, chat_id=chat_id)
 
 
 @mcp.tool(
