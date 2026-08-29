@@ -56,13 +56,16 @@ except ImportError:  # pragma: no cover - Windows fallback
 from functools import wraps
 import telethon.errors.rpcerrorlist
 from sanitize import sanitize_user_content, sanitize_name, sanitize_dict, format_tool_result
+from telegram_mcp import client_factory
 from telegram_mcp.client_identity import client_identity_kwargs
-
-
-class ValidationError(Exception):
-    """Custom exception for validation errors."""
-
-    pass
+from telegram_mcp.errors import ValidationError
+from telegram_mcp.premium import (
+    RICH_PARSE_MODES,
+    account_is_premium,
+    is_premium_rpc_error,
+    make_rich_input,
+    premium_required_result,
+)
 
 
 def json_serializer(obj):
@@ -229,107 +232,15 @@ def _apply_exposed_tools_mode(server: FastMCP = mcp, mode: Optional[str] = None)
 # ---------------------------------------------------------------------------
 
 
-_PROXY_TYPES_SOCKS_HTTP = {"socks5", "socks4", "http"}
-_PROXY_TYPES_ALL = _PROXY_TYPES_SOCKS_HTTP | {"mtproxy"}
-
-
-def _get_proxy_env(name: str, label: str) -> Optional[str]:
-    """Resolve a TELEGRAM_PROXY_* env var with optional ``_<LABEL>`` suffix.
-
-    Per-account values override the unsuffixed defaults so a global proxy can
-    coexist with per-label overrides.
-    """
-    suffixed = os.getenv(f"TELEGRAM_PROXY_{name}_{label.upper()}")
-    if suffixed:
-        return suffixed
-    return os.getenv(f"TELEGRAM_PROXY_{name}") or None
-
-
-def _parse_bool_env(value: Optional[str], default: bool) -> bool:
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _build_proxy_for_label(label: str) -> tuple[Optional[Any], Optional[Any]]:
-    """Return ``(proxy, connection)`` kwargs for ``TelegramClient`` for a label.
-
-    Reads ``TELEGRAM_PROXY_*`` env vars (with optional ``_<LABEL>`` suffix).
-    Returns ``(None, None)`` when no proxy is configured. Raises
-    :class:`ValidationError` for malformed configuration so the server fails
-    fast instead of silently bypassing the proxy.
-    """
-    proxy_type = _get_proxy_env("TYPE", label)
-    if not proxy_type:
-        return None, None
-
-    proxy_type = proxy_type.strip().lower()
-    if proxy_type not in _PROXY_TYPES_ALL:
-        raise ValidationError(
-            f"Invalid TELEGRAM_PROXY_TYPE '{proxy_type}'. "
-            f"Expected one of: {', '.join(sorted(_PROXY_TYPES_ALL))}."
-        )
-
-    host = _get_proxy_env("HOST", label)
-    port_raw = _get_proxy_env("PORT", label)
-    if not host or not port_raw:
-        raise ValidationError(
-            "TELEGRAM_PROXY_HOST and TELEGRAM_PROXY_PORT are required when "
-            "TELEGRAM_PROXY_TYPE is set."
-        )
-    try:
-        port = int(port_raw)
-    except ValueError as exc:
-        raise ValidationError(
-            f"TELEGRAM_PROXY_PORT must be an integer, got '{port_raw}'."
-        ) from exc
-
-    if proxy_type == "mtproxy":
-        secret = _get_proxy_env("SECRET", label)
-        if not secret:
-            raise ValidationError("TELEGRAM_PROXY_SECRET is required for mtproxy.")
-        try:
-            from telethon.network import ConnectionTcpMTProxyRandomizedIntermediate
-        except ImportError as exc:  # pragma: no cover - defensive guard
-            raise ValidationError(
-                "Telethon MTProxy connection class is unavailable; upgrade telethon."
-            ) from exc
-        return (host, port, secret), ConnectionTcpMTProxyRandomizedIntermediate
-
-    # SOCKS4/SOCKS5/HTTP via python-socks (Telethon's optional dependency).
-    try:
-        import python_socks  # noqa: F401
-    except ImportError as exc:
-        raise ValidationError(
-            f"Proxy type '{proxy_type}' requires the 'python-socks' package. "
-            "Install it with `pip install python-socks` or `uv sync --extra proxy`."
-        ) from exc
-
-    proxy: dict[str, Any] = {
-        "proxy_type": proxy_type,
-        "addr": host,
-        "port": port,
-        "rdns": _parse_bool_env(_get_proxy_env("RDNS", label), default=True),
-    }
-    username = _get_proxy_env("USERNAME", label)
-    password = _get_proxy_env("PASSWORD", label)
-    if username:
-        proxy["username"] = username
-    if password:
-        proxy["password"] = password
-    return proxy, None
-
-
-def _build_client(session: Any, label: str) -> TelegramClient:
-    """Construct a ``TelegramClient`` honoring per-label proxy configuration."""
-    proxy, connection = _build_proxy_for_label(label)
-    kwargs: dict[str, Any] = {}
-    if proxy is not None:
-        kwargs["proxy"] = proxy
-    if connection is not None:
-        kwargs["connection"] = connection
-    kwargs.update(client_identity_kwargs())
-    return TelegramClient(session, TELEGRAM_API_ID, TELEGRAM_API_HASH, **kwargs)
+# Client construction lives in client_factory: it must be usable without
+# importing this module, which builds the MCP server and discovers accounts
+# as an import side effect. These aliases keep the historic names working.
+_PROXY_TYPES_SOCKS_HTTP = client_factory.PROXY_TYPES_SOCKS_HTTP
+_PROXY_TYPES_ALL = client_factory.PROXY_TYPES_ALL
+_get_proxy_env = client_factory.get_proxy_env
+_parse_bool_env = client_factory.parse_bool_env
+_build_proxy_for_label = client_factory.build_proxy_for_label
+_build_client = client_factory.build_client
 
 
 # --- Session pool ------------------------------------------------------------
@@ -871,46 +782,6 @@ def format_entity(entity) -> Dict[str, Any]:
             result["phone"] = entity.phone
 
     return result
-
-
-# Parse modes that request server-side rich formatting (tables, headings,
-# formulas, collapsible sections — the June 2026 "Rich Messages" feature).
-# Sending rich messages requires Telegram Premium on the account.
-RICH_PARSE_MODES = {"rich", "rich_md", "rich_markdown", "rich_html"}
-
-
-async def account_is_premium(client) -> bool:
-    """Fresh Premium check at call time — Premium can expire or be bought anytime."""
-    me = await client.get_me()
-    return bool(getattr(me, "premium", False))
-
-
-def make_rich_input(parse_mode: str, text: str):
-    """Build the InputRichMessage payload for a rich parse mode."""
-    if parse_mode == "rich_html":
-        return types.InputRichMessageHTML(html=text)
-    return types.InputRichMessageMarkdown(markdown=text)
-
-
-def premium_required_result(action: str) -> str:
-    """Structured refusal so the agent can degrade gracefully instead of sending garbage."""
-    return json.dumps(
-        {
-            "sent": False,
-            "reason": "telegram_premium_required",
-            "detail": (
-                f"{action} with rich formatting requires Telegram Premium on this account. "
-                "Nothing was sent. Reformat without rich-only blocks (tables, headings, "
-                "formulas) and retry with parse_mode='md' or 'html'."
-            ),
-        },
-        ensure_ascii=False,
-    )
-
-
-def is_premium_rpc_error(error: Exception) -> bool:
-    """True when Telegram rejected a call because the account lacks Premium."""
-    return "PREMIUM" in getattr(error, "message", str(error)).upper()
 
 
 _ALIASES_ENV = "TELEGRAM_ALIASES_FILE"

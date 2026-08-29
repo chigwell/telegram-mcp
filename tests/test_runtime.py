@@ -11,7 +11,7 @@ from mcp.types import ErrorData, ToolAnnotations
 from telethon.tl.types import Channel, Chat, PeerUser, User
 
 import main
-from telegram_mcp import runtime
+from telegram_mcp import client_factory, runtime
 
 
 def _clear_session_env(monkeypatch):
@@ -139,7 +139,7 @@ def test_discover_accounts_supports_suffixed_and_default_sessions(monkeypatch):
     monkeypatch.setenv("TELEGRAM_SESSION_STRING_WORK", "work-session")
     monkeypatch.setenv("TELEGRAM_SESSION_NAME_PERSONAL", "personal.session")
     monkeypatch.setenv("TELEGRAM_SESSION_STRING", "default-session")
-    monkeypatch.setattr(runtime, "TelegramClient", _FakeTelegramClient)
+    monkeypatch.setattr(client_factory, "TelegramClient", _FakeTelegramClient)
     monkeypatch.setattr(runtime, "StringSession", lambda value: f"StringSession:{value}")
 
     accounts = runtime._discover_accounts()
@@ -300,7 +300,7 @@ def test_discover_accounts_passes_proxy_kwargs_to_client(monkeypatch):
     monkeypatch.setenv("TELEGRAM_PROXY_HOST", "mtproxy.example")
     monkeypatch.setenv("TELEGRAM_PROXY_PORT", "443")
     monkeypatch.setenv("TELEGRAM_PROXY_SECRET", "ee0123456789abcdef")
-    monkeypatch.setattr(runtime, "TelegramClient", _FakeTelegramClient)
+    monkeypatch.setattr(client_factory, "TelegramClient", _FakeTelegramClient)
     monkeypatch.setattr(runtime, "StringSession", lambda value: f"StringSession:{value}")
 
     accounts = runtime._discover_accounts()
@@ -320,7 +320,7 @@ def test_discover_accounts_passes_device_identity_kwargs_to_client(monkeypatch):
     monkeypatch.setenv("TELEGRAM_SESSION_STRING", "default-session")
     monkeypatch.setenv("TELEGRAM_DEVICE_MODEL", "Telegram MCP")
     monkeypatch.setenv("TELEGRAM_APP_VERSION", "3.1")
-    monkeypatch.setattr(runtime, "TelegramClient", _FakeTelegramClient)
+    monkeypatch.setattr(client_factory, "TelegramClient", _FakeTelegramClient)
     monkeypatch.setattr(runtime, "StringSession", lambda value: f"StringSession:{value}")
 
     accounts = runtime._discover_accounts()

@@ -18,6 +18,8 @@ from typing import Optional
 
 from telethon import TelegramClient
 
+from telegram_mcp import client_factory
+
 from .util import log
 
 # The server's session strings are frequently present in a shared environment
@@ -67,13 +69,8 @@ def build_client(session: Optional[str] = None) -> TelegramClient:
             log(f"note: ignoring {name} from the environment - export uses its own session.")
     _check_credentials()
 
-    # Imported here, not at module import: runtime pulls in the MCP server and
-    # reads the credentials at import time, and the message above is friendlier
-    # than the TypeError that would raise.
-    from telegram_mcp import runtime
-
     path = session_path(session)
-    client = runtime._build_client(str(path.with_suffix("")), PROXY_LABEL)
+    client = client_factory.build_client(str(path.with_suffix("")), PROXY_LABEL)
     # Telethon sleeps through floods under this threshold by itself; anything
     # longer is surfaced instead of stalling a long export for hours.
     client.flood_sleep_threshold = 900

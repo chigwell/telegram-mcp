@@ -27,7 +27,7 @@ from typing import Optional
 import httpx
 from telethon.tl import functions
 
-from telegram_mcp.runtime import account_is_premium, get_marked_id, is_premium_rpc_error
+from telegram_mcp.premium import account_is_premium, is_premium_rpc_error
 
 # ---------------------------------------------------------------------------
 # Configuration
