@@ -1084,7 +1084,11 @@ async def transcribe_voice(
             )
 
         duration = transcription.voice_duration(msg)
-        result = await transcription.transcribe(cl, entity, msg, chosen_engine)
+        # Cache-first and locked by (chat, message, engine): two concurrent
+        # calls for the same recording pay the engine once, not twice.
+        result = await transcription.transcribe_cached(
+            cl, entity, msg, chosen_engine, numeric_chat_id, duration=duration
+        )
 
         if result["status"] == "premium_required":
             return premium_required_result("transcribe_voice (engine='telegram')")
@@ -1107,21 +1111,15 @@ async def transcribe_voice(
                 engine=chosen_engine,
             )
 
-        transcription.save_transcript(
-            numeric_chat_id,
-            message_id,
-            chosen_engine,
-            result["text"],
-            duration=duration,
-            lang=result.get("lang"),
-        )
+        # transcribe_cached already wrote the row; "cached" tells the caller
+        # whether this answer cost an engine call.
         return json.dumps(
             {
                 "transcribed": True,
-                "cached": False,
+                "cached": bool(result.get("cached")),
                 "text": result["text"],
-                "source": chosen_engine,
-                "duration": duration,
+                "source": result.get("source") or chosen_engine,
+                "duration": result.get("duration", duration),
                 "note": "Machine transcript, not a verbatim quote.",
             },
             ensure_ascii=False,

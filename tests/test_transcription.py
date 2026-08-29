@@ -1,5 +1,6 @@
 """Tests for telegram_mcp/transcription.py: config, cache, engines, budget, render."""
 
+import asyncio
 import os
 import stat
 from types import SimpleNamespace
@@ -596,3 +597,195 @@ async def test_prefetch_does_not_cache_pending_results(monkeypatch, transcript_c
     await transcription.prefetch_transcripts(None, None, 7, [_voice_msg(id=5)])
 
     assert transcription.get_cached_transcript(7, 5) is None
+
+
+# ---------------------------------------------------------------------------
+# One paid call per recording
+# ---------------------------------------------------------------------------
+#
+# Reviewed on PR #197: two concurrent callers both missed the cache, both
+# downloaded the same audio and both paid Groq for it.
+
+
+def _counting_engine(counter, text="hello"):
+    async def _fake(cl, entity, msg, engine):
+        counter["calls"] += 1
+        # Long enough for a second caller to reach the same key meanwhile.
+        await asyncio.sleep(0.02)
+        return {"status": "ok", "text": text, "lang": "en"}
+
+    return _fake
+
+
+@pytest.mark.asyncio
+async def test_concurrent_callers_pay_the_engine_once(transcript_cache_dir, monkeypatch):
+    counter = {"calls": 0}
+    monkeypatch.setattr(transcription, "transcribe", _counting_engine(counter))
+    msg = _voice_msg(id=77)
+
+    results = await asyncio.gather(
+        *[
+            transcription.transcribe_cached(None, None, msg, "groq", -100, duration=23)
+            for _ in range(5)
+        ]
+    )
+
+    assert counter["calls"] == 1, "each concurrent caller paid the engine separately"
+    assert all(r["status"] == "ok" and r["text"] == "hello" for r in results)
+    assert sum(1 for r in results if not r["cached"]) == 1
+    assert transcription.get_cached_transcript(-100, 77, source="groq")["text"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_second_caller_after_the_first_finished_is_a_plain_cache_hit(
+    transcript_cache_dir, monkeypatch
+):
+    counter = {"calls": 0}
+    monkeypatch.setattr(transcription, "transcribe", _counting_engine(counter))
+    msg = _voice_msg(id=78)
+
+    first = await transcription.transcribe_cached(None, None, msg, "groq", -100)
+    second = await transcription.transcribe_cached(None, None, msg, "groq", -100)
+
+    assert counter["calls"] == 1
+    assert first["cached"] is False and second["cached"] is True
+
+
+@pytest.mark.asyncio
+async def test_dedup_is_keyed_by_engine(transcript_cache_dir, monkeypatch):
+    counter = {"calls": 0}
+    monkeypatch.setattr(transcription, "transcribe", _counting_engine(counter))
+    msg = _voice_msg(id=79)
+
+    await transcription.transcribe_cached(None, None, msg, "groq", -100)
+    await transcription.transcribe_cached(None, None, msg, "telegram", -100)
+
+    # A groq request must never be answered with a telegram transcript, so the
+    # two engines are two separate paid calls, not one shared one.
+    assert counter["calls"] == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_transcription_is_not_cached_and_leaks_no_lock(
+    transcript_cache_dir, monkeypatch
+):
+    async def _failing(cl, entity, msg, engine):
+        return {"status": "error", "error": "groq request failed: 503"}
+
+    monkeypatch.setattr(transcription, "transcribe", _failing)
+    msg = _voice_msg(id=80)
+
+    result = await transcription.transcribe_cached(None, None, msg, "groq", -100)
+
+    assert result["status"] == "error"
+    assert transcription.get_cached_transcript(-100, 80, source="groq") is None
+    # The registry must not grow with every message ever attempted.
+    assert transcription._INFLIGHT_LOCKS == {}
+
+
+# ---------------------------------------------------------------------------
+# Groq upload ceiling
+# ---------------------------------------------------------------------------
+
+
+def test_groq_limit_defaults_to_the_free_tier(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_TRANSCRIBE_GROQ_MAX_MB", raising=False)
+    assert transcription.groq_max_upload_bytes() == 25 * 1024 * 1024
+
+
+@pytest.mark.parametrize("raw", ["", "nonsense", "0", "-4"])
+def test_groq_limit_falls_back_on_unusable_values(monkeypatch, raw):
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_GROQ_MAX_MB", raw)
+    assert transcription.groq_max_upload_bytes() == 25 * 1024 * 1024
+
+
+def test_groq_limit_is_raisable_for_paid_tiers(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_GROQ_MAX_MB", "100")
+    assert transcription.groq_max_upload_bytes() == 100 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_oversized_recording_is_refused_without_downloading(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    downloads = {"calls": 0}
+
+    async def _download(*args, **kwargs):
+        downloads["calls"] += 1
+        return b"x"
+
+    cl = SimpleNamespace(download_media=_download)
+    msg = _voice_msg(
+        file=SimpleNamespace(
+            duration=9000, ext=".oga", mime_type="audio/ogg", size=40 * 1024 * 1024
+        )
+    )
+
+    result = await transcription._transcribe_via_groq(cl, msg)
+
+    assert result["status"] == "error"
+    assert result["reason"] == "too_large"
+    assert "40.0 MB" in result["error"] and "25 MB" in result["error"]
+    assert downloads["calls"] == 0, "paid for a download of a file that cannot be uploaded"
+
+
+@pytest.mark.asyncio
+async def test_oversized_download_is_refused_when_the_size_was_not_declared(monkeypatch):
+    """Telegram does not always state a size, and the stated one can be stale."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_GROQ_MAX_MB", "1")
+    posted = {"calls": 0}
+
+    async def _download(*args, **kwargs):
+        return b"0" * (2 * 1024 * 1024)
+
+    def _fail_post(*args, **kwargs):
+        posted["calls"] += 1
+        raise AssertionError("uploaded a file above the limit")
+
+    monkeypatch.setattr(transcription.httpx, "AsyncClient", _fail_post)
+    cl = SimpleNamespace(download_media=_download)
+    msg = _voice_msg(file=SimpleNamespace(duration=600, ext=".oga", mime_type="audio/ogg"))
+
+    result = await transcription._transcribe_via_groq(cl, msg)
+
+    assert result["reason"] == "too_large"
+    assert posted["calls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_recording_within_the_limit_still_uploads(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_GROQ_MAX_MB", "25")
+
+    async def _download(*args, **kwargs):
+        return b"0" * 1024
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"text": " transcribed ", "language": "ru"}
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return _Resp()
+
+    monkeypatch.setattr(transcription.httpx, "AsyncClient", _FakeClient)
+    cl = SimpleNamespace(download_media=_download)
+    msg = _voice_msg(
+        file=SimpleNamespace(duration=30, ext=".oga", mime_type="audio/ogg", size=1024)
+    )
+
+    result = await transcription._transcribe_via_groq(cl, msg)
+
+    assert result == {"status": "ok", "text": "transcribed", "lang": "ru"}

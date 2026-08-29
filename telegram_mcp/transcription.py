@@ -20,6 +20,7 @@ alongside ``text`` rather than presenting it as exact speech.
 import asyncio
 import os
 import sqlite3
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -38,6 +39,12 @@ ENGINES = {"telegram", "groq"}
 
 GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3-turbo"
+
+# Groq rejects an upload above its per-file limit, and the limit depends on
+# the account tier (25 MB on the free tier at the time of writing, more on
+# paid ones). Checked locally so an oversized recording fails with an
+# actionable message instead of a 413 from the API after a full download.
+GROQ_DEFAULT_MAX_MB = 25.0
 
 
 def transcribe_mode() -> str:
@@ -88,6 +95,36 @@ def validate_transcription_config() -> None:
 # its own directory (not the session/app directory), mounted as a volume so a
 # rebuild doesn't silently drop it (docker-compose.yml has no volume by
 # default).
+
+
+def groq_max_upload_bytes() -> int:
+    """Upload ceiling for the groq engine, in bytes.
+
+    ``TELEGRAM_TRANSCRIBE_GROQ_MAX_MB`` raises or lowers it: a paid Groq tier
+    accepts larger files than the free one, and hardcoding the free-tier number
+    would refuse recordings the account can actually transcribe.
+    """
+    raw = os.getenv("TELEGRAM_TRANSCRIBE_GROQ_MAX_MB", "").strip()
+    try:
+        limit_mb = float(raw) if raw else GROQ_DEFAULT_MAX_MB
+    except ValueError:
+        limit_mb = GROQ_DEFAULT_MAX_MB
+    if limit_mb <= 0:
+        limit_mb = GROQ_DEFAULT_MAX_MB
+    return int(limit_mb * 1024 * 1024)
+
+
+def _too_large_for_groq(size: int, limit: int) -> dict:
+    return {
+        "status": "error",
+        "reason": "too_large",
+        "error": (
+            f"recording is {size / 1048576:.1f} MB, above the "
+            f"{limit / 1048576:.0f} MB Groq upload limit. Transcribe it with "
+            "engine='telegram', or raise TELEGRAM_TRANSCRIBE_GROQ_MAX_MB if the "
+            "Groq tier on this key accepts larger uploads."
+        ),
+    }
 
 
 def cache_dir() -> Path:
@@ -305,12 +342,24 @@ async def _transcribe_via_groq(cl, msg) -> dict:
     if not api_key:
         return {"status": "error", "error": "GROQ_API_KEY is not configured"}
 
+    limit = groq_max_upload_bytes()
+    # Telegram states the size up front, so an oversized recording is refused
+    # before it is downloaded at all.
+    declared = getattr(getattr(msg, "file", None), "size", None)
+    if isinstance(declared, int) and declared > limit:
+        return _too_large_for_groq(declared, limit)
+
     try:
         data = await cl.download_media(msg, file=bytes)
     except Exception as e:
         return {"status": "error", "error": f"download failed: {e}"}
     if not data:
         return {"status": "error", "error": "empty media download"}
+    # The declared size can be missing or stale; the bytes in hand cannot.
+    if len(data) > limit:
+        size = len(data)
+        del data
+        return _too_large_for_groq(size, limit)
 
     file_attr = getattr(msg, "file", None)
     ext = (getattr(file_attr, "ext", None) or ".oga").lstrip(".")
@@ -348,6 +397,92 @@ async def transcribe(cl, entity, msg, engine: str) -> dict:
     if engine == "groq":
         return await _transcribe_via_groq(cl, msg)
     return {"status": "error", "error": f"Unknown engine '{engine}'"}
+
+
+# ---------------------------------------------------------------------------
+# One paid call per recording
+# ---------------------------------------------------------------------------
+#
+# transcribe_voice and the auto-mode prefetch both do "miss the cache,
+# transcribe, save". Two concurrent requests for the same uncached message
+# would both miss, both download the audio and both pay Groq for it. The lock
+# is keyed by (chat, message, engine) and the cache is re-read inside it, so
+# the second caller returns the first one's transcript without a second call.
+#
+# Scope is one process: the server is a single asyncio process over one SQLite
+# cache. Running it as several worker processes would need an atomic claim in
+# the database instead - the lock below would not see the other workers.
+
+_INFLIGHT_LOCKS: dict = {}
+
+
+@asynccontextmanager
+async def _transcribe_lock(key):
+    entry = _INFLIGHT_LOCKS.get(key)
+    if entry is None:
+        entry = [asyncio.Lock(), 0]
+        _INFLIGHT_LOCKS[key] = entry
+    entry[1] += 1
+    try:
+        async with entry[0]:
+            yield
+    finally:
+        entry[1] -= 1
+        # Dropping the entry keeps the registry from growing with every
+        # message ever transcribed, and keeps a lock from outliving the loop
+        # it was first awaited on.
+        if entry[1] <= 0:
+            _INFLIGHT_LOCKS.pop(key, None)
+
+
+def _cached_result(row: dict) -> dict:
+    return {
+        "status": "ok",
+        "cached": True,
+        "text": row["text"],
+        "lang": row.get("lang"),
+        "duration": row.get("duration"),
+        "source": row.get("source"),
+    }
+
+
+async def transcribe_cached(
+    cl, entity, msg, engine: str, chat_id: int, duration: Optional[int] = None
+) -> dict:
+    """Cache-first transcription, at most one paid call per recording.
+
+    Same status dict as :func:`transcribe`, plus ``cached``. Every caller that
+    would otherwise write to the transcript cache should go through here.
+    """
+    message_id = getattr(msg, "id", None)
+    hit = get_cached_transcript(chat_id, message_id, source=engine)
+    if hit is not None:
+        return _cached_result(hit)
+
+    async with _transcribe_lock((chat_id, message_id, engine)):
+        # Re-read: a concurrent caller may have paid for this one while we
+        # were waiting for the lock.
+        hit = get_cached_transcript(chat_id, message_id, source=engine)
+        if hit is not None:
+            return _cached_result(hit)
+
+        if duration is None:
+            duration = voice_duration(msg)
+        result = await transcribe(cl, entity, msg, engine)
+        if result.get("status") == "ok":
+            save_transcript(
+                chat_id,
+                message_id,
+                engine,
+                result["text"],
+                duration=duration,
+                lang=result.get("lang"),
+            )
+        out = dict(result)
+        out["cached"] = False
+        out.setdefault("duration", duration)
+        out.setdefault("source", engine)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -420,18 +555,11 @@ async def prefetch_transcripts(cl, entity, chat_id: int, messages) -> None:
             continue
         budget.charge(duration)
         try:
-            result = await transcribe(cl, entity, msg, engine)
+            # Shares the lock with transcribe_voice: a prefetch and an explicit
+            # call for the same recording pay for it once between them.
+            await transcribe_cached(cl, entity, msg, engine, chat_id, duration=duration)
         except Exception:
             continue
-        if result.get("status") == "ok":
-            save_transcript(
-                chat_id,
-                msg.id,
-                engine,
-                result["text"],
-                duration=duration,
-                lang=result.get("lang"),
-            )
 
 
 # ---------------------------------------------------------------------------

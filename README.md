@@ -63,14 +63,14 @@ Aliases live in `${XDG_STATE_HOME:-~/.local/state}/telegram-mcp/aliases.json` (o
 
 `transcribe_voice(chat_id, message_id, engine=None)` turns a voice message or video note into text. Two engines are available:
 
-- `groq` (default): uploads the recording to Groq's hosted `whisper-large-v3-turbo`. Leaves the server and costs a download+upload per call, but doesn't drop the recording's last few words the way native transcription does. Requires `GROQ_API_KEY`.
+- `groq` (default): uploads the recording to Groq's hosted `whisper-large-v3-turbo`. Leaves the server and costs a download+upload per call, but doesn't drop the recording's last few words the way native transcription does. Requires `GROQ_API_KEY`. Groq caps the size of a single upload, so a recording above `TELEGRAM_TRANSCRIBE_GROQ_MAX_MB` (default 25, the free-tier limit) is refused locally with a `too_large` error naming its size instead of being downloaded and rejected by the API. Raise the limit if your Groq tier allows bigger files, or transcribe that message with `engine='telegram'`, which has no such cap.
 - `telegram`: native Telegram Premium transcription (`messages.TranscribeAudioRequest`). Free and never leaves Telegram, but empirically drops the last speech segment in roughly 2 of 3 recordings and requires Telegram Premium on the account. Long recordings come back `pending` and are polled automatically.
 
-The engine is chosen per call via the `engine` argument, or otherwise defaults to `TELEGRAM_TRANSCRIBE_ENGINE` (`groq` or `telegram`). Results are cached by `(chat_id, message_id)` in a local SQLite file so repeat reads and repeat listings never re-transcribe the same message. Every transcript is returned with a `note` marking it as a machine transcript, not a verbatim quote — treat it as a paraphrase, not exact wording.
+The engine is chosen per call via the `engine` argument, or otherwise defaults to `TELEGRAM_TRANSCRIBE_ENGINE` (`groq` or `telegram`). Results are cached by `(chat_id, message_id, engine)` in a local SQLite file so repeat reads and repeat listings never re-transcribe the same message. Concurrent requests for the same uncached recording are collapsed too: the second one waits for the first and returns its transcript, so a burst of callers costs one paid call, not one per caller. Every transcript is returned with a `note` marking it as a machine transcript, not a verbatim quote — treat it as a paraphrase, not exact wording.
 
 `get_history`, `get_messages`, and `list_messages` fill in already-cached transcripts for voice messages instead of leaving the text empty, controlled by `TELEGRAM_TRANSCRIBE`:
 
-- `off`: `transcribe_voice` is disabled and listings never show transcripts.
+- `off`: transcription is disabled at runtime. The `transcribe_voice` tool stays registered and returns `{"transcribed": false, "reason": "transcription_disabled"}` instead of transcribing, and listings never show transcripts. Use `TELEGRAM_EXPOSED_TOOLS` to hide the tool itself.
 - `on-demand` (default): listings show cached transcripts but never spend an API call fetching a new one.
 - `auto`: listings also prefetch missing transcripts, bounded per call by `TELEGRAM_TRANSCRIBE_MAX_VOICES`/`TELEGRAM_TRANSCRIBE_MAX_SECONDS` (Groq isn't free, so this prefetch is budgeted rather than unbounded).
 
@@ -193,7 +193,8 @@ GROQ_API_KEY=your_groq_api_key_here # required whenever engine=groq is used
 Premium on the account. `TELEGRAM_TRANSCRIBE_MAX_VOICES` (default 5) and
 `TELEGRAM_TRANSCRIBE_MAX_SECONDS` (default 300) bound how much `auto` mode
 prefetches per listing call; `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default
-`data/transcripts`) sets where the SQLite cache is written.
+`data/transcripts`) sets where the SQLite cache is written; `TELEGRAM_TRANSCRIBE_GROQ_MAX_MB`
+(default 25) is the largest recording the groq engine will upload.
 
 Run the server locally:
 
