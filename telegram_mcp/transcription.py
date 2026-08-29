@@ -108,8 +108,7 @@ def _cache_db_path() -> Path:
 def _connect() -> sqlite3.Connection:
     path = _cache_db_path()
     conn = sqlite3.connect(str(path))
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS transcripts (
             chat_id INTEGER NOT NULL,
             message_id INTEGER NOT NULL,
@@ -120,8 +119,7 @@ def _connect() -> sqlite3.Connection:
             created_at TEXT NOT NULL,
             PRIMARY KEY (chat_id, message_id, source)
         )
-        """
-    )
+        """)
     _migrate_source_into_key(conn)
     conn.commit()
     try:
@@ -142,8 +140,7 @@ def _migrate_source_into_key(conn: sqlite3.Connection) -> None:
         return
     if "PRIMARY KEY (chat_id, message_id, source)" in row[0]:
         return
-    conn.executescript(
-        """
+    conn.executescript("""
         ALTER TABLE transcripts RENAME TO transcripts_legacy;
         CREATE TABLE transcripts (
             chat_id INTEGER NOT NULL,
@@ -160,8 +157,7 @@ def _migrate_source_into_key(conn: sqlite3.Connection) -> None:
         SELECT chat_id, message_id, source, text, duration, lang, created_at
         FROM transcripts_legacy;
         DROP TABLE transcripts_legacy;
-        """
-    )
+        """)
 
 
 def get_cached_transcript(

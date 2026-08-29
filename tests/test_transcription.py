@@ -133,8 +133,7 @@ def test_legacy_cache_keyed_without_engine_is_migrated_in_place(transcript_cache
     path = transcription._cache_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE TABLE transcripts (
             chat_id INTEGER NOT NULL,
             message_id INTEGER NOT NULL,
@@ -146,8 +145,7 @@ def test_legacy_cache_keyed_without_engine_is_migrated_in_place(transcript_cache
             PRIMARY KEY (chat_id, message_id)
         );
         INSERT INTO transcripts VALUES (1, 2, 'telegram', 'old row', 23, 'ru', '2026-08-20');
-        """
-    )
+        """)
     conn.commit()
     conn.close()
 
