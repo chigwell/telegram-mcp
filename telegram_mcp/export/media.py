@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Any, Optional
 
+from telethon.tl import types as tl_types
+
 from .util import human_size, log, safe_name
 
 # kind -> subdirectory, mirroring a Telegram Desktop export so the folders are
@@ -31,7 +33,12 @@ def classify(message: Any) -> Optional[str]:
     # `.photo` and `.document`, so checked further down it never matches - a
     # preview of a video link comes out classified as a photo and the export
     # downloads the whole linked video under a `.jpg` name.
-    if getattr(message, "web_preview", None) is not None:
+    #
+    # Tested on the media type rather than on `.web_preview`, which is None for
+    # a preview Telegram has not resolved yet (WebPageEmpty, WebPagePending).
+    # Those fall through to "other" and put a media note on a message that is
+    # nothing but text.
+    if isinstance(getattr(message, "media", None), tl_types.MessageMediaWebPage):
         return None
     if getattr(message, "photo", None) is not None:
         return "photo"

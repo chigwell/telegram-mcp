@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from telethon.tl import types as tl_types
 
 from telegram_mcp.export import media as media_mod
 
@@ -63,18 +64,31 @@ class _Client:
 # ---------------------------------------------------------------------------
 
 
+def _preview(webpage, **kwargs):
+    return _message(media=tl_types.MessageMediaWebPage(webpage=webpage), **kwargs)
+
+
 def test_a_link_preview_is_not_the_chats_media():
     # Telethon surfaces the preview's own photo through `.photo`, so a message
     # that is only a link looks exactly like a photo message.
-    preview = _message(web_preview=object(), photo=object())
-    assert media_mod.classify(preview) is None
+    page = tl_types.WebPageEmpty(id=0)
+    assert media_mod.classify(_preview(page, web_preview=page, photo=object())) is None
 
 
 def test_a_link_preview_of_a_video_is_not_downloaded_as_a_photo():
-    preview = _message(web_preview=object(), photo=object(), document=object())
+    page = tl_types.WebPageEmpty(id=0)
+    preview = _preview(page, web_preview=page, photo=object(), document=object())
     # The bug this pins: classified as "photo", the export downloaded the whole
     # linked video and saved 25 MB of MP4 under a .jpg name.
     assert media_mod.classify(preview) != "photo"
+
+
+def test_an_unresolved_link_preview_is_not_media_either():
+    # Telegram had not fetched the page yet, so Telethon's `.web_preview` is
+    # None. The message is still nothing but a link, and calling it "other"
+    # hangs a media note on plain text.
+    unresolved = _preview(tl_types.WebPageEmpty(id=0), web_preview=None)
+    assert media_mod.classify(unresolved) is None
 
 
 def test_a_real_photo_is_still_a_photo():
