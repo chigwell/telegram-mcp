@@ -25,6 +25,14 @@ def classify(message: Any) -> Optional[str]:
     """The message's media kind, or None for a text-only message."""
     if getattr(message, "media", None) is None:
         return None
+    # A link preview is the sender's link, not the chat's media, and Telegram
+    # Desktop does not save it either. This has to be tested before anything
+    # else: Telethon exposes a preview's own photo and document through
+    # `.photo` and `.document`, so checked further down it never matches - a
+    # preview of a video link comes out classified as a photo and the export
+    # downloads the whole linked video under a `.jpg` name.
+    if getattr(message, "web_preview", None) is not None:
+        return None
     if getattr(message, "photo", None) is not None:
         return "photo"
     if getattr(message, "voice", None) is not None:
@@ -43,8 +51,6 @@ def classify(message: Any) -> Optional[str]:
         return "contact"
     if getattr(message, "document", None) is not None:
         return "document"
-    if getattr(message, "web_preview", None) is not None:
-        return None
     return "other"
 
 
@@ -81,6 +87,24 @@ def target_path(root: Path, message: Any, info: dict) -> Path:
     return root / subdir / f"{message.id:08d}_{stem}{ext}"
 
 
+class _TooLarge(Exception):
+    """Raised from the download's progress callback to stop it mid-flight."""
+
+    def __init__(self, received: int) -> None:
+        super().__init__(received)
+        self.received = received
+
+
+def _discard(path: Path) -> None:
+    """Remove a partial or oversized download. Left on disk it is worse than
+    nothing: the resume path sees a non-empty file and takes it for the media.
+    """
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
 async def download(
     client: Any, message: Any, info: dict, root: Path, max_bytes: Optional[int]
 ) -> dict:
@@ -94,14 +118,41 @@ async def download(
         info["file"] = str(path.relative_to(root.parent))
         return info
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    # The declared size is a hint, not a promise - a photo can report one of
+    # its thumbnails and still pull tens of megabytes. So the limit is enforced
+    # again on the bytes as they arrive, and once more on the finished file for
+    # the downloads that never report progress. Without that, the limit is
+    # advisory and one message can spend the whole export's disk budget.
+    def _guard(received: int, total: int) -> None:
+        if received > max_bytes:
+            raise _TooLarge(received)
+
     try:
-        saved = await client.download_media(message, file=str(path))
+        saved = await client.download_media(
+            message, file=str(path), progress_callback=_guard if max_bytes else None
+        )
+    except _TooLarge as exc:
+        _discard(path)
+        info["skipped"] = f"larger than limit (over {human_size(exc.received)})"
+        return info
     except Exception as exc:  # network, revoked file reference, deleted media
+        _discard(path)
         info["skipped"] = f"download failed: {exc}"
         log(f"  ! media for message {message.id}: {exc}")
         return info
     if not saved:
         info["skipped"] = "nothing to download"
         return info
-    info["file"] = str(Path(saved).relative_to(root.parent))
+    saved_path = Path(saved)
+    if max_bytes:
+        try:
+            actual = saved_path.stat().st_size
+        except OSError:
+            actual = 0
+        if actual > max_bytes:
+            _discard(saved_path)
+            info["skipped"] = f"larger than limit ({human_size(actual)})"
+            return info
+    info["file"] = str(saved_path.relative_to(root.parent))
     return info
