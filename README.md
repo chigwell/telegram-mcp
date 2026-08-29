@@ -591,6 +591,15 @@ telegram-mcp-export export @chat --months 3 --transcribe=telegram   # native, Pr
 Without `--media` nothing is downloaded, but every attachment is still described
 (kind, size, name, duration), so the conversation stays readable.
 
+Link previews are not media. What a message links to belongs to whoever it
+links to, so a preview is left as the link in the text, the way Telegram
+Desktop's own export leaves it. Otherwise a chat where people share videos
+would drag those videos onto your disk.
+
+`--media-max-mb` is enforced on the bytes, not on the size the message claims.
+A message can report one of its thumbnails and still be tens of megabytes, so
+a download that passes the limit while it runs is stopped and thrown away.
+
 Transcription uses the same engines as the `transcribe_voice` tool, with the
 same caveat: the native Telegram engine drops the last speech segment in roughly
 two recordings out of three, and the truncation is invisible in the text. Groq
