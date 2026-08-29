@@ -44,11 +44,12 @@ proxy = [
 
 [tool.setuptools]
 py-modules = ["main", "sanitize", "session_string_generator"]
-packages = ["telegram_mcp", "telegram_mcp.tools"]
+packages = ["telegram_mcp", "telegram_mcp.tools", "telegram_mcp.export"]
 
 [project.scripts]
 telegram-mcp = "main:main"
 telegram-mcp-generate-session = "session_string_generator:main"
+telegram-mcp-export = "telegram_mcp.export.cli:main"
 
 [tool.black]
 line-length = 99

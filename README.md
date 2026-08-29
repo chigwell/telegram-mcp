@@ -33,6 +33,7 @@ Message sent successfully:
 - [Device Identity](#device-identity)
 - [Proxy Support](#proxy-support)
 - [File Path Security](#file-path-security)
+- [Bulk Chat Export](#bulk-chat-export)
 - [Docker](#docker)
 - [Development](#development)
 - [Security Notes](#security-notes)
@@ -498,6 +499,114 @@ From an MCP client configuration, pass the same roots after `main.py`:
   }
 }
 ```
+
+## Bulk Chat Export
+
+Exporting a dozen chats is a CLI job, not an MCP tool: the output belongs on
+disk, not in a client's context window. `telegram-mcp-export` ships with this
+package and shares its plumbing - client construction, device identity, proxy
+support and voice transcription.
+
+**JSONL is the source of truth; HTML, Markdown and plain text are rendered from
+it**, so changing your mind about the format costs nothing and never touches the
+Telegram API again.
+
+### Session
+
+Export authorises as its **own device** and refuses to reuse any
+`TELEGRAM_SESSION_STRING*` it finds in the environment. Sharing one auth key
+between the running server and a second client is what makes Telegram revoke it
+(`AuthKeyDuplicatedError`), taking the server down with it. The session pool in
+[Multi-Account Setup](#multi-account-setup) solves a different problem -
+concurrent clients on one host - and a pool slot is claimed per process, so
+export stays out of it.
+
+```bash
+telegram-mcp-export login          # once, interactive: phone, code, 2FA password
+telegram-mcp-export whoami
+```
+
+The session file lives in `~/.config/telegram-mcp/export.session` (override with
+`--session`).
+
+### Exporting
+
+```bash
+# find the exact chats first
+telegram-mcp-export chats --out chats.tsv
+
+# one chat, whole history
+telegram-mcp-export export @somechat --all
+
+# a batch, last six months, JSONL + HTML
+telegram-mcp-export export --from-file targets.txt --months 6 --format jsonl,html
+```
+
+A target is an `@username`, a `t.me/...` link, a numeric id, or a chat title
+(exact match first, then a case-insensitive substring over your dialogs; an
+ambiguous title lists the candidates and stops rather than guessing).
+`--from-file` takes one target per line and allows `#` comments.
+
+Exactly one depth flag is required - the tool never guesses how much history you
+meant:
+
+| Flag | Window |
+|---|---|
+| `--all` | everything, from the first message |
+| `--months N` | the last N months |
+| `--since 2026-01-01` | from a date |
+| `--until 2026-06-30` | additionally cut the top |
+
+A date filter does not walk the whole history: the message id at the date
+boundary is located first, and the scan runs forward from there.
+
+### Output
+
+`--format jsonl,html,md,txt` (default `jsonl`, which is always written).
+
+- `messages.jsonl` - one message per line: normalised fields plus `raw`, the
+  full Telethon `to_dict()` with datetimes as ISO strings and bytes as base64.
+  `--no-raw` shrinks it considerably at the cost of fidelity.
+- `messages.html` - a Telegram Desktop-style read: date dividers, consecutive
+  messages from one sender joined, a colour per participant, replies linking to
+  the quoted message, forwards, reactions and inline media. Paginated every 3000
+  messages.
+- `messages.md` / `messages.txt` - for reading and for feeding to other tools.
+- `meta.json` - export parameters, date window, counts and an id-to-name map.
+
+Re-render an existing export without going online:
+
+```bash
+telegram-mcp-export render out/Some\ chat_-1001234567890 --format html,md
+```
+
+### Media and transcription are opt-in
+
+```bash
+telegram-mcp-export export @chat --all --media --media-max-mb 50
+telegram-mcp-export export @chat --months 3 --transcribe            # groq
+telegram-mcp-export export @chat --months 3 --transcribe=telegram   # native, Premium
+```
+
+Without `--media` nothing is downloaded, but every attachment is still described
+(kind, size, name, duration), so the conversation stays readable.
+
+Transcription uses the same engines as the `transcribe_voice` tool, with the
+same caveat: the native Telegram engine drops the last speech segment in roughly
+two recordings out of three, and the truncation is invisible in the text. Groq
+is the default for that reason. Every transcript records which engine produced
+it and is a machine reading, not a verbatim quote.
+
+### Interruptions
+
+Ctrl+C loses nothing already written. Continue with:
+
+```bash
+telegram-mcp-export export @chat --all --resume
+```
+
+`--resume` reads the last id from the existing `messages.jsonl` and appends only
+what is newer.
 
 ## Docker
 
