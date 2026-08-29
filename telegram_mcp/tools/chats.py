@@ -678,11 +678,12 @@ async def get_chat(chat_id: Union[int, str], account: str = None) -> str:
                     if getattr(sender, "last_name", None):
                         sender_name += f" {sender.last_name}"
                 sender_name = sanitize_name(sender_name.strip() or "Unknown")
-                record["last_message"] = {
+                last_message = {
                     "sender": sender_name,
                     "date": last_msg.date,
-                    "text": sanitize_user_content(last_msg.message),
                 }
+                attach_message_text(last_message, last_msg)
+                record["last_message"] = last_message
         except Exception as diag_ex:
             logger.warning(f"Could not get dialog info for {chat_id}: {diag_ex}")
 

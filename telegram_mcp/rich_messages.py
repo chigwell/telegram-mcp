@@ -245,3 +245,30 @@ def message_rich_payload(msg: Any) -> Optional[dict]:
     if rich is None:
         return None
     return rich_message_to_dict(rich)
+
+
+def attach_to_record(
+    record: dict, msg: Any, text_key: str = "text", transform: Optional[Any] = None
+) -> dict:
+    """Put a message's rich content into a plain record, in place.
+
+    One rule for every reader, so they cannot drift: the rendering fills the
+    text field only when the message has no plain text of its own. A rich
+    message has none, and without this it reads as empty.
+
+    ``transform`` is applied to the rendering before it is stored - the MCP
+    tools sanitize user-controlled content before returning it.
+    """
+    payload = message_rich_payload(msg)
+    if payload is None:
+        return record
+    markdown = payload.pop("markdown", "")
+    if markdown and transform is not None:
+        markdown = transform(markdown)
+    if markdown:
+        if record.get(text_key):
+            payload["markdown"] = markdown
+        else:
+            record[text_key] = markdown
+    record["rich_message"] = payload
+    return record

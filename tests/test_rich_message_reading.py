@@ -8,13 +8,16 @@ reader actually gets rather than on the renderer alone.
 """
 
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 from telethon.tl import types
 
-from telegram_mcp import rich_messages
+from telegram_mcp import rich_messages, runtime
 from telegram_mcp.tools import messages
+
+DT = datetime(2026, 8, 27, tzinfo=timezone.utc)
 
 
 def _plain(text):
@@ -222,3 +225,89 @@ async def test_rich_draft_without_premium_sends_nothing():
     assert result["sent"] is False
     assert result["reason"] == "telegram_premium_required"
     assert cl.requests == []
+
+
+# --- the readers, not just the renderer --------------------------------------
+#
+# The renderer had tests and they were all green while every reading tool still
+# returned "[empty]" for a rich message: each tool built its record by hand and
+# sanitized `msg.message`, which is empty on a rich message and comes back as
+# the "[empty]" marker. So these tests sit at the tool boundary, where the
+# reader actually is.
+
+
+def _rich_message(**overrides):
+    """A message whose whole content lives in page blocks."""
+    base = dict(
+        id=860243,
+        sender=None,
+        sender_id=42,
+        date=DT,
+        message=None,
+        reply_to=None,
+        chat_id=555,
+        chat=SimpleNamespace(title="Chat"),
+        rich_message=_rich([types.PageBlockParagraph(text=_plain("Точка эквайринг"))]),
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+class _ReadingClient:
+    """Just enough client for the reading tools: it hands back messages."""
+
+    def __init__(self, messages_list):
+        self._list = messages_list
+
+    async def get_messages(self, entity, limit=None, ids=None, **kwargs):
+        return self._list[:limit] if limit else list(self._list)
+
+    async def get_input_entity(self, entity):
+        return "peer"
+
+
+def _patch_client(monkeypatch, client):
+    async def _entity(*args, **kwargs):
+        return SimpleNamespace()
+
+    monkeypatch.setattr(messages, "get_client", lambda account=None: client)
+    monkeypatch.setattr(messages, "resolve_entity", _entity)
+    monkeypatch.setattr(messages, "get_marked_id", lambda e: 555)
+
+
+@pytest.mark.asyncio
+async def test_list_messages_shows_a_rich_message_instead_of_empty(monkeypatch):
+    _patch_client(monkeypatch, _ReadingClient([_rich_message()]))
+
+    result = await messages.list_messages(chat_id=555, limit=10, account=None)
+
+    record = json.loads(result)["results"][0]
+    assert record["text"] != "[empty]"
+    assert "Точка эквайринг" in record["text"]
+
+
+@pytest.mark.asyncio
+async def test_search_messages_shows_a_rich_message_instead_of_empty(monkeypatch):
+    _patch_client(monkeypatch, _ReadingClient([_rich_message()]))
+
+    result = await messages.search_messages(chat_id=555, query="эквайринг", account=None)
+
+    record = json.loads(result)["results"][0]
+    assert "Точка эквайринг" in record["text"]
+
+
+def test_a_message_with_its_own_text_keeps_it(monkeypatch):
+    # The rendering must not overwrite what the sender actually typed; it goes
+    # into rich_message.markdown instead.
+    record = {}
+    runtime.attach_message_text(record, _rich_message(message="caption"))
+
+    assert record["text"] == "caption"
+    assert "Точка эквайринг" in record["rich_message"]["markdown"]
+
+
+def test_a_truly_empty_message_still_reads_as_empty():
+    record = {}
+    runtime.attach_message_text(record, _rich_message(message=None, rich_message=None))
+
+    assert record["text"] == "[empty]"
