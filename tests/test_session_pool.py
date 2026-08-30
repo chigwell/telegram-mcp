@@ -4,6 +4,7 @@ import os
 import pytest
 
 from telegram_mcp import runner, runtime
+from telegram_mcp.singleton import try_lock_exclusive
 
 # --- _parse_session_pool -----------------------------------------------------
 
@@ -30,13 +31,11 @@ def isolated_lock_dir(tmp_path, monkeypatch):
 
 def _lock_slot(lock_dir, session):
     """Simulate another live client holding the slot for ``session``."""
-    import fcntl
-
     digest = hashlib.sha1(session.encode("utf-8")).hexdigest()[:16]
     path = os.path.join(str(lock_dir), "telegram-mcp-session-locks", f"session-{digest}.lock")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fh = open(path, "w")
-    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    fh = open(path, "a+")
+    assert try_lock_exclusive(fh), "test could not take the lock it means to hold"
     return fh
 
 
@@ -64,9 +63,19 @@ def test_acquire_session_raises_when_pool_exhausted(isolated_lock_dir):
             fh.close()
 
 
-def test_acquire_session_without_fcntl_uses_first(isolated_lock_dir, monkeypatch):
-    monkeypatch.setattr(runtime, "fcntl", None)
+def test_acquire_session_locks_are_visible_to_other_clients(isolated_lock_dir):
+    """The claimed slot must actually be locked, on every platform.
+
+    Windows previously had no advisory locking here and every client was handed
+    pool[0], which is precisely the collision the pool exists to prevent.
+    """
     assert runtime._acquire_session(["AAA", "BBB"]) == "AAA"
+    digest = hashlib.sha1(b"AAA").hexdigest()[:16]
+    path = os.path.join(
+        str(isolated_lock_dir), "telegram-mcp-session-locks", f"session-{digest}.lock"
+    )
+    with open(path, "a+") as rival:
+        assert not try_lock_exclusive(rival)
 
 
 # --- _discover_accounts prefers the pool for the default account -------------

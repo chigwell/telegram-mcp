@@ -18,8 +18,8 @@ from urllib.parse import unquote, urlparse
 
 # Third-party libraries
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP, Context
-from mcp.types import Annotations, TextContent, ToolAnnotations
+from mcp.server.fastmcp import FastMCP, Context, Image
+from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
 from mcp.shared.exceptions import McpError
 from pythonjsonlogger import jsonlogger
 from telethon import TelegramClient, functions, types, utils
@@ -52,6 +52,8 @@ try:
     import fcntl  # POSIX advisory locks; unavailable on Windows
 except ImportError:  # pragma: no cover - Windows fallback
     fcntl = None
+
+from telegram_mcp.singleton import try_lock_exclusive
 
 from functools import wraps
 import telethon.errors.rpcerrorlist
@@ -139,7 +141,8 @@ def _install_annotation_hook() -> None:
                 response.root.content = [
                     (
                         block.model_copy(update={"annotations": _USER_AUDIENCE})
-                        if isinstance(block, TextContent) and block.annotations is None
+                        if isinstance(block, (TextContent, ImageContent))
+                        and block.annotations is None
                         else block
                     )
                     for block in content
@@ -366,11 +369,6 @@ def _parse_session_pool() -> List[str]:
 
 def _acquire_session(pool: List[str]) -> str:
     """Claim the first free session in the pool via an advisory file lock."""
-    if fcntl is None:
-        # No advisory locks (e.g. Windows): can't coordinate slots, so use the
-        # first session. For concurrent clients there, prefer distinct
-        # TELEGRAM_SESSION_STRING_<LABEL> accounts instead.
-        return pool[0]
     lock_dir = os.path.join(tempfile.gettempdir(), "telegram-mcp-session-locks")
     try:
         os.makedirs(lock_dir, exist_ok=True)
@@ -380,9 +378,12 @@ def _acquire_session(pool: List[str]) -> str:
         digest = hashlib.sha1(session.encode("utf-8")).hexdigest()[:16]
         lock_path = os.path.join(lock_dir, f"session-{digest}.lock")
         try:
-            fh = open(lock_path, "w")
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # "a+", not "w": on Windows the lock covers the first byte, and
+            # truncating a file another live client holds is refused.
+            fh = open(lock_path, "a+")
         except OSError:
+            continue
+        if not try_lock_exclusive(fh):
             # Locked by another live client — try the next session.
             try:
                 fh.close()
@@ -391,6 +392,8 @@ def _acquire_session(pool: List[str]) -> str:
             continue
         _SESSION_LOCKS.append(fh)
         try:
+            fh.seek(0)
+            fh.truncate()
             fh.write(f"pid={os.getpid()}\n")
             fh.flush()
         except OSError:
@@ -519,7 +522,14 @@ def with_account(readonly=False):
                 return label, await fn(*args, **kw)
 
             results = await asyncio.gather(*(_call_for(label) for label in clients))
-            return "\n\n".join(f"[{label}]\n{result}" for label, result in results)
+            if all(isinstance(result, str) for _, result in results):
+                return "\n\n".join(f"[{label}]\n{result}" for label, result in results)
+
+            account_labelled_content = []
+            for label, result in results:
+                account_labelled_content.append(f"[{label}]")
+                account_labelled_content.extend(result if isinstance(result, list) else [result])
+            return account_labelled_content
 
         return wrapper
 
