@@ -27,6 +27,16 @@ def test_flood_wait_is_named_and_actionable():
     assert "code: MSG-ERR-" in msg
 
 
+def test_flood_wait_zero_or_missing_seconds_formats_unknown_duration():
+    err = FloodWaitError(request=None, capture=0)
+    msg = log_and_format_error("send_message", err, prefix=ErrorCategory.MSG)
+
+    assert "Rate limit exceeded (FloodWait)" in msg
+    assert "an unknown duration" in msg
+    assert "Do NOT retry immediately" in msg
+    assert "0 seconds" not in msg
+
+
 def test_flood_wait_is_detected_by_helper():
     err = FloodWaitError(request=None, capture=120)
     assert _is_flood_wait(err) is True
@@ -61,6 +71,14 @@ def test_flood_sleep_threshold_custom_valid(monkeypatch):
 
     monkeypatch.setenv("TELEGRAM_FLOOD_SLEEP_THRESHOLD", "0")
     assert _get_flood_sleep_threshold() == 0
+
+
+def test_flood_sleep_threshold_negative_clamped_with_warning(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_FLOOD_SLEEP_THRESHOLD", "-5")
+    with patch("telegram_mcp.runtime.logger") as mock_logger:
+        assert _get_flood_sleep_threshold() == 0
+        mock_logger.warning.assert_called_once()
+        assert "Negative TELEGRAM_FLOOD_SLEEP_THRESHOLD" in mock_logger.warning.call_args[0][0]
 
 
 def test_flood_sleep_threshold_invalid_falls_back(monkeypatch):
