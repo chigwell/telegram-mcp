@@ -480,18 +480,9 @@ async def send_scheduled_message(
     try:
         cl = get_client(account)
         await ensure_connected(cl)
-        if isinstance(schedule_date, int):
-            dt = datetime.fromtimestamp(schedule_date, tz=timezone.utc)
-        else:
-            dt = datetime.fromisoformat(schedule_date.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-
-        if dt <= datetime.now(timezone.utc):
-            return (
-                f"schedule_date must be in the future (got {dt.isoformat()}, "
-                f"now {datetime.now(timezone.utc).isoformat()})."
-            )
+        dt, schedule_error = parse_schedule_date(schedule_date)
+        if schedule_error:
+            return schedule_error
 
         entity = await resolve_entity(chat_id, cl)
         result = await cl.send_message(entity, message, schedule=dt)

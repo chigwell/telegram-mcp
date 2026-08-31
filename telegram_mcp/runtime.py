@@ -111,6 +111,31 @@ def get_entity_filter_type(entity: Any) -> Optional[str]:
     return None
 
 
+def parse_schedule_date(
+    schedule_date: Union[str, int],
+) -> tuple[Optional[datetime], Optional[str]]:
+    """Return (datetime, None) for a usable schedule_date, or (None, error message).
+
+    Accepts an ISO-8601 string or a Unix timestamp; naive datetimes are UTC.
+    """
+    try:
+        if isinstance(schedule_date, int):
+            dt = datetime.fromtimestamp(schedule_date, tz=timezone.utc)
+        else:
+            dt = datetime.fromisoformat(str(schedule_date).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError) as exc:
+        return None, f"schedule_date could not be parsed ({schedule_date!r}): {exc}"
+
+    now = datetime.now(timezone.utc)
+    if dt <= now:
+        return None, (
+            f"schedule_date must be in the future (got {dt.isoformat()}, now {now.isoformat()})."
+        )
+    return dt, None
+
+
 load_dotenv()
 
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID"))

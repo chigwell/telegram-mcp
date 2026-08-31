@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from telegram_mcp import runtime
@@ -7,14 +9,16 @@ from telegram_mcp.tools import media
 class _DummyClient:
     def __init__(self):
         self.sent = None
+        self.schedule = None
 
-    async def send_file(self, entity, file_paths, caption=None, reply_to=None):
+    async def send_file(self, entity, file_paths, caption=None, reply_to=None, schedule=None):
         self.sent = {
             "entity": entity,
             "file_paths": file_paths,
             "caption": caption,
             "reply_to": reply_to,
         }
+        self.schedule = schedule
 
 
 @pytest.mark.asyncio
@@ -150,3 +154,76 @@ async def test_send_album_reuses_readable_path_security(tmp_path, monkeypatch):
     result = await media.send_album("AgenticAIChat", ["one.png", str(outside_file)])
 
     assert result == "Path is outside allowed roots."
+
+
+@pytest.mark.asyncio
+async def test_send_file_schedules_when_schedule_date_given(tmp_path, monkeypatch):
+    root = (tmp_path / "root").resolve()
+    root.mkdir()
+    path = root / "poster.png"
+    path.write_bytes(b"png")
+
+    client = _DummyClient()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root])
+    monkeypatch.setattr(media, "clients", {"default": client})
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+
+    async def _resolve_entity(chat_id, cl):
+        return "entity:channel"
+
+    monkeypatch.setattr(media, "resolve_entity", _resolve_entity)
+
+    when = datetime.now(timezone.utc) + timedelta(hours=1)
+    result = await media.send_file(
+        "Channel", "poster.png", caption="later", schedule_date=when.isoformat()
+    )
+
+    assert result == f"File from {path} scheduled for {when.isoformat()} in chat Channel."
+    assert client.schedule == when
+
+
+@pytest.mark.asyncio
+async def test_send_album_schedules_when_schedule_date_given(tmp_path, monkeypatch):
+    root = (tmp_path / "root").resolve()
+    root.mkdir()
+    (root / "one.png").write_bytes(b"png-one")
+    (root / "two.png").write_bytes(b"png-two")
+
+    client = _DummyClient()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root])
+    monkeypatch.setattr(media, "clients", {"default": client})
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+
+    async def _resolve_entity(chat_id, cl):
+        return "entity:channel"
+
+    monkeypatch.setattr(media, "resolve_entity", _resolve_entity)
+
+    when = datetime.now(timezone.utc) + timedelta(days=2)
+    result = await media.send_album(
+        "Channel", ["one.png", "two.png"], schedule_date=int(when.timestamp())
+    )
+
+    assert result.startswith("Album of 2 files scheduled for ")
+    assert client.schedule == datetime.fromtimestamp(int(when.timestamp()), tz=timezone.utc)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["send_album", "send_file"])
+async def test_schedule_date_in_the_past_is_rejected(tmp_path, monkeypatch, tool_name):
+    root = (tmp_path / "root").resolve()
+    root.mkdir()
+    (root / "one.png").write_bytes(b"png-one")
+    (root / "two.png").write_bytes(b"png-two")
+
+    client = _DummyClient()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root])
+    monkeypatch.setattr(media, "clients", {"default": client})
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    tool = getattr(media, tool_name)
+    result = await tool("Channel", ["one.png", "two.png"], schedule_date=past)
+
+    assert result.startswith("schedule_date must be in the future")
+    assert client.sent is None
