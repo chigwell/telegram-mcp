@@ -23,7 +23,7 @@ from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
 from mcp.shared.exceptions import McpError
 from pythonjsonlogger import jsonlogger
 from telethon import TelegramClient, functions, types, utils
-from telethon.errors import AuthKeyDuplicatedError
+from telethon.errors import AuthKeyDuplicatedError, FloodWaitError
 from telethon.sessions import StringSession
 from telethon.tl.types import (
     User,
@@ -323,14 +323,34 @@ def _build_proxy_for_label(label: str) -> tuple[Optional[Any], Optional[Any]]:
     return proxy, None
 
 
+def _get_flood_sleep_threshold() -> int:
+    """Read TELEGRAM_FLOOD_SLEEP_THRESHOLD from environment (default: 60)."""
+    raw = os.getenv("TELEGRAM_FLOOD_SLEEP_THRESHOLD", "60").strip()
+    try:
+        val = int(raw)
+        if val < 0:
+            logger.warning(
+                f"Negative TELEGRAM_FLOOD_SLEEP_THRESHOLD='{raw}' clamped to 0 (fail-fast mode)"
+            )
+            return 0
+        return val
+    except ValueError:
+        logger.warning(
+            f"Invalid TELEGRAM_FLOOD_SLEEP_THRESHOLD='{raw}', falling back to default 60s"
+        )
+        return 60
+
+
 def _build_client(session: Any, label: str) -> TelegramClient:
-    """Construct a ``TelegramClient`` honoring per-label proxy configuration."""
+    """Construct a ``TelegramClient`` honoring per-label proxy and flood sleep configuration."""
     proxy, connection = _build_proxy_for_label(label)
     kwargs: dict[str, Any] = {}
     if proxy is not None:
         kwargs["proxy"] = proxy
     if connection is not None:
         kwargs["connection"] = connection
+    # Read flood sleep threshold dynamically so runtime env changes take effect
+    kwargs["flood_sleep_threshold"] = _get_flood_sleep_threshold()
     kwargs.update(client_identity_kwargs())
     return TelegramClient(session, TELEGRAM_API_ID, TELEGRAM_API_HASH, **kwargs)
 
@@ -689,6 +709,23 @@ class ErrorCategory(str, Enum):
     FOLDER = "FOLDER"
 
 
+def _is_flood_wait(error: Exception) -> bool:
+    """True for Telethon FloodWaitError."""
+    try:
+        return isinstance(error, FloodWaitError)
+    except Exception:  # telethon missing or moved — not this helper's problem
+        return False
+
+
+def _is_schema_drift(error: Exception) -> bool:
+    """True for TypeNotFoundError — the installed TL schema is older than what the server sends."""
+    try:
+        from telethon.errors.common import TypeNotFoundError
+    except Exception:  # telethon missing or moved — not this helper's problem
+        return False
+    return isinstance(error, TypeNotFoundError)
+
+
 def log_and_format_error(
     function_name: str,
     error: Exception,
@@ -735,6 +772,23 @@ def log_and_format_error(
     # Format the additional context parameters
     context = ", ".join(f"{k}={v}" for k, v in kwargs.items())
 
+    # Telegram FloodWait (Rate Limiting) must be explicitly formatted for LLM agents.
+    # LLMs will blindly retry generic errors, escalating the flood penalty and risking bans.
+    # We log at WARNING level and return explicit wait duration with a strict no-retry directive.
+    if _is_flood_wait(error):
+        seconds = getattr(error, "seconds", None) or 0
+        logger.warning(
+            f"Telegram FloodWait in {function_name} ({context}) - "
+            f"Rate limited for {seconds}s - Code: {error_code}"
+        )
+        if user_message:
+            return user_message
+        wait_clause = f"{seconds} seconds" if seconds > 0 else "an unknown duration"
+        return (
+            f"Rate limit exceeded (FloodWait): Telegram requires waiting {wait_clause} "
+            f"before repeating this operation. Do NOT retry immediately (code: {error_code})."
+        )
+
     # Log the full technical error
     logger.error(f"Error in {function_name} ({context}) - Code: {error_code}", exc_info=True)
 
@@ -756,15 +810,6 @@ def log_and_format_error(
         )
 
     return f"An error occurred (code: {error_code}). Check mcp_errors.log for details."
-
-
-def _is_schema_drift(error: Exception) -> bool:
-    """True for TypeNotFoundError — the installed TL schema is older than what the server sends."""
-    try:
-        from telethon.errors.common import TypeNotFoundError
-    except Exception:  # telethon missing or moved — not this helper's problem
-        return False
-    return isinstance(error, TypeNotFoundError)
 
 
 def validate_id(*param_names_to_validate):
