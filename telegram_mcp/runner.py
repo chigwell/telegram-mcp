@@ -10,6 +10,7 @@ except UnsafeInstallationError as exc:
 from telethon.errors import AuthKeyDuplicatedError
 
 from telegram_mcp import runtime as _runtime
+from telegram_mcp import transcription as _transcription
 from telegram_mcp.runtime import *
 from telegram_mcp.singleton import (
     DEFAULT_GRACE_SECONDS,
@@ -191,6 +192,7 @@ async def _main() -> None:
 def main() -> None:
     _configure_allowed_roots_from_cli(sys.argv[1:])
     _runtime._apply_exposed_tools_mode()
+    _transcription.validate_transcription_config()
     asyncio.run(_main())
 
 

@@ -23,4 +23,13 @@ services:
     # Replace './telegram_sessions' with your desired host path.
     # volumes:
     #   - ./telegram_sessions:/app
+    volumes:
+      # Voice/video-note transcript cache (SQLite, see telegram_mcp/transcription.py).
+      # Without this mount the cache lives only in the container's writable
+      # layer and is lost on every `docker compose build`. It holds plaintext
+      # personal-chat transcripts, so this directory should get its own
+      # backup/retention policy rather than riding along with a general backup.
+      # Host directory must be readable/writable by uid 1000 (appuser):
+      #   mkdir -p ./transcript_cache && chown 1000:1000 ./transcript_cache
+      - ./transcript_cache:/app/data/transcripts
     restart: unless-stopped
