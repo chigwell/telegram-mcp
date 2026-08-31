@@ -672,7 +672,7 @@ Maintained by [@chigwell](https://github.com/chigwell) and [@l1v0n1](https://git
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=chigwell/telegram-mcp&type=Date)](https://www.star-history.com/#chigwell/telegram-mcp&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=chigwell/telegram-mcp&type=Date)](https://star-history.dera.page/#chigwell/telegram-mcp&Date)
 
 ## Contributors
 
