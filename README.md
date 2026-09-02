@@ -45,7 +45,30 @@ The server currently includes 80+ MCP tools grouped into these areas:
 
 - **Accounts:** list configured accounts and route tool calls by account label.
 - **Chats and groups:** list chats, inspect metadata, create groups/channels, join or leave chats, invite users, manage admins, bans, default permissions, slow mode, topics, invite links, common chats, read receipts, and message links.
-- **Messages:** send, schedule, edit, delete, forward, pin, unpin, mark read, reply, search, inspect context, create polls, manage reactions, inspect inline buttons, and press inline callbacks. `send_message`, `reply_to_message`, and `edit_message` support classic formatting (`parse_mode='md'`/`'html'`) and server-side rich formatting (`parse_mode='rich'`/`'rich_markdown'`/`'rich_html'` — full Markdown/HTML with tables, headings, formulas, and collapsible sections). Rich modes require Telegram Premium on the account; Premium is re-checked on every call, and without it nothing is sent — the tool returns a structured `telegram_premium_required` result so the agent can reformat with classic modes and retry.
+- **Messages:** send, schedule, edit, delete, forward, pin, unpin, mark read, reply, search, inspect context, create polls, manage reactions, inspect inline buttons, and press inline callbacks. `send_message`, `reply_to_message`, and `edit_message` support classic formatting (`parse_mode='md'`/`'html'`) and server-side rich formatting (`parse_mode='rich'`/`'rich_markdown'`/`'rich_html'` — full Markdown/HTML with tables, headings, formulas, and collapsible sections). Rich modes require Telegram Premium on the account; Premium is re-checked on every call, and without it nothing is sent — the tool returns a structured `telegram_premium_required` result so the agent can reformat with classic modes and retry. Rich messages are also readable and can be streamed as a live draft with `stream_rich_draft` (see below).
+### Rich messages
+
+Rich formatting is a Telegram Premium feature, and it works in both directions.
+
+**Reading.** A rich message keeps its content in page blocks rather than in the plain `message` field, so a client that only reads `message` shows it as empty. Every tool that returns messages (`list_messages`, `get_messages`, `search_messages`, `get_message_context`, ...) renders those blocks to Markdown and returns them as `rich_message`:
+
+```json
+{
+  "id": 4821,
+  "text": "# Release notes\n\n* tables\n* collapsible sections",
+  "rich_message": {
+    "blocks": 4,
+    "photos": 1,
+    "documents": 0,
+    "rtl": false
+  }
+}
+```
+
+When the message also carries plain text, that text stays in `text` and the rendering moves to `rich_message.markdown` instead of overwriting it. Headings, lists, tables, blockquotes, code blocks with a language, formulas, collapsible sections, and anchors all survive the round trip; a partially loaded message is flagged with `"partial": true`. Block types Telegram adds in a future layer degrade to a labelled placeholder (`[unsupported: PageBlockWhatever]`) instead of silently disappearing.
+
+**Streaming drafts.** `stream_rich_draft(chat_id, text, parse_mode="rich_md", draft_id=None)` shows the recipient a live rich draft, the way Telegram's own AI features type into a chat. It sends a typing action, not a message: nothing lands in the history, and the draft disappears on its own. Pass the `draft_id` returned by the first call into the next ones to keep updating the same draft; omit it to start a new one. Requires Premium, and the tool is excluded from read-only mode.
+
 - **Contacts:** list, search, add, delete, block, unblock, import, export, inspect direct chats, find recent contact interactions, and remember contacts by the names you actually use (see below).
 
 ### Remembered contacts

@@ -59,6 +59,7 @@ from functools import wraps
 import telethon.errors.rpcerrorlist
 from sanitize import sanitize_user_content, sanitize_name, sanitize_dict, format_tool_result
 from telegram_mcp.client_identity import client_identity_kwargs
+from telegram_mcp import rich_messages
 
 
 class ValidationError(Exception):
@@ -1443,6 +1444,24 @@ async def resolve_input_entity(identifier: Union[int, str], client=None) -> Any:
     return await _resolve("get_input_entity", identifier, client, "input entity")
 
 
+def attach_message_text(record: dict, message: Any, key: str = "text") -> dict:
+    """Put a message's readable content into ``record[key]``, in place.
+
+    Sanitizing ``message.message`` is not enough on its own: a rich message
+    keeps its content in page blocks, so that field is empty and the sanitizer
+    turns it into the "[empty]" marker - a message full of tables and headings
+    reads as an empty one. Every reader has to render the blocks before it
+    decides a message is empty, and there are eight readers, so the rule lives
+    here rather than being retyped (and forgotten) in each of them.
+    """
+    text = sanitize_user_content(message.message) if getattr(message, "message", None) else ""
+    if text:
+        record[key] = text
+    rich_messages.attach_to_record(record, message, text_key=key, transform=sanitize_user_content)
+    record.setdefault(key, sanitize_user_content(None))
+    return record
+
+
 def format_message(message) -> Dict[str, Any]:
     """Helper function to format message information consistently.
 
@@ -1451,8 +1470,8 @@ def format_message(message) -> Dict[str, Any]:
     result = {
         "id": message.id,
         "date": message.date.isoformat(),
-        "text": sanitize_user_content(message.message),
     }
+    attach_message_text(result, message)
 
     if message.from_id:
         result["from_id"] = utils.get_peer_id(message.from_id)

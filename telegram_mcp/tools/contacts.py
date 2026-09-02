@@ -280,13 +280,12 @@ async def get_last_interaction(contact_id: Union[int, str], account: Optional[st
 
         records = []
         for msg in messages:
-            records.append(
-                {
-                    "date": msg.date,
-                    "from": "You" if msg.out else contact_name,
-                    "text": sanitize_user_content(msg.message),
-                }
-            )
+            record = {
+                "date": msg.date,
+                "from": "You" if msg.out else contact_name,
+            }
+            attach_message_text(record, msg)
+            records.append(record)
 
         return format_tool_result(
             records,
