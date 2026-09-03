@@ -26,9 +26,8 @@ async def create_group(title: str, user_ids: List[Union[int, str]], account: str
             try:
                 user = await resolve_entity(user_id, cl)
                 users.append(user)
-            except Exception as e:
-                logger.error(f"Failed to get entity for user ID {user_id}: {e}")
-                return f"Error: Could not find user with ID {user_id}"
+            except Exception:
+                return "Error: Could not find a requested user."
 
         if not users:
             return "Error: No valid users provided"
@@ -64,7 +63,6 @@ async def create_group(title: str, user_ids: List[Union[int, str]], account: str
             else:
                 raise  # Let the outer exception handler catch it
     except Exception as e:
-        logger.exception(f"create_group failed (title={title}, user_ids={user_ids})")
         return log_and_format_error("create_group", e, title=title, user_ids=user_ids)
 
 
@@ -96,8 +94,8 @@ async def invite_to_group(
             try:
                 user = await resolve_entity(user_id, cl)
                 users_to_add.append(user)
-            except ValueError as e:
-                return f"Error: User with ID {user_id} could not be found. {e}"
+            except ValueError:
+                return "Error: A requested user could not be found."
 
         try:
             if isinstance(entity, Channel):
@@ -156,10 +154,6 @@ async def invite_to_group(
             return log_and_format_error("invite_to_group", e, group_id=group_id, user_ids=user_ids)
 
     except Exception as e:
-        logger.error(
-            f"telegram_mcp invite_to_group failed (group_id={group_id}, user_ids={user_ids})",
-            exc_info=True,
-        )
         return log_and_format_error("invite_to_group", e, group_id=group_id, user_ids=user_ids)
 
 
@@ -204,11 +198,9 @@ async def leave_chat(chat_id: Union[int, str], account: str = None) -> str:
                 )
                 chat_name = sanitize_name(getattr(entity, "title", str(chat_id)))
                 return f"Left basic group {chat_name} (ID: {chat_id})."
-            except Exception as chat_err:
+            except Exception:
                 # If the above fails, try the second approach
-                logger.warning(
-                    f"First leave attempt failed: {chat_err}, trying alternative method"
-                )
+                logger.warning("First leave attempt failed; trying alternative method")
 
                 try:
                     # Alternative approach - sometimes this works better
@@ -234,8 +226,6 @@ async def leave_chat(chat_id: Union[int, str], account: str = None) -> str:
             )
 
     except Exception as e:
-        logger.exception(f"leave_chat failed (chat_id={chat_id})")
-
         # Provide helpful hint for common errors
         error_str = str(e).lower()
         if "invalid" in error_str and "chat" in error_str:
@@ -365,7 +355,6 @@ async def edit_chat_title(chat_id: Union[int, str], title: str, account: str = N
             return f"Cannot edit title for this entity type ({type(entity)})."
         return f"Chat {chat_id} title updated to '{sanitize_name(title)}'."
     except Exception as e:
-        logger.exception(f"edit_chat_title failed (chat_id={chat_id}, title='{title}')")
         return log_and_format_error("edit_chat_title", e, chat_id=chat_id, title=title)
 
 
@@ -411,7 +400,6 @@ async def edit_chat_photo(
 
         return f"Chat {chat_id} photo updated from {safe_path}."
     except Exception as e:
-        logger.exception(f"edit_chat_photo failed (chat_id={chat_id}, file_path='{file_path}')")
         return log_and_format_error("edit_chat_photo", e, chat_id=chat_id, file_path=file_path)
 
 
@@ -446,7 +434,6 @@ async def edit_chat_about(chat_id: Union[int, str], about: str, account: str = N
     except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
         return "Error: admin rights required to edit the chat description."
     except Exception as e:
-        logger.exception(f"edit_chat_about failed (chat_id={chat_id})")
         return log_and_format_error("edit_chat_about", e, chat_id=chat_id)
 
 
@@ -481,7 +468,6 @@ async def delete_chat_photo(chat_id: Union[int, str], account: str = None) -> st
 
         return f"Chat {chat_id} photo deleted."
     except Exception as e:
-        logger.exception(f"delete_chat_photo failed (chat_id={chat_id})")
         return log_and_format_error("delete_chat_photo", e, chat_id=chat_id)
 
 
@@ -558,10 +544,6 @@ async def promote_admin(
             return log_and_format_error("promote_admin", e, group_id=group_id, user_id=user_id)
 
     except Exception as e:
-        logger.error(
-            f"telegram_mcp promote_admin failed (group_id={group_id}, user_id={user_id})",
-            exc_info=True,
-        )
         return log_and_format_error("promote_admin", e, group_id=group_id, user_id=user_id)
 
 
@@ -618,10 +600,6 @@ async def demote_admin(
             return log_and_format_error("demote_admin", e, group_id=group_id, user_id=user_id)
 
     except Exception as e:
-        logger.error(
-            f"telegram_mcp demote_admin failed (group_id={group_id}, user_id={user_id})",
-            exc_info=True,
-        )
         return log_and_format_error("demote_admin", e, group_id=group_id, user_id=user_id)
 
 
@@ -676,7 +654,6 @@ async def ban_user(chat_id: Union[int, str], user_id: Union[int, str], account: 
         except Exception as e:
             return log_and_format_error("ban_user", e, chat_id=chat_id, user_id=user_id)
     except Exception as e:
-        logger.exception(f"ban_user failed (chat_id={chat_id}, user_id={user_id})")
         return log_and_format_error("ban_user", e, chat_id=chat_id, user_id=user_id)
 
 
@@ -735,7 +712,6 @@ async def unban_user(
         except Exception as e:
             return log_and_format_error("unban_user", e, chat_id=chat_id, user_id=user_id)
     except Exception as e:
-        logger.exception(f"unban_user failed (chat_id={chat_id}, user_id={user_id})")
         return log_and_format_error("unban_user", e, chat_id=chat_id, user_id=user_id)
 
 
@@ -815,7 +791,6 @@ async def set_default_chat_permissions(
     except telethon.errors.rpcerrorlist.ChatNotModifiedError:
         return f"Chat {chat_id} default permissions unchanged (already matched)."
     except Exception as e:
-        logger.exception(f"set_default_chat_permissions failed (chat_id={chat_id})")
         return log_and_format_error("set_default_chat_permissions", e, chat_id=chat_id)
 
 
@@ -853,7 +828,6 @@ async def toggle_slow_mode(chat_id: Union[int, str], seconds: int = 0, account: 
     except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
         return "Error: admin rights required to toggle slow mode."
     except Exception as e:
-        logger.exception(f"toggle_slow_mode failed (chat_id={chat_id}, seconds={seconds})")
         return log_and_format_error("toggle_slow_mode", e, chat_id=chat_id, seconds=seconds)
 
 
@@ -941,7 +915,6 @@ async def edit_admin_rights(
     except telethon.errors.rpcerrorlist.RightForbiddenError:
         return "Error: some of the requested rights are not allowed for your account or for this chat."
     except Exception as e:
-        logger.exception(f"edit_admin_rights failed (chat_id={chat_id}, user_id={user_id})")
         return log_and_format_error("edit_admin_rights", e, chat_id=chat_id, user_id=user_id)
 
 
@@ -973,7 +946,6 @@ async def get_admins(chat_id: Union[int, str], account: str = None) -> str:
             records.append(rec)
         return format_tool_result(records) if records else "No admins found."
     except Exception as e:
-        logger.exception(f"get_admins failed (chat_id={chat_id})")
         return log_and_format_error("get_admins", e, chat_id=chat_id)
 
 
@@ -1007,7 +979,6 @@ async def get_banned_users(chat_id: Union[int, str], account: str = None) -> str
             records.append(rec)
         return format_tool_result(records) if records else "No banned users found."
     except Exception as e:
-        logger.exception(f"get_banned_users failed (chat_id={chat_id})")
         return log_and_format_error("get_banned_users", e, chat_id=chat_id)
 
 
@@ -1033,16 +1004,16 @@ async def get_invite_link(chat_id: Union[int, str], account: str = None) -> str:
         except AttributeError:
             # If the function doesn't exist in the current Telethon version
             logger.warning("ExportChatInviteRequest not available, using alternative method")
-        except Exception as e1:
+        except Exception:
             # If that fails, log and try alternative approach
-            logger.warning(f"ExportChatInviteRequest failed: {e1}")
+            logger.warning("ExportChatInviteRequest failed; trying alternative method")
 
         # Alternative approach using cl.export_chat_invite_link
         try:
             invite_link = await cl.export_chat_invite_link(entity)
             return invite_link
-        except Exception as e2:
-            logger.warning(f"export_chat_invite_link failed: {e2}")
+        except Exception:
+            logger.warning("export_chat_invite_link failed; trying final method")
 
         # Last resort: Try directly fetching chat info
         try:
@@ -1050,12 +1021,11 @@ async def get_invite_link(chat_id: Union[int, str], account: str = None) -> str:
                 full_chat = await cl(functions.messages.GetFullChatRequest(chat_id=entity.id))
                 if hasattr(full_chat, "full_chat") and hasattr(full_chat.full_chat, "invite_link"):
                     return full_chat.full_chat.invite_link or "No invite link available."
-        except Exception as e3:
-            logger.warning(f"GetFullChatRequest failed: {e3}")
+        except Exception:
+            logger.warning("GetFullChatRequest failed")
 
         return "Could not retrieve invite link for this chat."
     except Exception as e:
-        logger.exception(f"get_invite_link failed (chat_id={chat_id})")
         return log_and_format_error("get_invite_link", e, chat_id=chat_id)
 
 
@@ -1106,8 +1076,7 @@ async def join_chat_by_link(link: str, account: str = None) -> str:
             return "The invite hash is invalid or malformed."
         elif "already" in err_str and "participant" in err_str:
             return "You are already a member of this chat."
-        logger.exception(f"join_chat_by_link failed (link={link})")
-        return f"Error joining chat: {e}"
+        return log_and_format_error("join_chat_by_link", e, link=link)
 
 
 @mcp.tool(
@@ -1132,20 +1101,19 @@ async def export_chat_invite(chat_id: Union[int, str], account: str = None) -> s
         except AttributeError:
             # If the function doesn't exist in the current Telethon version
             logger.warning("ExportChatInviteRequest not available, using alternative method")
-        except Exception as e1:
+        except Exception:
             # If that fails, log and try alternative approach
-            logger.warning(f"ExportChatInviteRequest failed: {e1}")
+            logger.warning("ExportChatInviteRequest failed; trying alternative method")
 
         # Alternative approach using cl.export_chat_invite_link
         try:
             invite_link = await cl.export_chat_invite_link(entity)
             return invite_link
         except Exception as e2:
-            logger.warning(f"export_chat_invite_link failed: {e2}")
+            logger.warning("export_chat_invite_link failed; trying final method")
             return log_and_format_error("export_chat_invite", e2, chat_id=chat_id)
 
     except Exception as e:
-        logger.exception(f"export_chat_invite failed (chat_id={chat_id})")
         return log_and_format_error("export_chat_invite", e, chat_id=chat_id)
 
 
@@ -1209,7 +1177,6 @@ async def import_chat_invite(hash: str, account: str = None) -> str:
                 raise  # Re-raise to be caught by the outer exception handler
 
     except Exception as e:
-        logger.exception(f"import_chat_invite failed (hash={hash})")
         return log_and_format_error("import_chat_invite", e, hash=hash)
 
 
@@ -1250,7 +1217,6 @@ async def get_recent_actions(chat_id: Union[int, str], account: str = None) -> s
             default=json_serializer,
         )
     except Exception as e:
-        logger.exception(f"get_recent_actions failed (chat_id={chat_id})")
         return log_and_format_error("get_recent_actions", e, chat_id=chat_id)
 
 

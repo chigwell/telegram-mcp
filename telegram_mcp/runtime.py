@@ -125,8 +125,10 @@ def parse_schedule_date(
             dt = datetime.fromisoformat(str(schedule_date).replace("Z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
-    except (TypeError, ValueError, OverflowError, OSError) as exc:
-        return None, f"schedule_date could not be parsed ({schedule_date!r}): {exc}"
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None, (
+            "schedule_date could not be parsed. Use an ISO-8601 date/time or Unix timestamp."
+        )
 
     now = datetime.now(timezone.utc)
     if dt <= now:
@@ -354,15 +356,11 @@ def _get_flood_sleep_threshold() -> int:
     try:
         val = int(raw)
         if val < 0:
-            logger.warning(
-                f"Negative TELEGRAM_FLOOD_SLEEP_THRESHOLD='{raw}' clamped to 0 (fail-fast mode)"
-            )
+            logger.warning("Negative TELEGRAM_FLOOD_SLEEP_THRESHOLD clamped to 0 (fail-fast mode)")
             return 0
         return val
     except ValueError:
-        logger.warning(
-            f"Invalid TELEGRAM_FLOOD_SLEEP_THRESHOLD='{raw}', falling back to default 60s"
-        )
+        logger.warning("Invalid TELEGRAM_FLOOD_SLEEP_THRESHOLD; falling back to default 60s")
         return 60
 
 
@@ -686,12 +684,12 @@ try:
     # Add handlers to logger
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
-    logger.info(f"Logging initialized to {log_file_path}")
-except Exception as log_error:
-    print(f"WARNING: Error setting up log file: {log_error}", file=sys.stderr)
+    logger.info("Logging initialized")
+except Exception:
+    print("WARNING: Error setting up log file; using console logging only.", file=sys.stderr)
     # Fallback to console-only logging
     logger.addHandler(console_handler)
-    logger.error(f"Failed to set up log file handler: {log_error}")
+    logger.error("Failed to set up log file handler; using console logging only.")
 
 
 # File-path tool security configuration
@@ -769,7 +767,7 @@ def log_and_format_error(
         prefix: Error code prefix (e.g., ErrorCategory.CHAT, "VALIDATION-001").
             If None, it will be derived from the function_name.
         user_message: A custom user-facing message to return. If None, a generic one is created.
-        **kwargs: Additional context parameters to include in the log.
+        **kwargs: Additional context parameters. These are never written to persistent logs.
 
     Returns:
         A user-friendly error message with an error code.
@@ -794,18 +792,14 @@ def log_and_format_error(
         prefix_str = prefix.value if isinstance(prefix, ErrorCategory) else (prefix or "GEN")
         error_code = f"{prefix_str}-ERR-{abs(hash(function_name)) % 1000:03d}"
 
-    # Format the additional context parameters
-    context = ", ".join(f"{k}={v}" for k, v in kwargs.items())
-
     # Telegram FloodWait (Rate Limiting) must be explicitly formatted for LLM agents.
     # LLMs will blindly retry generic errors, escalating the flood penalty and risking bans.
-    # We log at WARNING level and return explicit wait duration with a strict no-retry directive.
+    # Log only a categorical warning; the user-facing response below carries the
+    # actionable wait duration. The persistent error-file handler intentionally
+    # does not store WARNING records.
     if _is_flood_wait(error):
         seconds = getattr(error, "seconds", None) or 0
-        logger.warning(
-            f"Telegram FloodWait in {function_name} ({context}) - "
-            f"Rate limited for {seconds}s - Code: {error_code}"
-        )
+        logger.warning("Telegram FloodWait; retry only after the reported delay.")
         if user_message:
             return user_message
         wait_clause = f"{seconds} seconds" if seconds > 0 else "an unknown duration"
@@ -814,8 +808,9 @@ def log_and_format_error(
             f"before repeating this operation. Do NOT retry immediately (code: {error_code})."
         )
 
-    # Log the full technical error
-    logger.error(f"Error in {function_name} ({context}) - Code: {error_code}", exc_info=True)
+    # Keep persistent logs useful without recording exception text, tracebacks,
+    # identifiers, user content, provider payloads, or local paths.
+    logger.error("Telegram MCP operation failed; see the returned stable error code.")
 
     # Return a user-friendly message
     if user_message:
@@ -829,12 +824,12 @@ def log_and_format_error(
     if _is_schema_drift(error):
         return (
             f"MTProto schema mismatch: the installed Telethon does not know an object the "
-            f"server sent ({error}). This is NOT a missing user or chat — the data arrived, "
+            f"server sent. This is NOT a missing user or chat — the data arrived, "
             f"parsing it failed. Upgrade Telethon; if it is already the latest release, its "
             f"schema is behind the current layer (code: {error_code})."
         )
 
-    return f"An error occurred (code: {error_code}). Check mcp_errors.log for details."
+    return f"An error occurred (code: {error_code})."
 
 
 def validate_id(*param_names_to_validate):
@@ -1035,11 +1030,14 @@ def load_aliases(strict: bool = False) -> Dict[str, Dict[str, Any]]:
     except FileNotFoundError:
         return {}
     except (OSError, ValueError, TypeError) as error:
-        logger.warning("Ignoring unreadable aliases file %s: %s", path, error)
+        logger.warning("Ignoring unreadable aliases file; saved aliases were not changed.")
         if strict:
             # Refuse to write over data we could not read: a degraded read plus a
             # write-back would silently delete every alias in the file.
-            raise AliasStoreUnreadable(str(error)) from error
+            raise AliasStoreUnreadable(
+                "Saved contacts could not be read; no changes were written. "
+                "Check the aliases file and retry."
+            ) from error
         return {}
 
     records: Dict[str, Dict[str, Any]] = {}
@@ -1708,10 +1706,7 @@ async def _get_effective_allowed_roots_with_status(
     except Exception as error:
         recovered_roots = _coerce_paths_from_list_roots_validation_error(error)
         if recovered_roots:
-            logger.warning(
-                "MCP client returned non-URI roots; recovered %d path(s) from validation error.",
-                len(recovered_roots),
-            )
+            logger.warning("MCP client returned non-URI roots; recovered validated paths.")
             return recovered_roots, ROOTS_STATUS_READY
         if _is_roots_unsupported_error(error):
             if fallback_roots:
@@ -1723,12 +1718,9 @@ async def _get_effective_allowed_roots_with_status(
             logger.warning(
                 "MCP roots request failed; falling back to server CLI roots "
                 "(TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK).",
-                exc_info=True,
             )
             return fallback_roots, ROOTS_STATUS_SERVER_FALLBACK
-        logger.error(
-            "MCP roots request failed; disabling file-path tools for safety.", exc_info=True
-        )
+        logger.error("MCP roots request failed; disabling file-path tools for safety.")
         return [], ROOTS_STATUS_ERROR
 
     client_roots: List[Path] = []

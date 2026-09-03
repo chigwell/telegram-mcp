@@ -463,10 +463,8 @@ async def get_gif_search(query: str, limit: int = 10, account: str = None) -> st
                         gif_ids.append(msg.media.document.id)
                 return json.dumps(gif_ids, default=json_serializer)
             except Exception as inner_e:
-                # Last resort: Try to fetch from a public bot
-                return f"Could not search GIFs using available methods: {inner_e}"
+                return log_and_format_error("get_gif_search", inner_e, query=query, limit=limit)
     except Exception as e:
-        logger.exception(f"get_gif_search failed (query={query}, limit={limit})")
         return log_and_format_error("get_gif_search", e, query=query, limit=limit)
 
 
@@ -528,8 +526,8 @@ async def list_photos(
     """
     try:
         resolved_source = validate_source(source)
-    except UnknownPhotoSource as unknown_source:
-        return str(unknown_source)
+    except UnknownPhotoSource:
+        return "Unknown photo source. Expected one of: avatars, messages."
 
     try:
         cl = get_client(account)
@@ -647,8 +645,8 @@ async def get_photo_sheet(
     """
     try:
         resolved_source = validate_source(source)
-    except UnknownPhotoSource as unknown_source:
-        return str(unknown_source)
+    except UnknownPhotoSource:
+        return "Unknown photo source. Expected one of: avatars, messages."
 
     try:
         cl = get_client(account)
@@ -669,8 +667,11 @@ async def get_photo_sheet(
 
         try:
             sheet_bytes = build_contact_sheet(tiles, columns)
-        except ContactSheetUnavailable as unavailable:
-            return str(unavailable)
+        except ContactSheetUnavailable:
+            return (
+                "Pillow is required to build contact sheets. Install it with "
+                "`pip install pillow` or `uv sync`."
+            )
 
         return [
             f"{len(tiles)} {resolved_source} photo(s) for {get_marked_id(entity)}, "
