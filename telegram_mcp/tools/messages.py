@@ -1736,7 +1736,12 @@ async def search_global(
 @mcp.tool(annotations=ToolAnnotations(title="Get History", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
 @validate_id("chat_id")
-async def get_history(chat_id: Union[int, str], limit: int = 100, account: str = None, topic_id: Union[int, str, None] = None) -> str:
+async def get_history(
+    chat_id: Union[int, str],
+    limit: int = 100,
+    account: str = None,
+    topic_id: Union[int, str, None] = None,
+) -> str:
     """
     Get full chat history (up to limit).
 
@@ -1763,7 +1768,9 @@ async def get_history(chat_id: Union[int, str], limit: int = 100, account: str =
                 pass
         return format_tool_result(records)
     except Exception as e:
-        return log_and_format_error("get_history", e, chat_id=chat_id, limit=limit, topic_id=topic_id)
+        return log_and_format_error(
+            "get_history", e, chat_id=chat_id, limit=limit, topic_id=topic_id
+        )
 
 
 @mcp.tool(
