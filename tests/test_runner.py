@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from telegram_mcp import runner
@@ -43,6 +45,9 @@ def _isolate_session_locks(tmp_path, monkeypatch):
 
     monkeypatch.setattr(singleton_module.SessionLock, "__init__", _init_with_tmp_dir)
     monkeypatch.setattr(runner, "_lock_grace_seconds", lambda: 0.01)
+    # load_dotenv() may have pulled TELEGRAM_SESSION_LOCK from the developer's
+    # .env; tests assume the exclusive default unless they set it themselves.
+    monkeypatch.delenv("TELEGRAM_SESSION_LOCK", raising=False)
     yield
     runner._session_locks.clear()
 
@@ -94,6 +99,78 @@ async def test_connect_authorized_client_allows_different_sessions_concurrently(
 
     assert first.connected is True
     assert second.connected is True
+
+
+@pytest.mark.asyncio
+async def test_shared_lock_mode_lets_instances_share_a_session(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_SESSION_LOCK", "shared")
+    first = _FakeClient(authorized=True, identity="shared-session")
+    second = _FakeClient(authorized=True, identity="shared-session")
+
+    await runner._connect_authorized_client("default", first)
+    first_lock = runner._session_locks["default"]
+    await runner._connect_authorized_client("default", second)
+
+    assert first.connected is True
+    assert second.connected is True
+
+    first_lock.release()
+    runner._session_locks["default"].release()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first_mode, second_mode", [("exclusive", "shared"), ("shared", "exclusive")]
+)
+async def test_shared_and_exclusive_instances_never_overlap(monkeypatch, first_mode, second_mode):
+    first = _FakeClient(authorized=True, identity="shared-session")
+    second = _FakeClient(authorized=True, identity="shared-session")
+
+    monkeypatch.setenv("TELEGRAM_SESSION_LOCK", first_mode)
+    await runner._connect_authorized_client("default", first)
+    first_lock = runner._session_locks["default"]
+
+    monkeypatch.setenv("TELEGRAM_SESSION_LOCK", second_mode)
+    with pytest.raises(runner.SessionLockError, match="already connected"):
+        await runner._connect_authorized_client("default", second)
+
+    assert second.connected is False
+    first_lock.release()
+
+
+@pytest.mark.asyncio
+async def test_lock_error_names_the_exclusive_holder():
+    first = _FakeClient(authorized=True, identity="shared-session")
+    second = _FakeClient(authorized=True, identity="shared-session")
+
+    await runner._connect_authorized_client("default", first)
+    lock = runner._session_locks["default"]
+
+    with pytest.raises(runner.SessionLockError, match=f"held by PID {os.getpid()}"):
+        await runner._connect_authorized_client("default", second)
+
+    lock.release()
+    assert lock.path.read_text() == ""  # a released lock names nobody
+
+
+@pytest.mark.parametrize(
+    "value, shared",
+    [(None, False), ("", False), ("exclusive", False), ("shared", True), (" Shared ", True)],
+)
+def test_session_lock_mode_parsing(monkeypatch, value, shared):
+    if value is None:
+        monkeypatch.delenv("TELEGRAM_SESSION_LOCK", raising=False)
+    else:
+        monkeypatch.setenv("TELEGRAM_SESSION_LOCK", value)
+
+    assert runner._session_lock_shared() is shared
+
+
+def test_session_lock_mode_rejects_unknown_values(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_SESSION_LOCK", "sometimes")
+
+    with pytest.raises(SystemExit, match="Invalid TELEGRAM_SESSION_LOCK 'sometimes'"):
+        runner._session_lock_shared()
 
 
 class _FakeSettings:
