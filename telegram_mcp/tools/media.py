@@ -1,5 +1,10 @@
 """Media MCP tools."""
 
+import os
+import shutil
+import tempfile
+from uuid import uuid4
+
 from telegram_mcp.runtime import *
 
 from telegram_mcp.contact_sheet import ContactSheetUnavailable, build_contact_sheet
@@ -14,6 +19,19 @@ from telegram_mcp.photo_source import (
 
 PHOTO_IDENTIFIER_SEARCH_DEPTH = 100
 PHOTO_SHEET_MAXIMUM_TILES = 12
+
+
+def _known_media_size(message) -> Optional[int]:
+    """Return Telegram's declared media size when available."""
+    size = getattr(getattr(message, "file", None), "size", None)
+    if isinstance(size, int) and size >= 0:
+        return size
+    size = getattr(getattr(getattr(message, "media", None), "document", None), "size", None)
+    return size if isinstance(size, int) and size >= 0 else None
+
+
+class _DownloadLimitExceeded(Exception):
+    """Stop an in-progress media download once it exceeds the configured limit."""
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Send File", openWorldHint=True, destructiveHint=True))
@@ -202,7 +220,12 @@ async def download_media(
         if not msg or not msg.media:
             return "No media found in the specified message."
 
-        default_name = f"telegram_{chat_id}_{message_id}_{int(time.time())}"
+        limit = MAX_FILE_BYTES["download_media"]
+        declared_size = _known_media_size(msg)
+        if declared_size is not None and declared_size > limit:
+            return f"Media is too large for download_media (limit: {limit} bytes)."
+
+        default_name = f"telegram_{chat_id}_{message_id}_{int(time.time())}_{uuid4().hex}"
         out_path, path_error = await _resolve_writable_file_path(
             raw_path=file_path,
             default_filename=default_name,
@@ -212,23 +235,50 @@ async def download_media(
         if path_error:
             return path_error
 
-        # Strip user-supplied extension so Telethon auto-detects the real media type.
-        # If a path with extension is passed (e.g. ticket.jpg), Telethon writes to that
-        # exact path even if the file is actually a PDF. Stripping the suffix lets
-        # Telethon append the correct extension based on the actual file content.
-        out_path_for_dl = out_path.with_suffix("")
-        downloaded = await cl.download_media(msg, file=str(out_path_for_dl))
-        if not downloaded:
-            return f"Download failed for message {message_id}."
+        temp_dir = Path(
+            tempfile.mkdtemp(prefix=".telegram-mcp-download-", dir=str(out_path.parent))
+        )
+        try:
+            staged_name = out_path.with_suffix("").name if out_path.suffix else out_path.name
+            temp_requested_path = temp_dir / staged_name
 
-        final_path = Path(downloaded).resolve(strict=True)
-        roots, roots_error = await _ensure_allowed_roots(ctx, "download_media")
-        if roots_error:
-            return roots_error
-        if not _path_is_within_any_root(final_path, roots):
-            return "Download failed: resulting path is outside allowed roots."
+            def enforce_download_limit(received: int, total: int) -> None:
+                if received > limit or (total and total > limit):
+                    raise _DownloadLimitExceeded
 
-        return f"Media downloaded to {final_path}."
+            try:
+                downloaded = await cl.download_media(
+                    msg,
+                    file=str(temp_requested_path),
+                    progress_callback=enforce_download_limit,
+                )
+            except _DownloadLimitExceeded:
+                return f"Media is too large for download_media (limit: {limit} bytes)."
+
+            if not downloaded:
+                return f"Download failed for message {message_id}."
+
+            temp_final_path = Path(downloaded).resolve(strict=True)
+            if temp_final_path.parent != temp_dir.resolve():
+                return "Download failed: resulting temporary path is invalid."
+            if temp_final_path.stat().st_size > limit:
+                return f"Media is too large for download_media (limit: {limit} bytes)."
+
+            final_path = out_path
+            if temp_final_path.suffix:
+                final_path, path_error = await _resolve_writable_file_path(
+                    raw_path=str(out_path.with_suffix(temp_final_path.suffix)),
+                    default_filename=default_name,
+                    ctx=ctx,
+                    tool_name="download_media",
+                )
+                if path_error:
+                    return path_error
+
+            os.replace(temp_final_path, final_path)
+            return f"Media downloaded to {final_path}."
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
     except Exception as e:
         return log_and_format_error(
             "download_media",
