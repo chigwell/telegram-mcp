@@ -49,8 +49,7 @@ def test_flood_wait_logs_warning_instead_of_error():
         log_and_format_error("get_history", err, chat_id=98765)
         mock_logger.warning.assert_called_once()
         warning_args = mock_logger.warning.call_args[0][0]
-        assert "Telegram FloodWait in get_history" in warning_args
-        assert "30s" in warning_args
+        assert warning_args == "Telegram FloodWait; retry only after the reported delay."
         mock_logger.error.assert_not_called()
 
 

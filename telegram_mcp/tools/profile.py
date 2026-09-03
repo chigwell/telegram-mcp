@@ -126,7 +126,6 @@ async def get_privacy_settings(account: str = None) -> str:
             else:
                 raise
     except Exception as e:
-        logger.exception("get_privacy_settings failed")
         return log_and_format_error("get_privacy_settings", e)
 
 
@@ -192,13 +191,12 @@ async def set_privacy_settings(
                     try:
                         user = await resolve_entity(user_id, cl)
                         allow_entities.append(user)
-                    except Exception as user_err:
-                        logger.warning(f"Could not get entity for user ID {user_id}: {user_err}")
+                    except Exception:
+                        logger.warning("Could not resolve a requested privacy-rule user")
 
                 if allow_entities:
                     rules.append(InputPrivacyValueAllowUsers(users=allow_entities))
             except Exception as allow_err:
-                logger.error(f"Error processing allowed users: {allow_err}")
                 return log_and_format_error("set_privacy_settings", allow_err, key=key)
 
         # Process disallow rules
@@ -209,13 +207,12 @@ async def set_privacy_settings(
                     try:
                         user = await resolve_entity(user_id, cl)
                         disallow_entities.append(user)
-                    except Exception as user_err:
-                        logger.warning(f"Could not get entity for user ID {user_id}: {user_err}")
+                    except Exception:
+                        logger.warning("Could not resolve a requested privacy-rule user")
 
                 if disallow_entities:
                     rules.append(InputPrivacyValueDisallowUsers(users=disallow_entities))
             except Exception as disallow_err:
-                logger.error(f"Error processing disallowed users: {disallow_err}")
                 return log_and_format_error("set_privacy_settings", disallow_err, key=key)
 
         # Apply the privacy settings
@@ -228,7 +225,6 @@ async def set_privacy_settings(
             else:
                 raise
     except Exception as e:
-        logger.exception(f"set_privacy_settings failed (key={key})")
         return log_and_format_error("set_privacy_settings", e, key=key)
 
 
@@ -413,7 +409,6 @@ async def get_bot_info(bot_username: str, account: str = None) -> str:
             )
         return json.dumps(info, indent=2)
     except Exception as e:
-        logger.exception(f"get_bot_info failed (bot_username={bot_username})")
         return log_and_format_error("get_bot_info", e, bot_username=bot_username)
 
 
@@ -463,10 +458,8 @@ async def set_bot_commands(bot_username: str, commands: list, account: str = Non
 
         return f"Bot commands set for {bot_username}."
     except ImportError as ie:
-        logger.exception(f"set_bot_commands failed - ImportError: {ie}")
         return log_and_format_error("set_bot_commands", ie)
     except Exception as e:
-        logger.exception(f"set_bot_commands failed (bot_username={bot_username})")
         return log_and_format_error("set_bot_commands", e, bot_username=bot_username)
 
 

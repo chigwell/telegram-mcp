@@ -715,7 +715,7 @@ def test_log_and_format_error_returns_custom_and_generated_messages(caplog):
 
     generated = runtime.log_and_format_error("get_chat", RuntimeError("boom"))
     assert "code: CHAT-ERR-" in generated
-    assert "Check mcp_errors.log" in generated
+    assert "mcp_errors.log" not in generated
 
 
 def test_path_helper_edges(tmp_path, monkeypatch):

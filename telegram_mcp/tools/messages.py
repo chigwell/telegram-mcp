@@ -501,9 +501,6 @@ async def send_scheduled_message(
             "send_scheduled_message", e, chat_id=chat_id, schedule_date=str(schedule_date)
         )
     except Exception as e:
-        logger.exception(
-            f"send_scheduled_message failed (chat_id={chat_id}, schedule_date={schedule_date})"
-        )
         return log_and_format_error(
             "send_scheduled_message", e, chat_id=chat_id, schedule_date=str(schedule_date)
         )
@@ -544,7 +541,6 @@ async def get_scheduled_messages(chat_id: Union[int, str], account: str = None) 
     except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
         return log_and_format_error("get_scheduled_messages", e, chat_id=chat_id)
     except Exception as e:
-        logger.exception(f"get_scheduled_messages failed (chat_id={chat_id})")
         return log_and_format_error("get_scheduled_messages", e, chat_id=chat_id)
 
 
@@ -577,9 +573,6 @@ async def delete_scheduled_message(
             "delete_scheduled_message", e, chat_id=chat_id, message_ids=message_ids
         )
     except Exception as e:
-        logger.exception(
-            f"delete_scheduled_message failed (chat_id={chat_id}, message_ids={message_ids})"
-        )
         return log_and_format_error(
             "delete_scheduled_message", e, chat_id=chat_id, message_ids=message_ids
         )
@@ -1819,7 +1812,6 @@ async def get_pinned_messages(chat_id: Union[int, str], account: str = None) -> 
 
         return format_tool_result(records)
     except Exception as e:
-        logger.exception(f"get_pinned_messages failed (chat_id={chat_id})")
         return log_and_format_error("get_pinned_messages", e, chat_id=chat_id)
 
 
@@ -1898,7 +1890,6 @@ async def create_poll(
 
         return f"Poll created successfully in chat {chat_id}."
     except Exception as e:
-        logger.exception(f"create_poll failed (chat_id={chat_id}, question='{question}')")
         return log_and_format_error(
             "create_poll", e, chat_id=chat_id, question=question, options=options
         )
@@ -1942,9 +1933,6 @@ async def send_reaction(
         )
         return f"Reaction '{emoji}' sent to message {message_id} in chat {chat_id}."
     except Exception as e:
-        logger.exception(
-            f"send_reaction failed (chat_id={chat_id}, message_id={message_id}, emoji={emoji})"
-        )
         return log_and_format_error(
             "send_reaction", e, chat_id=chat_id, message_id=message_id, emoji=emoji
         )
@@ -1981,7 +1969,6 @@ async def remove_reaction(
         )
         return f"Reaction removed from message {message_id} in chat {chat_id}."
     except Exception as e:
-        logger.exception(f"remove_reaction failed (chat_id={chat_id}, message_id={message_id})")
         return log_and_format_error("remove_reaction", e, chat_id=chat_id, message_id=message_id)
 
 
@@ -2051,9 +2038,6 @@ async def get_message_reactions(
             default=json_serializer,
         )
     except Exception as e:
-        logger.exception(
-            f"get_message_reactions failed (chat_id={chat_id}, message_id={message_id})"
-        )
         return log_and_format_error(
             "get_message_reactions", e, chat_id=chat_id, message_id=message_id
         )
@@ -2105,7 +2089,6 @@ async def save_draft(
 
         return f"Draft saved to chat {chat_id}. Open the chat in Telegram to see and send it."
     except Exception as e:
-        logger.exception(f"save_draft failed (chat_id={chat_id})")
         return log_and_format_error("save_draft", e, chat_id=chat_id)
 
 
@@ -2167,7 +2150,6 @@ async def get_drafts(account: str = None) -> str:
             {"drafts": drafts_info, "count": len(drafts_info)}, indent=2, default=json_serializer
         )
     except Exception as e:
-        logger.exception("get_drafts failed")
         return log_and_format_error("get_drafts", e)
 
 
@@ -2199,7 +2181,6 @@ async def clear_draft(chat_id: Union[int, str], account: str = None) -> str:
 
         return f"Draft cleared from chat {chat_id}."
     except Exception as e:
-        logger.exception(f"clear_draft failed (chat_id={chat_id})")
         return log_and_format_error("clear_draft", e, chat_id=chat_id)
 
 

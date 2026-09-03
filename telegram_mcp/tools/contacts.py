@@ -378,9 +378,6 @@ async def add_contact(
                     return f"Contact {first_name} {last_name} (@{username_clean}) added successfully (no updates returned)."
 
             except Exception as resolve_e:
-                logger.exception(
-                    f"add_contact (username resolve) failed (username={username_clean})"
-                )
                 return log_and_format_error("add_contact", resolve_e, username=username_clean)
 
         elif phone:
@@ -426,13 +423,10 @@ async def add_contact(
                 else:
                     return f"Contact not added. Alternative method response: {str(result)}"
             except Exception as alt_e:
-                logger.exception(f"add_contact (alt method) failed (phone={phone})")
                 return log_and_format_error("add_contact", alt_e, phone=phone)
         else:
-            logger.exception(f"add_contact (type error) failed")
             return log_and_format_error("add_contact", type_err)
     except Exception as e:
-        logger.exception(f"add_contact failed (phone={phone}, username={username})")
         return log_and_format_error("add_contact", e, phone=phone, username=username)
 
 
@@ -717,14 +711,15 @@ async def set_contact_alias(
             return format_tool_result({"saved": True, "alias": key, "resolved": formatted})
 
         return update_aliases(_store)
-    except AliasStoreUnreadable as e:
+    except AliasStoreUnreadable:
         return format_tool_result(
             {
                 "saved": False,
                 "reason": "alias_store_unreadable",
                 "detail": (
-                    f"The saved-contacts file could not be read ({e}); nothing was written "
-                    "so the existing memories are not destroyed. Ask the user to check it."
+                    "The saved-contacts file could not be read; nothing was written, so the "
+                    "existing memories are not destroyed. Ask the user to check the aliases "
+                    "file and retry."
                 ),
             }
         )

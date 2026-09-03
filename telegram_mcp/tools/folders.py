@@ -66,7 +66,6 @@ async def list_folders(account: str = None) -> str:
             {"folders": folders, "count": len(folders)}, indent=2, default=json_serializer
         )
     except Exception as e:
-        logger.exception("list_folders failed")
         return log_and_format_error("list_folders", e, ErrorCategory.FOLDER)
 
 
@@ -174,7 +173,6 @@ async def get_folder(folder_id: int, account: str = None) -> str:
 
         return json.dumps(folder_data, indent=2, default=json_serializer)
     except Exception as e:
-        logger.exception(f"get_folder failed (folder_id={folder_id})")
         return log_and_format_error("get_folder", e, ErrorCategory.FOLDER, folder_id=folder_id)
 
 
@@ -242,8 +240,8 @@ async def create_folder(
                 try:
                     peer = await resolve_input_entity(chat_id, cl)
                     include_peers.append(peer)
-                except Exception as e:
-                    return f"Failed to resolve chat '{chat_id}': {str(e)}"
+                except Exception:
+                    return "Failed to resolve a requested chat."
 
         # Create the folder (title must be TextWithEntities)
         title_obj = TextWithEntities(text=title, entities=[])
@@ -277,7 +275,6 @@ async def create_folder(
             indent=2,
         )
     except Exception as e:
-        logger.exception(f"create_folder failed (title={title})")
         return log_and_format_error("create_folder", e, ErrorCategory.FOLDER, title=title)
 
 
@@ -321,8 +318,8 @@ async def add_chat_to_folder(
         # Resolve chat to input peer
         try:
             peer = await resolve_input_entity(chat_id, cl)
-        except Exception as e:
-            return f"Failed to resolve chat '{chat_id}': {str(e)}"
+        except Exception:
+            return "Failed to resolve a requested chat."
 
         # Check if already included (idempotent)
         include_peers = list(getattr(target_folder, "include_peers", []))
@@ -379,7 +376,6 @@ async def add_chat_to_folder(
             f"Chat {chat_id} added to folder {folder_id}" + (" (pinned)" if pinned else "") + "."
         )
     except Exception as e:
-        logger.exception(f"add_chat_to_folder failed (folder_id={folder_id}, chat_id={chat_id})")
         return log_and_format_error(
             "add_chat_to_folder", e, ErrorCategory.FOLDER, folder_id=folder_id, chat_id=chat_id
         )
@@ -425,8 +421,8 @@ async def remove_chat_from_folder(
         try:
             peer = await resolve_input_entity(chat_id, cl)
             peer_id = utils.get_peer_id(peer)
-        except Exception as e:
-            return f"Failed to resolve chat '{chat_id}': {str(e)}"
+        except Exception:
+            return "Failed to resolve a requested chat."
 
         # Filter out the peer from both include and pinned lists
         include_peers = [
@@ -485,9 +481,6 @@ async def remove_chat_from_folder(
 
         return f"Chat {chat_id} removed from folder {folder_id}."
     except Exception as e:
-        logger.exception(
-            f"remove_chat_from_folder failed (folder_id={folder_id}, chat_id={chat_id})"
-        )
         return log_and_format_error(
             "remove_chat_from_folder",
             e,
@@ -540,7 +533,6 @@ async def delete_folder(folder_id: int, account: str = None) -> str:
 
         return f"Folder '{sanitize_name(folder_title)}' (ID {folder_id}) deleted. Chats are preserved."
     except Exception as e:
-        logger.exception(f"delete_folder failed (folder_id={folder_id})")
         return log_and_format_error("delete_folder", e, ErrorCategory.FOLDER, folder_id=folder_id)
 
 
@@ -583,7 +575,6 @@ async def reorder_folders(folder_ids: List[int], account: str = None) -> str:
 
         return f"Folders reordered: {folder_ids}"
     except Exception as e:
-        logger.exception(f"reorder_folders failed (folder_ids={folder_ids})")
         return log_and_format_error(
             "reorder_folders", e, ErrorCategory.FOLDER, folder_ids=folder_ids
         )
