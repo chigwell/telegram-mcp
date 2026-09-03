@@ -360,7 +360,9 @@ async def edit_chat_title(chat_id: Union[int, str], title: str, account: str = N
         if isinstance(entity, Channel):
             await cl(functions.channels.EditTitleRequest(channel=entity, title=title))
         elif isinstance(entity, Chat):
-            await cl(functions.messages.EditChatTitleRequest(chat_id=chat_id, title=title))
+            # messages.* requests take the positive Chat.id; the raw argument may be a
+            # negative Bot-API-style id or a username, which Telegram rejects.
+            await cl(functions.messages.EditChatTitleRequest(chat_id=entity.id, title=title))
         else:
             return f"Cannot edit title for this entity type ({type(entity)})."
         return f"Chat {chat_id} title updated to '{sanitize_name(title)}'."
@@ -405,7 +407,7 @@ async def edit_chat_photo(
         elif isinstance(entity, Chat):
             # For basic groups, use EditChatPhotoRequest with InputChatUploadedPhoto
             input_photo = InputChatUploadedPhoto(file=uploaded_file)
-            await cl(functions.messages.EditChatPhotoRequest(chat_id=chat_id, photo=input_photo))
+            await cl(functions.messages.EditChatPhotoRequest(chat_id=entity.id, photo=input_photo))
         else:
             return f"Cannot edit photo for this entity type ({type(entity)})."
 
@@ -473,7 +475,7 @@ async def delete_chat_photo(chat_id: Union[int, str], account: str = None) -> st
             # Use None (or InputChatPhotoEmpty) for basic groups
             await cl(
                 functions.messages.EditChatPhotoRequest(
-                    chat_id=chat_id, photo=InputChatPhotoEmpty()
+                    chat_id=entity.id, photo=InputChatPhotoEmpty()
                 )
             )
         else:
