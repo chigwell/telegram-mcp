@@ -819,8 +819,11 @@ def test_configure_allowed_roots_from_cli_updates_runtime_and_main_alias(tmp_pat
     main._configure_allowed_roots_from_cli([str(root)])
     assert main.SERVER_ALLOWED_ROOTS == [root.resolve()]
 
-    with pytest.raises(SystemExit, match="Allowed root does not exist"):
-        runtime._configure_allowed_roots_from_cli([str(tmp_path / "missing")])
+    # Fork patch: missing roots are auto-created instead of SystemExit (fixes reboot crash)
+    missing = tmp_path / "missing"
+    runtime._configure_allowed_roots_from_cli([str(missing)])
+    assert missing.exists()
+    assert runtime.SERVER_ALLOWED_ROOTS == [missing.resolve()]
 
 
 def test_main_compatibility_wrappers_are_exported():

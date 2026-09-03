@@ -1880,7 +1880,10 @@ def _configure_allowed_roots_from_cli(argv: Optional[List[str]] = None) -> None:
     for raw_root in parsed.allowed_roots:
         root = Path(raw_root).expanduser()
         if not root.exists():
-            raise SystemExit(f"Allowed root does not exist: {root}")
+            try:
+                root.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                raise SystemExit(f"Allowed root does not exist: {root}")
         resolved = root.resolve(strict=True)
         resolved_roots.append(resolved)
 
