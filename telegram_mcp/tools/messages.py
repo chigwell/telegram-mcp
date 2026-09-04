@@ -141,8 +141,18 @@ def message_to_dict(msg, chat_id: Optional[int] = None) -> dict:
         d["out"] = True
 
     text = sanitize_user_content(msg.message) if getattr(msg, "message", None) else ""
+    rich = False
+    if not text:
+        # Block-format posts leave .message empty and keep the words in
+        # .rich_message; without this the whole post reads back as "[empty]".
+        rich_text = rich_message_text(msg)
+        if rich_text:
+            text = sanitize_user_content(rich_text)
+            rich = True
     if text:
         d["text"] = text
+    if rich:
+        d["rich"] = True  # text rebuilt from page blocks, not a verbatim .message
 
     media_label = get_media_label(msg)
     if media_label:
@@ -327,6 +337,11 @@ def format_message_line(msg, chat_id: Optional[int] = None) -> str:
         parts.append(engagement_info)
 
     raw = sanitize_user_content(msg.message) if getattr(msg, "message", None) else ""
+    if not raw:
+        rich_text = rich_message_text(msg)
+        if rich_text:
+            raw = sanitize_user_content(rich_text)
+            parts.append("rich")
     if raw:
         safe_text = raw.replace("\n", "\\n")
     else:
