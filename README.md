@@ -379,6 +379,25 @@ rather than reusing a session another client holds — reuse would make Telegram
 permanently invalidate that session for both clients.
 - "Send this from my work account to @example"
 
+### Sharing one session from one host
+
+Before connecting, every server process takes a per-session lock (see the
+`AuthKeyDuplicatedError` entry under Troubleshooting). By default it is
+exclusive: a second instance for the same session waits briefly for the first
+to exit and otherwise refuses to start. That lock can only see processes on the
+same host, and Telegram's rule is about IPs, not processes: instances on one
+host only collide when they reach Telegram from different IPs (dual-stack or
+split-tunnel VPN hosts). When they all share one egress IP — a laptop running
+several MCP clients — you can let them share the session instead of pooling:
+
+```env
+TELEGRAM_SESSION_LOCK=shared
+```
+
+Shared instances coexist with each other but never overlap an exclusive one
+(except on Windows, where a shared instance takes no lock). If you are not sure
+every client egresses from the same IP, use the pool.
+
 ## Device Identity
 
 These optional variables control how the client appears in Telegram under
@@ -645,7 +664,7 @@ Telegram messages, display names, chat titles, and button labels are untrusted c
   interactive phone-code login over stdio.
 - **Invalid API credentials:** verify `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` at [my.telegram.org/apps](https://my.telegram.org/apps).
 - **Database is locked:** prefer string sessions, or make sure no other process is using the same file session.
-- **`AuthKeyDuplicatedError` / "Another telegram-mcp process is already connected with this session":** two processes tried to connect the same Telegram session at once (e.g. an MCP client restarted the connector before the old process exited), which Telegram rejects and can invalidate the session for both. The server now takes an exclusive lock per session before connecting; a second concurrent launch waits briefly (default 20s, override with `TELEGRAM_LOCK_GRACE_SECONDS`) for the first to release it and otherwise exits without ever calling `connect()`, instead of racing into a duplicate connection. Retry once only one instance is running.
+- **`AuthKeyDuplicatedError` / "Another telegram-mcp process is already connected with this session":** two processes tried to connect the same Telegram session at once (e.g. an MCP client restarted the connector before the old process exited), which Telegram rejects and can invalidate the session for both. The server now takes an exclusive lock per session before connecting; a second concurrent launch waits briefly (default 20s, override with `TELEGRAM_LOCK_GRACE_SECONDS`) for the first to release it and otherwise exits without ever calling `connect()`, instead of racing into a duplicate connection. Retry once only one instance is running — the refusal names the PID holding the lock. If several instances on this host are meant to share one session (all reaching Telegram from the same IP), set `TELEGRAM_SESSION_LOCK=shared`; see [Sharing one session from one host](#sharing-one-session-from-one-host).
 - **File tools are disabled:** pass allowed roots or configure MCP Roots in your client.
 - **Path rejected:** ensure the path is inside an allowed root and does not use traversal or wildcard patterns.
 - **Auth errors after password changes:** regenerate your session string.
