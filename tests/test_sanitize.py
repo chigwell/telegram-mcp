@@ -50,6 +50,21 @@ class TestSanitizeUserContent:
         result = sanitize_user_content(text)
         assert "\u202e" not in result
 
+    def test_emoji_mode_preserves_joiners_but_removes_other_controls(self):
+        text = "\x00\u202e👩\u200d💻\u200b\ufeff"
+        assert sanitize_user_content(text, preserve_emoji=True) == "👩\u200d💻"
+        assert sanitize_user_content(text) == "👩💻"
+
+    def test_emoji_mode_preserves_subdivision_flag_tags(self):
+        flag = "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f"
+        assert sanitize_user_content(flag, preserve_emoji=True) == flag
+        assert sanitize_user_content(flag) == "🏴"
+
+    def test_emoji_mode_keeps_length_limit(self):
+        assert sanitize_user_content("x" * 70, 64, preserve_emoji=True) == (
+            "x" * 64 + "... [truncated]"
+        )
+
     def test_excessive_newlines_collapsed(self):
         text = "line1\n\n\n\n\nline2"
         assert sanitize_user_content(text) == "line1\n\nline2"

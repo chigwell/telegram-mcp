@@ -43,7 +43,9 @@ _INVISIBLE_CHARS = re.compile(
 _EXCESSIVE_NEWLINES = re.compile(r"\n{3,}")
 
 
-def sanitize_user_content(text: Optional[str], max_length: int = 4096) -> str:
+def sanitize_user_content(
+    text: Optional[str], max_length: int = 4096, *, preserve_emoji: bool = False
+) -> str:
     """Sanitize user-controlled text content before returning in tool results.
 
     - Returns "[empty]" for None / empty input
@@ -51,6 +53,7 @@ def sanitize_user_content(text: Optional[str], max_length: int = 4096) -> str:
     - Strips zero-width / invisible characters
     - Collapses excessive consecutive newlines (>2) to 2
     - Truncates to max_length with a marker
+    - With preserve_emoji, retains emoji joiners and subdivision-flag tag characters
 
     This does NOT attempt keyword-based injection detection (too brittle).
     The real defence is the structural JSON boundary in tool results.
@@ -65,13 +68,17 @@ def sanitize_user_content(text: Optional[str], max_length: int = 4096) -> str:
         if cat in ("Cc", "Cf"):
             if ch in ("\n", "\t"):
                 cleaned.append(ch)
+            elif preserve_emoji and (ch == "\u200d" or "\U000e0020" <= ch <= "\U000e007f"):
+                cleaned.append(ch)
             # else: drop the character
         else:
             cleaned.append(ch)
     result = "".join(cleaned)
 
     # Strip invisible / zero-width characters
-    result = _INVISIBLE_CHARS.sub("", result)
+    result = _INVISIBLE_CHARS.sub(
+        lambda match: match[0] if preserve_emoji and match[0] == "\u200d" else "", result
+    )
 
     # Collapse excessive newlines
     result = _EXCESSIVE_NEWLINES.sub("\n\n", result)
