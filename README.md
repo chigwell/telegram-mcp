@@ -81,6 +81,32 @@ The cache lives in `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default `data/transcripts`),
 
 All tool results that include Telegram user-controlled content are sanitized and, where practical, returned as structured JSON.
 
+### Reusing custom emoji
+
+`get_history`, `list_messages`, `search_messages`, `search_global`,
+`get_message_context` (including `replied_message`), `get_pinned_messages`, and
+`get_drafts` include `custom_emojis` when the message contains custom emoji.
+`get_messages` and `get_scheduled_messages` include the same metadata as a JSON
+list in their text output. Ordinary messages keep their existing output.
+
+```json
+{"text": "🍷 News", "custom_emojis": [{"emoji": "🍷", "id": "5368324170671202286"}]}
+```
+
+Each entry contains the fallback emoji and its Telegram document ID as a string.
+Repeated IDs appear once per message; different IDs remain separate even when
+their fallback emoji looks identical. This is a list of reusable emoji variants,
+not a map of their positions or a copy of all message formatting. Extraction uses
+the original Telegram entities, including `TextCustomEmoji` nodes in block-format
+`rich_message` content, and makes no additional API requests. Emoji
+joiners and flag tag characters are preserved in the fallback text.
+
+To reuse an entry, set `parse_mode="html"` in `send_message`, `reply_to_message`,
+or `edit_message`, and insert `<tg-emoji emoji-id="ID">EMOJI</tg-emoji>` using its
+`id` and `emoji`. HTML-escape the fallback and other literal text. For example,
+the entry above becomes `<tg-emoji emoji-id="5368324170671202286">🍷</tg-emoji>`.
+Telegram's account restrictions still apply to sending custom emoji.
+
 ### Incoming Event Feed (callback mode, Claude Code only)
 
 By default, an agent waits for replies by calling `wait_for_settled_message`, which blocks up to the MCP tool timeout and must be re-called — that works everywhere (Codex, Cursor, etc.) and is unchanged.

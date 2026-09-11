@@ -268,6 +268,7 @@ def test_message_to_dict_falls_back_to_rich_message():
 
     assert d["text"].startswith("Личная CRM 🧠")
     assert d["rich"] is True
+    assert d["custom_emojis"] == [{"emoji": "🧠", "id": "5927026418616636353"}]
 
 
 def test_format_message_line_falls_back_to_rich_message():
@@ -276,6 +277,7 @@ def test_format_message_line_falls_back_to_rich_message():
     assert "Message: [empty]" not in line
     assert "Личная CRM 🧠\\n\\nПервый абзац." in line
     assert "rich" in line
+    assert 'custom_emojis: [{"emoji": "🧠", "id": "5927026418616636353"}]' in line
 
 
 def test_plain_message_text_still_wins_over_rich_message():
