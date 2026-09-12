@@ -478,6 +478,56 @@ async def _edit_rich(cl, entity, message_id: int, text: str, parse_mode: str):
     )
 
 
+def _chip_conflict(parse_mode):
+    """Return why format_date cannot combine with parse_mode, or None when it can."""
+    if parse_mode:
+        return "format_date needs plain-text messages (leave parse_mode unset)."
+    return None
+
+
+def _date_entity(message: str, format_date: str):
+    """Return (entity, None) marking format_date as a tappable chip, or (None, error)."""
+    idx = message.find(format_date)
+    if idx < 0:
+        return None, f"format_date '{format_date}' was not found in the message text."
+    tokens = format_date.split()
+    parts = tokens[0].split("/")
+    if len(parts) not in (2, 3) or any(not p.isdigit() for p in parts):
+        return (
+            None,
+            f"format_date '{format_date}' must look like 13/09, 13/09/2026 or 13/09 17:00.",
+        )
+    clock = None
+    if len(tokens) == 2:
+        clock = tokens[1].split(":")
+        if len(clock) != 2 or any(not p.isdigit() for p in clock):
+            return (
+                None,
+                f"format_date '{format_date}' must look like 13/09, 13/09/2026 or 13/09 17:00.",
+            )
+    if len(tokens) > 2:
+        return (
+            None,
+            f"format_date '{format_date}' must look like 13/09, 13/09/2026 or 13/09 17:00.",
+        )
+    try:
+        day, month = int(parts[0]), int(parts[1])
+        year = int(parts[2]) if len(parts) == 3 else datetime.now().year
+        hour, minute = (int(clock[0]), int(clock[1])) if clock else (0, 0)
+        date = datetime(year, month, day, hour, minute).astimezone()
+    except ValueError:
+        return None, f"format_date '{format_date}' is not a valid date."
+    entity = types.MessageEntityFormattedDate(
+        offset=len(message[:idx].encode("utf-16-le")) // 2,
+        length=len(format_date.encode("utf-16-le")) // 2,
+        date=date,
+        short_date=len(parts) == 2,
+        long_date=len(parts) == 3,
+        short_time=clock is not None,
+    )
+    return entity, None
+
+
 @mcp.tool(
     annotations=ToolAnnotations(title="Send Message", openWorldHint=True, destructiveHint=True)
 )
@@ -487,6 +537,7 @@ async def send_message(
     chat_id: Union[int, str],
     message: str,
     parse_mode: Optional[str] = None,
+    format_date: Optional[str] = None,
     account: str = None,
 ) -> str:
     """
@@ -495,9 +546,13 @@ async def send_message(
     <tg-emoji emoji-id="ID">EMOJI</tg-emoji>, using the returned id and emoji.
     HTML-escape the emoji and other literal text. Custom emoji availability is
     subject to Telegram's account restrictions.
+    format_date renders a tappable chip (copy / add-to-calendar / reminder) over
+    the date text given verbatim: '13/09', '13/09/2026', or '13/09 17:00'.
     Args:
         chat_id: The ID or username of the chat.
         message: The message content to send.
+        format_date: Exact date text in the message to render as a tappable date chip.
+            Plain-text messages only — leave parse_mode unset.
         parse_mode: Optional formatting mode. Use 'html' for HTML tags (<b>, <i>, <code>, <pre>,
             <a href="...">), 'md' or 'markdown' for Markdown (**bold**, __italic__, `code`,
             ```pre```), or omit for plain text. Use 'rich'/'rich_markdown' for full
@@ -512,7 +567,28 @@ async def send_message(
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
         if parse_mode and parse_mode.lower() in RICH_PARSE_MODES:
+            conflict = _chip_conflict(format_date)
+            if conflict:
+                return conflict
             return await _send_rich(cl, entity, message, parse_mode.lower())
+        if format_date:
+            conflict = _chip_conflict(parse_mode)
+            if conflict:
+                return conflict
+            chip, chip_error = _date_entity(message, format_date)
+            if chip_error:
+                return chip_error
+            import random
+
+            await cl(
+                functions.messages.SendMessageRequest(
+                    peer=entity,
+                    message=message,
+                    random_id=random.randint(0, 2**62),
+                    entities=[chip],
+                )
+            )
+            return "Message sent successfully."
         await cl.send_message(entity, message, parse_mode=parse_mode)
         return "Message sent successfully."
     except Exception as e:
@@ -1513,6 +1589,7 @@ async def edit_message(
     message_id: int,
     new_text: str,
     parse_mode: Optional[str] = None,
+    format_date: Optional[str] = None,
     account: str = None,
 ) -> str:
     """
@@ -1520,10 +1597,14 @@ async def edit_message(
     Reuse custom_emojis from message-reading tools with parse_mode='html' and
     <tg-emoji emoji-id="ID">EMOJI</tg-emoji>, using the returned id and emoji.
     HTML-escape the emoji and other literal text.
+    format_date renders a tappable chip (copy / add-to-calendar / reminder) over
+    the date text given verbatim: '13/09', '13/09/2026', or '13/09 17:00'.
     Args:
         chat_id: The ID or username of the chat.
         message_id: The ID of the message to edit.
         new_text: The replacement text.
+        format_date: Exact date text in the new_text to render as a tappable date chip.
+            Plain-text messages only — leave parse_mode unset.
         parse_mode: Optional formatting mode — same values as send_message: 'md'/'markdown',
             'html', or 'rich'/'rich_markdown'/'rich_html' for full server-side formatting
             (tables, headings, formulas; REQUIRES Telegram Premium — without it nothing is
@@ -1535,7 +1616,26 @@ async def edit_message(
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
         if parse_mode and parse_mode.lower() in RICH_PARSE_MODES:
+            conflict = _chip_conflict(format_date)
+            if conflict:
+                return conflict
             return await _edit_rich(cl, entity, message_id, new_text, parse_mode.lower())
+        if format_date:
+            conflict = _chip_conflict(parse_mode)
+            if conflict:
+                return conflict
+            chip, chip_error = _date_entity(new_text, format_date)
+            if chip_error:
+                return chip_error
+            await cl(
+                functions.messages.EditMessageRequest(
+                    peer=entity,
+                    id=message_id,
+                    message=new_text,
+                    entities=[chip],
+                )
+            )
+            return f"Message {message_id} edited."
         # Only pass parse_mode when the caller set it: Telethon treats an explicit
         # None as "disable parsing", while omitting the argument uses its default
         # parser. Passing None unconditionally would turn previously formatted
@@ -1767,6 +1867,7 @@ async def reply_to_message(
     message_id: int,
     text: str,
     parse_mode: Optional[str] = None,
+    format_date: Optional[str] = None,
     account: str = None,
 ) -> str:
     """
@@ -1774,10 +1875,14 @@ async def reply_to_message(
     Reuse custom_emojis from message-reading tools with parse_mode='html' and
     <tg-emoji emoji-id="ID">EMOJI</tg-emoji>, using the returned id and emoji.
     HTML-escape the emoji and other literal text.
+    format_date renders a tappable chip (copy / add-to-calendar / reminder) over
+    the date text given verbatim: '13/09', '13/09/2026', or '13/09 17:00'.
     Args:
         chat_id: The chat ID or username.
         message_id: The message ID to reply to.
         text: The reply text.
+        format_date: Exact date text in the reply to render as a tappable date chip.
+            Plain-text messages only — leave parse_mode unset.
         parse_mode: Optional formatting mode — same values as send_message: 'md'/'markdown',
             'html', or 'rich'/'rich_markdown'/'rich_html' for full server-side formatting
             (tables, headings, formulas; REQUIRES Telegram Premium — without it nothing is
@@ -1787,7 +1892,29 @@ async def reply_to_message(
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
         if parse_mode and parse_mode.lower() in RICH_PARSE_MODES:
+            conflict = _chip_conflict(format_date)
+            if conflict:
+                return conflict
             return await _send_rich(cl, entity, text, parse_mode.lower(), reply_to=message_id)
+        if format_date:
+            conflict = _chip_conflict(parse_mode)
+            if conflict:
+                return conflict
+            chip, chip_error = _date_entity(text, format_date)
+            if chip_error:
+                return chip_error
+            import random
+
+            await cl(
+                functions.messages.SendMessageRequest(
+                    peer=entity,
+                    message=text,
+                    random_id=random.randint(0, 2**62),
+                    reply_to=types.InputReplyToMessage(reply_to_msg_id=message_id),
+                    entities=[chip],
+                )
+            )
+            return f"Replied to message {message_id} in chat {chat_id}."
         await cl.send_message(entity, text, reply_to=message_id, parse_mode=parse_mode)
         return f"Replied to message {message_id} in chat {chat_id}."
     except Exception as e:
