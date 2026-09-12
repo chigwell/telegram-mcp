@@ -45,7 +45,7 @@ The server currently includes 80+ MCP tools grouped into these areas:
 
 - **Accounts:** list configured accounts and route tool calls by account label.
 - **Chats and groups:** list chats, inspect metadata, create groups/channels, join or leave chats, invite or remove users, manage admins, bans, default permissions, slow mode, topics, invite links, common chats, read receipts, and message links.
-- **Messages:** send, schedule, edit, delete, forward, pin, unpin, mark read, reply, search, inspect context, create polls, manage reactions, inspect inline buttons, and press inline callbacks. `send_message`, `reply_to_message`, and `edit_message` support classic formatting (`parse_mode='md'`/`'html'`) and server-side rich formatting (`parse_mode='rich'`/`'rich_markdown'`/`'rich_html'` — full Markdown/HTML with tables, headings, formulas, and collapsible sections). Rich modes require Telegram Premium on the account; Premium is re-checked on every call, and without it nothing is sent — the tool returns a structured `telegram_premium_required` result so the agent can reformat with classic modes and retry.
+- **Messages:** send, schedule, edit, delete, forward, pin, unpin, mark read, reply, search, inspect context, create polls, manage reactions, inspect inline buttons, and press inline callbacks. `send_message`, `reply_to_message`, and `edit_message` support classic formatting (`parse_mode='md'`/`'html'`) and server-side rich formatting (`parse_mode='rich'`/`'rich_markdown'`/`'rich_html'` — full Markdown/HTML with tables, headings, formulas, and collapsible sections). Rich modes require Telegram Premium on the account; Premium is re-checked on every call, and without it nothing is sent — the tool returns a structured `telegram_premium_required` result so the agent can reformat with classic modes and retry. `send_message`, `reply_to_message`, and `edit_message` also accept `format_date` to render a date as a tappable chip.
 - **Contacts:** list, search, add, delete, block, unblock, import, export, inspect direct chats, find recent contact interactions, and remember contacts by the names you actually use (see below).
 
 ### Remembered contacts
@@ -106,6 +106,16 @@ or `edit_message`, and insert `<tg-emoji emoji-id="ID">EMOJI</tg-emoji>` using i
 `id` and `emoji`. HTML-escape the fallback and other literal text. For example,
 the entry above becomes `<tg-emoji emoji-id="5368324170671202286">🍷</tg-emoji>`.
 Telegram's account restrictions still apply to sending custom emoji.
+
+### Tappable dates and times
+
+Passing `format_date` to `send_message`, `reply_to_message`, or `edit_message`
+renders a tappable date/time chip — the same entity Telegram's apps attach when
+you type a recognizable date. Give the date text exactly as it appears in the
+message: `'13/09'`, `'13/09/2026'`, or `'13/09 17:00'`. The chip opens
+copy-date / add-to-calendar / reminder actions. Plain-text messages only —
+omit `parse_mode`. For example, `send_message(chat_id, "Lunch 13/09 13:00",
+format_date="13/09 13:00")` sends a message whose date opens that menu.
 
 ### Incoming Event Feed (callback mode, Claude Code only)
 
