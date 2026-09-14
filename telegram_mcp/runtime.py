@@ -1733,15 +1733,15 @@ async def _get_effective_allowed_roots_with_status(
     except asyncio.TimeoutError:
         if fallback_roots and _server_roots_fallback_enabled():
             logger.warning(
-                "MCP client did not answer roots/list within %.1fs; falling back to "
-                "server CLI roots (TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK).",
-                _roots_request_timeout() or 0.0,
+                "MCP client did not answer roots/list before the configured timeout "
+                "(TELEGRAM_ROOTS_TIMEOUT_SECONDS); falling back to server CLI roots "
+                "(TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK)."
             )
             return fallback_roots, ROOTS_STATUS_SERVER_FALLBACK
         logger.error(
-            "MCP client did not answer roots/list within %.1fs; disabling file-path "
-            "tools instead of hanging.",
-            _roots_request_timeout() or 0.0,
+            "MCP client did not answer roots/list before the configured timeout "
+            "(TELEGRAM_ROOTS_TIMEOUT_SECONDS); disabling file-path tools instead "
+            "of hanging."
         )
         return [], ROOTS_STATUS_TIMEOUT
     except Exception as error:
