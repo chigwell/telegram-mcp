@@ -719,6 +719,11 @@ ROOTS_STATUS_UNSUPPORTED_FALLBACK = "unsupported_fallback"
 ROOTS_STATUS_CLIENT_DENY_ALL = "client_deny_all"
 ROOTS_STATUS_SERVER_FALLBACK = "server_fallback"
 ROOTS_STATUS_ERROR = "error"
+ROOTS_STATUS_TIMEOUT = "timeout"
+# Some clients accept the server-initiated roots/list request but never answer
+# it (observed with Claude Code over streamable HTTP), which would otherwise
+# hang every file-path tool forever instead of failing.
+ROOTS_REQUEST_TIMEOUT_DEFAULT = 10.0
 
 
 # Error code prefix mapping for better error tracing
@@ -1694,6 +1699,22 @@ def _server_roots_fallback_enabled(value: Optional[str] = None) -> bool:
     return _parse_bool_env(raw_value, False)
 
 
+def _roots_request_timeout(value: Optional[str] = None) -> Optional[float]:
+    """Seconds to wait for the client's ``roots/list`` reply.
+
+    Override with ``TELEGRAM_ROOTS_TIMEOUT_SECONDS``; ``0`` or a negative value
+    waits forever (the pre-timeout behavior).
+    """
+    raw_value = os.getenv("TELEGRAM_ROOTS_TIMEOUT_SECONDS") if value is None else value
+    if raw_value is None or not str(raw_value).strip():
+        return ROOTS_REQUEST_TIMEOUT_DEFAULT
+    try:
+        timeout = float(raw_value)
+    except (TypeError, ValueError):
+        return ROOTS_REQUEST_TIMEOUT_DEFAULT
+    return timeout if timeout > 0 else None
+
+
 async def _get_effective_allowed_roots_with_status(
     ctx: Optional[Context],
 ) -> tuple[List[Path], str]:
@@ -1704,7 +1725,25 @@ async def _get_effective_allowed_roots_with_status(
         return [], ROOTS_STATUS_NOT_CONFIGURED
 
     try:
-        list_roots_result = await ctx.session.list_roots()
+        timeout = _roots_request_timeout()
+        if timeout is None:
+            list_roots_result = await ctx.session.list_roots()
+        else:
+            list_roots_result = await asyncio.wait_for(ctx.session.list_roots(), timeout)
+    except asyncio.TimeoutError:
+        if fallback_roots and _server_roots_fallback_enabled():
+            logger.warning(
+                "MCP client did not answer roots/list within %.1fs; falling back to "
+                "server CLI roots (TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK).",
+                _roots_request_timeout() or 0.0,
+            )
+            return fallback_roots, ROOTS_STATUS_SERVER_FALLBACK
+        logger.error(
+            "MCP client did not answer roots/list within %.1fs; disabling file-path "
+            "tools instead of hanging.",
+            _roots_request_timeout() or 0.0,
+        )
+        return [], ROOTS_STATUS_TIMEOUT
     except Exception as error:
         recovered_roots = _coerce_paths_from_list_roots_validation_error(error)
         if recovered_roots:
@@ -1771,6 +1810,16 @@ async def _ensure_allowed_roots(
                 (
                     f"{tool_name} is disabled because MCP Roots could not be verified safely. "
                     "Check MCP client/server logs."
+                ),
+            )
+        if status == ROOTS_STATUS_TIMEOUT:
+            return (
+                [],
+                (
+                    f"{tool_name} is disabled because the MCP client never answered the "
+                    "roots/list request. Configure server CLI roots and set "
+                    "TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK=1, or raise "
+                    "TELEGRAM_ROOTS_TIMEOUT_SECONDS."
                 ),
             )
         return (
