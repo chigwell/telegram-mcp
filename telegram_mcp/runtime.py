@@ -153,6 +153,25 @@ mcp = FastMCP("telegram", stateless_http=True)
 # We wrap the low-level request handler (after FastMCP registers it) to inject
 # annotations into the final CallToolResult, preserving structured output.
 _USER_AUDIENCE = Annotations(audience=["user"])
+TOOL_TIMEOUT_SECONDS_DEFAULT = 55.0
+
+
+def _tool_timeout_seconds(value: Optional[str] = None) -> Optional[float]:
+    """Return the server-side ceiling for one MCP tool call.
+
+    The default stays just above the two event-wait tools' 50-second defaults,
+    while ensuring a wedged Telethon request becomes an explicit MCP error
+    before common client-side one-minute timeouts. Set the value to ``0`` or a
+    negative number only for a deliberately unbounded operator session.
+    """
+    raw_value = os.getenv("TELEGRAM_TOOL_TIMEOUT_SECONDS") if value is None else value
+    if not raw_value:
+        return TOOL_TIMEOUT_SECONDS_DEFAULT
+    try:
+        timeout = float(raw_value)
+    except ValueError:
+        return TOOL_TIMEOUT_SECONDS_DEFAULT
+    return timeout if timeout > 0 else None
 
 
 def _install_annotation_hook() -> None:
@@ -161,7 +180,27 @@ def _install_annotation_hook() -> None:
     original_handler = mcp._mcp_server.request_handlers[CallToolRequest]
 
     async def annotated_handler(req):
-        response = await original_handler(req)
+        timeout = _tool_timeout_seconds()
+        if timeout is None:
+            response = await original_handler(req)
+        else:
+            try:
+                response = await asyncio.wait_for(original_handler(req), timeout=timeout)
+            except asyncio.TimeoutError:
+                response = ServerResult(
+                    CallToolResult(
+                        content=[
+                            TextContent(
+                                type="text",
+                                text=(
+                                    "Telegram MCP tool timed out after "
+                                    f"{timeout:g}s (code: GEN-TIMEOUT)."
+                                ),
+                            )
+                        ],
+                        isError=True,
+                    )
+                )
         if isinstance(response, ServerResult) and isinstance(response.root, CallToolResult):
             content = response.root.content
             if content:

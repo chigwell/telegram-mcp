@@ -1,5 +1,7 @@
 """Safeguards that must survive tools returning image content, not just text."""
 
+import asyncio
+
 import pytest
 from mcp.server.fastmcp import Image
 from mcp.types import CallToolResult, ImageContent, ServerResult, TextContent
@@ -78,3 +80,55 @@ async def test_image_results_are_annotated_as_user_audience():
     text_block, image_block = response.root.content
     assert text_block.annotations.audience == ["user"]
     assert image_block.annotations.audience == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_call_tool_timeout_returns_an_explicit_annotated_error(monkeypatch):
+    async def original_handler(req):
+        await asyncio.Event().wait()
+
+    from mcp.types import CallToolRequest
+
+    handlers = runtime.mcp._mcp_server.request_handlers
+    installed_handler = handlers[CallToolRequest]
+    handlers[CallToolRequest] = original_handler
+    monkeypatch.setenv("TELEGRAM_TOOL_TIMEOUT_SECONDS", "0.01")
+    try:
+        runtime._install_annotation_hook()
+        response = await handlers[CallToolRequest](None)
+    finally:
+        handlers[CallToolRequest] = installed_handler
+
+    assert response.root.isError is True
+    assert response.root.content[0].text == (
+        "Telegram MCP tool timed out after 0.01s (code: GEN-TIMEOUT)."
+    )
+    assert response.root.content[0].annotations.audience == ["user"]
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [(None, 55.0), ("", 55.0), ("garbage", 55.0), ("3.5", 3.5), ("0", None)],
+)
+def test_tool_timeout_parsing(monkeypatch, value, expected):
+    monkeypatch.delenv("TELEGRAM_TOOL_TIMEOUT_SECONDS", raising=False)
+    assert runtime._tool_timeout_seconds(value) == expected
+
+
+@pytest.mark.asyncio
+async def test_disabled_tool_timeout_does_not_relabel_handler_timeout(monkeypatch):
+    async def original_handler(req):
+        raise asyncio.TimeoutError("tool-specific timeout")
+
+    from mcp.types import CallToolRequest
+
+    handlers = runtime.mcp._mcp_server.request_handlers
+    installed_handler = handlers[CallToolRequest]
+    handlers[CallToolRequest] = original_handler
+    monkeypatch.setenv("TELEGRAM_TOOL_TIMEOUT_SECONDS", "0")
+    try:
+        runtime._install_annotation_hook()
+        with pytest.raises(asyncio.TimeoutError, match="tool-specific timeout"):
+            await handlers[CallToolRequest](None)
+    finally:
+        handlers[CallToolRequest] = installed_handler
