@@ -130,11 +130,18 @@ def test_tool_handlers_do_not_log_sensitive_exceptions_before_formatting():
 
 
 def _runtime_and_tool_sources():
+    from coverage import Coverage
+
     package_dir = Path(runtime.__file__).parent
-    return package_dir, [
-        package_dir / "runtime.py",
-        *sorted((package_dir / "tools").glob("*.py")),
-    ]
+    config = Coverage(config_file=str(package_dir.parent / "pyproject.toml"))
+    # The same manifest tracks extracted core code for coverage and privacy.
+    sources = {
+        package_dir.joinpath(*name.split(".")[1:]).with_suffix(".py")
+        for name in config.get_option("run:source")
+        if name.startswith("telegram_mcp.")
+    }
+    sources.update((package_dir / "tools").rglob("*.py"))
+    return package_dir, sorted(sources)
 
 
 def test_all_runtime_and_tool_logs_use_constant_privacy_safe_messages():

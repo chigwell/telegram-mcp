@@ -1,15 +1,17 @@
 repos:
-  - repo: https://github.com/psf/black
-    rev: 25.9.0
+  - repo: local
     hooks:
       - id: black
-        language_version: python3
-
-  - repo: https://github.com/pycqa/flake8
-    rev: 7.3.0
-    hooks:
+        name: Black (locked version)
+        entry: uv run --frozen black
+        language: system
+        types: [python]
       - id: flake8
-        args: ["--count", "--select=E9,F63,F7,F82", "--show-source", "--statistics"]
+        name: Flake8 (locked version)
+        entry: uv run --frozen flake8
+        language: system
+        types: [python]
+        args: ["--count", "--show-source", "--statistics"]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -40,7 +42,7 @@ repos:
         stages: [pre-push]
       - id: pytest-coverage-ci
         name: pytest with coverage (ci parity)
-        entry: uv run --env-file .env.example pytest --cov --cov-report=term-missing --cov-report=xml
+        entry: uv run --frozen --env-file .env.example pytest --cov --cov-report=term-missing --cov-report=xml
         language: system
         pass_filenames: false
         stages: [pre-push]

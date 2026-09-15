@@ -1,7 +1,35 @@
 """Contacts MCP tools."""
 
-from telegram_mcp.runtime import *
-from typing import Optional
+import json
+from typing import Any, Dict, Optional, Union
+
+from mcp.types import ToolAnnotations
+from telethon import functions
+from telethon.tl.types import User
+
+from sanitize import format_tool_result, sanitize_name, sanitize_user_content
+from telegram_mcp._compat import runtime_attribute_fallback as _runtime_attribute_fallback
+from telegram_mcp.entity_formatting import format_entity, get_entity_type, get_marked_id
+from telegram_mcp.runtime import (
+    AliasNeedsUser,
+    AliasStoreUnreadable,
+    alias_key,
+    apply_alias,
+    ensure_connected,
+    get_client,
+    is_handle_like,
+    load_aliases,
+    log_and_format_error,
+    match_aliases,
+    mcp,
+    resolve_entity,
+    update_aliases,
+    validate_id,
+    with_account,
+)
+
+# Preserve historical runtime attributes without hiding implementation dependencies.
+__getattr__ = _runtime_attribute_fallback()
 
 
 @mcp.tool(

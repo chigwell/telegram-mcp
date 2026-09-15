@@ -7,11 +7,17 @@ try:
 except UnsafeInstallationError as exc:
     raise SystemExit(str(exc)) from None
 
+import asyncio
+import os
+import sqlite3
+import sys
+
 from telethon.errors import AuthKeyDuplicatedError
 
 from telegram_mcp import runtime as _runtime
 from telegram_mcp import transcription as _transcription
-from telegram_mcp.runtime import *
+from telegram_mcp._compat import runtime_attribute_fallback as _runtime_attribute_fallback
+from telegram_mcp.runtime import _configure_allowed_roots_from_cli, clients, mcp
 from telegram_mcp.singleton import (
     DEFAULT_GRACE_SECONDS,
     SessionLock,
@@ -19,6 +25,9 @@ from telegram_mcp.singleton import (
     session_identity,
 )
 import telegram_mcp.tools  # noqa: F401 - registers MCP tools via decorators
+
+# Preserve historical runtime attributes after the installation check and setup.
+__getattr__ = _runtime_attribute_fallback()
 
 # Populated as each account's session lock is acquired; released in _main's
 # finally block so a lock is never held past this process's lifetime.
@@ -176,7 +185,8 @@ async def _main() -> None:
             except Exception as warm_exc:
                 print(f"Entity cache warm failed: {warm_exc}", file=sys.stderr)
 
-        warm_task = asyncio.create_task(_warm_caches())
+        # Keep a strong reference while serving; asyncio holds tasks weakly.
+        warm_task = asyncio.create_task(_warm_caches())  # noqa: F841
 
         transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
         print(
@@ -222,6 +232,24 @@ def main() -> None:
     _transcription.validate_transcription_config()
     _session_lock_shared()  # fail loudly at startup on a bad toggle
     asyncio.run(_main())
+
+
+# Match the names formerly exposed by a runtime star import, including callers
+# that themselves use ``from telegram_mcp.runner import *``.
+__all__ = list(
+    dict.fromkeys(
+        ["UnsafeInstallationError", "assert_safe_distribution", "AuthKeyDuplicatedError"]
+        + [name for name in _runtime.__all__ if not name.startswith("_")]
+        + [
+            "DEFAULT_GRACE_SECONDS",
+            "SessionLock",
+            "SessionLockError",
+            "session_identity",
+            "telegram_mcp",
+            "main",
+        ]
+    )
+)
 
 
 if __name__ == "__main__":

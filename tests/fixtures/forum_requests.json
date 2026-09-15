@@ -1,0 +1,86 @@
+[
+  {
+    "fields": {
+      "_": "GetForumTopicsRequest",
+      "channel": {
+        "_": "InputChannel",
+        "channel_id": 11,
+        "access_hash": 22
+      },
+      "q": null,
+      "offset_date": 0,
+      "offset_id": 7,
+      "offset_topic": 9,
+      "limit": 50
+    },
+    "bytes": "d160e50d0000000028ec5af30b00000000000000160000000000000000000000070000000900000032000000"
+  },
+  {
+    "fields": {
+      "_": "GetForumTopicsRequest",
+      "channel": {
+        "_": "InputChannel",
+        "channel_id": 11,
+        "access_hash": 22
+      },
+      "q": "Topic 🧵",
+      "offset_date": 0,
+      "offset_id": 7,
+      "offset_topic": 9,
+      "limit": 50
+    },
+    "bytes": "d160e50d0100000028ec5af30b0000000000000016000000000000000a546f70696320f09fa7b50000000000070000000900000032000000"
+  },
+  {
+    "fields": {
+      "_": "CreateForumTopicRequest",
+      "peer": {
+        "_": "InputPeerChannel",
+        "channel_id": 11,
+        "access_hash": 22
+      },
+      "title": "Topic 🧵",
+      "icon_color": null,
+      "icon_emoji_id": null,
+      "random_id": 12345,
+      "send_as": null
+    },
+    "bytes": "d5c3982f00000000fcbbbc270b0000000000000016000000000000000a546f70696320f09fa7b5003930000000000000"
+  },
+  {
+    "fields": {
+      "_": "CreateForumTopicRequest",
+      "peer": {
+        "_": "InputPeerChannel",
+        "channel_id": 11,
+        "access_hash": 22
+      },
+      "title": "Topic 🧵",
+      "icon_color": 0,
+      "icon_emoji_id": 0,
+      "random_id": 12345,
+      "send_as": null
+    },
+    "bytes": "d5c3982f09000000fcbbbc270b0000000000000016000000000000000a546f70696320f09fa7b5000000000000000000000000003930000000000000"
+  },
+  {
+    "fields": {
+      "_": "CreateForumTopicRequest",
+      "peer": {
+        "_": "InputPeerChannel",
+        "channel_id": 11,
+        "access_hash": 22
+      },
+      "title": "Topic 🧵",
+      "icon_color": 1193046,
+      "icon_emoji_id": 999,
+      "random_id": 12345,
+      "send_as": {
+        "_": "InputPeerUser",
+        "user_id": 33,
+        "access_hash": 44
+      }
+    },
+    "bytes": "d5c3982f0d000000fcbbbc270b0000000000000016000000000000000a546f70696320f09fa7b50056341200e70300000000000039300000000000004ca5e8dd21000000000000002c00000000000000"
+  }
+]

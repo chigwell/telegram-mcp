@@ -1,0 +1,3 @@
+include requirements.txt .flake8
+recursive-include tests/fixtures *.json
+recursive-include docs/refactoring *.md

@@ -15,11 +15,13 @@ Defence strategy:
    defence-in-depth inside JSON values.
 """
 
+from datetime import datetime
 import json
 import re
-import unicodedata
-from datetime import datetime
 from typing import Any, Dict, List, Optional
+import unicodedata
+
+from telegram_mcp.serialization import json_serializer as _json_default
 
 # Zero-width and invisible Unicode characters that can be used to hide content
 _INVISIBLE_CHARS = re.compile(
@@ -123,15 +125,6 @@ def sanitize_dict(data: Any) -> Any:
     if isinstance(data, str):
         return sanitize_user_content(data, max_length=4096)
     return data
-
-
-def _json_default(obj: Any) -> Any:
-    """JSON serializer for objects not serializable by default json code."""
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    if isinstance(obj, bytes):
-        return obj.decode("utf-8", errors="replace")
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
 def format_tool_result(

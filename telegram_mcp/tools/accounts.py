@@ -1,6 +1,13 @@
 """Accounts MCP tools."""
 
-from telegram_mcp.runtime import *
+from mcp.types import ToolAnnotations
+
+from sanitize import sanitize_name
+from telegram_mcp._compat import runtime_attribute_fallback as _runtime_attribute_fallback
+from telegram_mcp.runtime import clients, mcp
+
+# Preserve historical runtime attributes without hiding implementation dependencies.
+__getattr__ = _runtime_attribute_fallback()
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List Accounts", readOnlyHint=True))
