@@ -25,9 +25,9 @@ jobs:
 
       - name: Lint with Flake8
         run: |
-          uv run --frozen flake8 . --count --show-source --statistics
-          uv run --frozen flake8 . --count --exit-zero --select=E,F,W,C90 --statistics
+          uv run --frozen --python 3.11 flake8 . --count --show-source --statistics
+          uv run --frozen --python 3.11 flake8 . --count --exit-zero --select=E,F,W,C90 --statistics
 
       - name: Check formatting with Black
         run: |
-          uv run --frozen black --check .
+          uv run --frozen --python 3.11 black --check .
