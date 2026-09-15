@@ -344,6 +344,11 @@ will use the server: a single long-lived process holds one Telegram
 connection, instead of every client spawning its own Telethon session —
 Telegram throttles and may flag accounts that open many parallel sessions.
 
+Every tool call also has a server-side ceiling of 55 seconds, configured with
+`TELEGRAM_TOOL_TIMEOUT_SECONDS`. A timed-out Telegram request returns an explicit
+MCP error instead of leaving the client waiting indefinitely. Set the value to
+`0` only for a deliberately unbounded operator session.
+
 Register the shared server with clients:
 
 ```bash
