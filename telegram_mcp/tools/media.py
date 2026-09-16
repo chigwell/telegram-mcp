@@ -1,13 +1,23 @@
 """Media MCP tools."""
 
+import json
+import mimetypes
 import os
+from pathlib import Path
 import shutil
 import tempfile
+import time
+from typing import List, Optional, Union
 from uuid import uuid4
 
-from telegram_mcp.runtime import *
+from mcp.server.fastmcp import Context, Image
+from mcp.types import ToolAnnotations
+from telethon import functions
 
+from sanitize import sanitize_name, sanitize_user_content
+from telegram_mcp._compat import runtime_attribute_fallback as _runtime_attribute_fallback
 from telegram_mcp.contact_sheet import ContactSheetUnavailable, build_contact_sheet
+from telegram_mcp.entity_formatting import get_entity_type, get_marked_id
 from telegram_mcp.photo_source import (
     AVATAR_SOURCE,
     UnknownPhotoSource,
@@ -16,6 +26,25 @@ from telegram_mcp.photo_source import (
     list_photo_references,
     validate_source,
 )
+from telegram_mcp.runtime import (
+    MAX_FILE_BYTES,
+    _resolve_readable_file_path,
+    _resolve_writable_file_path,
+    clients,
+    ensure_connected,
+    get_client,
+    log_and_format_error,
+    mcp,
+    parse_schedule_date,
+    resolve_entity,
+    validate_id,
+    with_account,
+)
+from telegram_mcp.serialization import json_serializer
+
+# Preserve historical runtime attributes without hiding implementation dependencies.
+__getattr__ = _runtime_attribute_fallback()
+
 
 PHOTO_IDENTIFIER_SEARCH_DEPTH = 100
 PHOTO_SHEET_MAXIMUM_TILES = 12

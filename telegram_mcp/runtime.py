@@ -1,114 +1,126 @@
+"""Shared server state, account routing, and compatibility entry points.
+
+Pure formatting, alias persistence, and path normalization live in focused
+modules. Client/server initialization and mutable runtime policy stay here.
+"""
+
 import argparse
-import os
-import sys
-import json
-import time
 import asyncio
-import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
+from enum import Enum
+from functools import wraps
+import hashlib
+import json
 import logging
 import mimetypes
-import unicodedata
-from contextlib import contextmanager
-from difflib import SequenceMatcher
-from datetime import datetime, timedelta, timezone
-from enum import Enum
-from typing import List, Dict, Optional, Union, Any, get_args
+import os
 from pathlib import Path
+import re
+import sqlite3
+import sys
+import tempfile
+import time
+from typing import Any, Dict, List, Optional, Union, get_args
+import unicodedata
 from urllib.parse import unquote, urlparse
 
-# Third-party libraries
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP, Context, Image
-from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
+from mcp.server.fastmcp import Context, FastMCP, Image
 from mcp.shared.exceptions import McpError
+from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
 from pythonjsonlogger import jsonlogger
 from telethon import TelegramClient, functions, types, utils
 from telethon.errors import AuthKeyDuplicatedError, FloodWaitError
+import telethon.errors.rpcerrorlist
 from telethon.sessions import StringSession
 from telethon.tl.types import (
-    User,
-    Chat,
     Channel,
+    ChannelParticipantsAdmins,
+    ChannelParticipantsKicked,
+    Chat,
     ChatAdminRights,
     ChatBannedRights,
-    ChannelParticipantsKicked,
-    ChannelParticipantsAdmins,
-    InputChatPhoto,
-    InputChatUploadedPhoto,
-    InputChatPhotoEmpty,
-    InputPeerUser,
-    InputPeerChat,
-    InputPeerChannel,
     DialogFilter,
     DialogFilterChatlist,
     DialogFilterDefault,
+    InputChatPhoto,
+    InputChatPhotoEmpty,
+    InputChatUploadedPhoto,
+    InputPeerChannel,
+    InputPeerChat,
+    InputPeerUser,
     TextWithEntities,
+    User,
 )
-import re
-import hashlib
-import tempfile
+
+from sanitize import format_tool_result, sanitize_dict, sanitize_name, sanitize_user_content
+from telegram_mcp import alias_store as _alias_store
+
+# main.py re-exports this historical surface; internal imports are explicit.
+from telegram_mcp._compat import RUNTIME_EXPORTS as __all__
+from telegram_mcp.alias_matching import (
+    _HANDLE_RE as _HANDLE_RE,
+    _SELF_REFS as _SELF_REFS,
+    _covers as _covers,
+    _same_word as _same_word,
+    alias_key as alias_key,
+    is_handle_like as is_handle_like,
+)
+from telegram_mcp.alias_store import (
+    AliasStoreUnreadable as AliasStoreUnreadable,
+    _alias_lock as _alias_lock,
+    aliases_file_path as aliases_file_path,
+    save_aliases as save_aliases,
+)
+from telegram_mcp.client_identity import client_identity_kwargs
+from telegram_mcp.entity_formatting import (
+    format_entity as format_entity,
+    format_message as format_message,
+    get_engagement_dict as get_engagement_dict,
+    get_engagement_info as get_engagement_info,
+    get_entity_filter_type as get_entity_filter_type,
+    get_entity_type as get_entity_type,
+    get_marked_id as get_marked_id,
+    get_sender_info as get_sender_info,
+    get_sender_name as get_sender_name,
+    get_sender_username as get_sender_username,
+)
+from telegram_mcp.path_helpers import (
+    _coerce_paths_from_list_roots_validation_error as _coerce_paths_from_list_roots_validation_error,
+    _coerce_root_uri_to_path as _coerce_root_uri_to_path,
+    _dedupe_paths as _dedupe_paths,
+    _first_resolution_root as _first_resolution_root,
+    _path_is_within_any_root as _path_is_within_any_root,
+    _path_is_within_root as _path_is_within_root,
+)
+from telegram_mcp.rich_text import (
+    RICH_PARSE_MODES as RICH_PARSE_MODES,
+    _PAGE_TEXT_FIELDS as _PAGE_TEXT_FIELDS,
+    _RICH_TEXT_FIELDS as _RICH_TEXT_FIELDS,
+    _RICH_TEXT_TYPES as _RICH_TEXT_TYPES,
+    _page_lines as _page_lines,
+    account_is_premium as account_is_premium,
+    is_premium_rpc_error as is_premium_rpc_error,
+    make_rich_input as make_rich_input,
+    premium_required_result as premium_required_result,
+    rich_message_text as rich_message_text,
+    rich_text_to_str as rich_text_to_str,
+)
+from telegram_mcp.serialization import json_serializer
+from telegram_mcp.singleton import try_lock_exclusive
 
 try:
     import fcntl  # POSIX advisory locks; unavailable on Windows
 except ImportError:  # pragma: no cover - Windows fallback
     fcntl = None
 
-from telegram_mcp.singleton import try_lock_exclusive
-
-from functools import wraps
-import telethon.errors.rpcerrorlist
-from sanitize import sanitize_user_content, sanitize_name, sanitize_dict, format_tool_result
-from telegram_mcp.client_identity import client_identity_kwargs
-
 
 class ValidationError(Exception):
     """Custom exception for validation errors."""
 
     pass
-
-
-def json_serializer(obj):
-    """Helper function to convert non-serializable objects for JSON serialization."""
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    if isinstance(obj, bytes):
-        return obj.decode("utf-8", errors="replace")
-    # Add other non-serializable types as needed
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
-
-
-def get_entity_type(entity: Any) -> str:
-    """Return a normalized, human-readable chat/entity type."""
-    if isinstance(entity, User):
-        return "User"
-    if isinstance(entity, Chat):
-        return "Group (Basic)"
-    if isinstance(entity, Channel):
-        if getattr(entity, "megagroup", False):
-            return "Supergroup"
-        return "Channel" if getattr(entity, "broadcast", False) else "Group"
-    return type(entity).__name__
-
-
-def get_marked_id(entity: Any) -> int:
-    """Return a Telethon-compatible marked ID for an entity."""
-    if isinstance(entity, Channel):
-        return -1000000000000 - entity.id
-    if isinstance(entity, Chat):
-        return -entity.id
-    return entity.id
-
-
-def get_entity_filter_type(entity: Any) -> Optional[str]:
-    """Return list_chats-compatible filter type: user/group/channel."""
-    entity_type = get_entity_type(entity)
-    if entity_type == "User":
-        return "user"
-    if entity_type in ("Group (Basic)", "Group", "Supergroup"):
-        return "group"
-    if entity_type == "Channel":
-        return "channel"
-    return None
 
 
 def parse_schedule_date(
@@ -686,7 +698,7 @@ async def ensure_connected(cl: TelegramClient = None):
             timeout=5.0,
         )
         _last_conn_verified[key] = now
-    except (ConnectionError, OSError, asyncio.TimeoutError, Exception):
+    except Exception:
         await _force_reconnect(cl)
 
 
@@ -877,6 +889,48 @@ def log_and_format_error(
     return f"An error occurred (code: {error_code})."
 
 
+def _validate_single_id(value, p_name):
+    # Handle integer IDs
+    if isinstance(value, int):
+        if not (-(2**63) <= value <= 2**63 - 1):
+            return (
+                None,
+                f"Invalid {p_name}: {value}. ID is out of the valid integer range.",
+            )
+        return value, None
+
+    # Handle string IDs
+    if isinstance(value, str):
+        try:
+            int_value = int(value)
+            if not (-(2**63) <= int_value <= 2**63 - 1):
+                return (
+                    None,
+                    f"Invalid {p_name}: {value}. ID is out of the valid integer range.",
+                )
+            return int_value, None
+        except ValueError:
+            # Saved aliases are free text ("андрей бекендер"), so they must
+            # be resolved here: this decorator runs before the tool body
+            # ever reaches resolve_entity.
+            resolved = apply_alias(value)
+            if isinstance(resolved, int):
+                # Keep the wording: if the mapping turns out to be
+                # stale, the resolver must name it, not the bare id.
+                return AliasID(resolved, value), None
+            if is_handle_like(value):
+                return value, None
+            # Unknown or ambiguous reference: hand the agent an
+            # instruction to ask the user instead of a dead end.
+            return None, alias_ask_payload(value)
+
+    # Handle other invalid types
+    return (
+        None,
+        f"Invalid {p_name}: {value}. Type must be an integer or a string.",
+    )
+
+
 def validate_id(*param_names_to_validate):
     """
     Decorator to validate chat_id and user_id parameters, including lists of IDs.
@@ -893,63 +947,11 @@ def validate_id(*param_names_to_validate):
 
                 param_value = kwargs[param_name]
 
-                def validate_single_id(value, p_name):
-                    # Handle integer IDs
-                    if isinstance(value, int):
-                        if not (-(2**63) <= value <= 2**63 - 1):
-                            return (
-                                None,
-                                f"Invalid {p_name}: {value}. ID is out of the valid integer range.",
-                            )
-                        return value, None
-
-                    # Handle string IDs
-                    if isinstance(value, str):
-                        try:
-                            int_value = int(value)
-                            if not (-(2**63) <= int_value <= 2**63 - 1):
-                                return (
-                                    None,
-                                    f"Invalid {p_name}: {value}. ID is out of the valid integer range.",
-                                )
-                            return int_value, None
-                        except ValueError:
-                            # Saved aliases are free text ("андрей бекендер"), so they must
-                            # be resolved here: this decorator runs before the tool body
-                            # ever reaches resolve_entity.
-                            resolved = apply_alias(value)
-                            if isinstance(resolved, int):
-                                # Keep the wording: if the mapping turns out to be
-                                # stale, the resolver must name it, not the bare id.
-                                return AliasID(resolved, value), None
-                            if is_handle_like(value):
-                                return value, None
-                            # Unknown or ambiguous reference: hand the agent an
-                            # instruction to ask the user instead of a dead end.
-                            return None, alias_ask_payload(value)
-
-                    # Handle other invalid types
-                    return (
-                        None,
-                        f"Invalid {p_name}: {value}. Type must be an integer or a string.",
-                    )
-
-                if isinstance(param_value, list):
-                    validated_list = []
-                    for item in param_value:
-                        validated_item, error_msg = validate_single_id(item, param_name)
-                        if error_msg:
-                            return log_and_format_error(
-                                func.__name__,
-                                ValidationError(error_msg),
-                                prefix="VALIDATION-001",
-                                user_message=error_msg,
-                                **{param_name: param_value},
-                            )
-                        validated_list.append(validated_item)
-                    kwargs[param_name] = validated_list
-                else:
-                    validated_value, error_msg = validate_single_id(param_value, param_name)
+                is_list = isinstance(param_value, list)
+                values = param_value if is_list else [param_value]
+                validated = []
+                for item in values:
+                    value, error_msg = _validate_single_id(item, param_name)
                     if error_msg:
                         return log_and_format_error(
                             func.__name__,
@@ -958,7 +960,8 @@ def validate_id(*param_names_to_validate):
                             user_message=error_msg,
                             **{param_name: param_value},
                         )
-                    kwargs[param_name] = validated_value
+                    validated.append(value)
+                kwargs[param_name] = validated if is_list else validated[0]
 
             return await func(*args, **kwargs)
 
@@ -967,337 +970,26 @@ def validate_id(*param_names_to_validate):
     return decorator
 
 
-def format_entity(entity) -> Dict[str, Any]:
-    """Helper function to format entity information consistently.
-
-    Names and titles are sanitized to prevent prompt injection.
-    """
-    result = {"id": get_marked_id(entity)}
-
-    if hasattr(entity, "title"):
-        result["name"] = sanitize_name(entity.title)
-        result["type"] = "group" if isinstance(entity, Chat) else "channel"
-    elif hasattr(entity, "first_name"):
-        name_parts = []
-        if entity.first_name:
-            name_parts.append(entity.first_name)
-        if hasattr(entity, "last_name") and entity.last_name:
-            name_parts.append(entity.last_name)
-        result["name"] = sanitize_name(" ".join(name_parts))
-        result["type"] = "user"
-        if hasattr(entity, "username") and entity.username:
-            result["username"] = entity.username
-        if hasattr(entity, "phone") and entity.phone:
-            result["phone"] = entity.phone
-
-    return result
-
-
-# Parse modes that request server-side rich formatting (tables, headings,
-# formulas, collapsible sections — the June 2026 "Rich Messages" feature).
-# Sending rich messages requires Telegram Premium on the account.
-RICH_PARSE_MODES = {"rich", "rich_md", "rich_markdown", "rich_html"}
-
-
-async def account_is_premium(client) -> bool:
-    """Fresh Premium check at call time — Premium can expire or be bought anytime."""
-    me = await client.get_me()
-    return bool(getattr(me, "premium", False))
-
-
-def make_rich_input(parse_mode: str, text: str):
-    """Build the InputRichMessage payload for a rich parse mode."""
-    if parse_mode == "rich_html":
-        return types.InputRichMessageHTML(html=text)
-    return types.InputRichMessageMarkdown(markdown=text)
-
-
-# Reading a rich message is the other direction, and it needs its own walk: a
-# channel posting in this format leaves msg.message empty and carries every word
-# as Instant-View page blocks, so a reader that only looks at msg.message
-# reports the whole post as empty.
-_RICH_TEXT_TYPES = tuple(get_args(types.TypeRichText))
-
-# RichText is a recursive tree: a node either holds a plain string, wraps
-# another node, or concatenates a list of them. Dispatching on the field rather
-# than on the class keeps a node type Telegram adds later flattening instead of
-# vanishing.
-_RICH_TEXT_FIELDS = ("texts", "text", "alt", "source")
-
-# Where a page block, list item, table row or caption keeps its words. Same walk
-# covers the blocks nested inside details, collages and embedded posts.
-_PAGE_TEXT_FIELDS = (
-    "title",
-    "subtitle",
-    "author",
-    "text",
-    "caption",
-    "credit",
-    "items",
-    "blocks",
-    "rows",
-    "articles",
-)
-
-
-def rich_text_to_str(node) -> str:
-    """Flatten one RichText node into plain text.
-
-    TextCustomEmoji contributes its alt character - dropping it would silently
-    eat the emoji a channel used as a bullet or a heading marker.
-    """
-    if node is None:
-        return ""
-    if isinstance(node, str):
-        return node
-    if isinstance(node, (list, tuple)):
-        return "".join(rich_text_to_str(item) for item in node)
-    for field in _RICH_TEXT_FIELDS:
-        value = getattr(node, field, None)
-        if value is not None:
-            return rich_text_to_str(value)
-    return ""  # TextEmpty, TextImage and anything else carrying no text
-
-
-def _page_lines(node) -> List[str]:
-    """Text lines carried by a page block, list item, table row or caption."""
-    if node is None:
-        return []
-    if isinstance(node, (list, tuple)):
-        return [line for item in node for line in _page_lines(item)]
-    if isinstance(node, _RICH_TEXT_TYPES):
-        text = rich_text_to_str(node).strip()
-        return [text] if text else []
-    cells = getattr(node, "cells", None)
-    if cells is not None:  # a table row reads as one line, not one line per cell
-        row = " | ".join(line for cell in cells for line in _page_lines(cell))
-        return [row] if row else []
-    return [line for f in _PAGE_TEXT_FIELDS for line in _page_lines(getattr(node, f, None))]
-
-
-def rich_message_text(msg) -> str:
-    """Plain text of a rich (block-format) message, "" when there is none.
-
-    Each block becomes a paragraph and the lines within one block stay together,
-    so a list reads as a list instead of one run-on line. An unknown block type
-    yields nothing rather than breaking the whole message.
-    """
-    blocks = getattr(getattr(msg, "rich_message", None), "blocks", None)
-    if not blocks:
-        return ""
-    paragraphs = ("\n".join(_page_lines(block)) for block in blocks)
-    return "\n\n".join(p for p in paragraphs if p)
-
-
-def premium_required_result(action: str) -> str:
-    """Structured refusal so the agent can degrade gracefully instead of sending garbage."""
-    return json.dumps(
-        {
-            "sent": False,
-            "reason": "telegram_premium_required",
-            "detail": (
-                f"{action} with rich formatting requires Telegram Premium on this account. "
-                "Nothing was sent. Reformat without rich-only blocks (tables, headings, "
-                "formulas) and retry with parse_mode='md' or 'html'."
-            ),
-        },
-        ensure_ascii=False,
-    )
-
-
-def is_premium_rpc_error(error: Exception) -> bool:
-    """True when Telegram rejected a call because the account lacks Premium."""
-    return "PREMIUM" in getattr(error, "message", str(error)).upper()
-
-
 _ALIASES_ENV = "TELEGRAM_ALIASES_FILE"
 # Pre-XDG location; read as a fallback so existing installs keep resolving, never written.
 _LEGACY_ALIASES_FILE = Path(__file__).resolve().parent.parent / "aliases.json"
 
 # A username is >=5 chars of [A-Za-z0-9_]; phone/id/self references must never be
 # fuzzy-matched or an alias could hijack a real account.
-_HANDLE_RE = re.compile(r"^@?[a-zA-Z0-9_]{5,}$")
-_SELF_REFS = {"me", "self"}
-
-
-def aliases_file_path() -> Path:
-    """Runtime data location, never the install directory (may be read-only)."""
-    override = os.getenv(_ALIASES_ENV)
-    if override:
-        return Path(override)
-    base = os.getenv("XDG_STATE_HOME") or Path.home() / ".local" / "state"
-    return Path(base) / "telegram-mcp" / "aliases.json"
-
-
-def alias_key(text: str) -> str:
-    """Normalize an alias so visually identical spellings collide on purpose."""
-    key = unicodedata.normalize("NFC", text).strip().lstrip("@").lower()
-    key = key.replace("ё", "е")
-    return " ".join(key.split())
 
 
 def load_aliases(strict: bool = False) -> Dict[str, Dict[str, Any]]:
-    """Return {key: {"id": int, "name": str|None, "account": str|None}}.
-
-    Legacy `{alias: id}` files upgrade on read. Never raises: this runs inside
-    resolve_entity on every call, so a damaged file must not take chat tools down.
-    """
-    path = aliases_file_path()
-    if not path.exists() and not os.getenv(_ALIASES_ENV):
-        path = _LEGACY_ALIASES_FILE
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            raise ValueError("aliases file must be a JSON object")
-    except FileNotFoundError:
-        return {}
-    except (OSError, ValueError, TypeError) as error:
-        logger.warning("Ignoring unreadable aliases file; saved aliases were not changed.")
-        if strict:
-            # Refuse to write over data we could not read: a degraded read plus a
-            # write-back would silently delete every alias in the file.
-            raise AliasStoreUnreadable(
-                "Saved contacts could not be read; no changes were written. "
-                "Check the aliases file and retry."
-            ) from error
-        return {}
-
-    records: Dict[str, Dict[str, Any]] = {}
-    for alias, value in raw.items():
-        record = {"id": value} if not isinstance(value, dict) else dict(value)
-        try:
-            record["id"] = int(record["id"])
-        except (KeyError, TypeError, ValueError):
-            continue  # skip the bad row, keep every good one
-        record["name"] = sanitize_name(str(record["name"])) if record.get("name") else None
-        record.setdefault("account", None)  # uniform shape for legacy rows
-        records[alias_key(str(alias))] = record
-    return records
-
-
-def save_aliases(aliases: Dict[str, Any]) -> None:
-    """Atomically persist aliases 0600 — the file maps nicknames to real people."""
-    path = aliases_file_path()
-    if not os.getenv(_ALIASES_ENV):
-        path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-            recoverable = isinstance(existing, dict)
-        except (OSError, ValueError):
-            recoverable = False
-        if not recoverable:
-            # Never overwrite a file we could not parse; it may be hand-recoverable.
-            path.replace(path.with_suffix(f".corrupt-{int(time.time())}"))
-
-    payload = {
-        alias_key(str(k)): (v if isinstance(v, dict) else {"id": int(v)})
-        for k, v in aliases.items()
-    }
-    # mkstemp creates a fresh 0600 file with an unpredictable name: a fixed
-    # ".tmp" is both a symlink target and a collision point between processes.
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)  # atomic: a crash leaves the previous file intact
-    except BaseException:
-        os.unlink(tmp)
-        raise
-
-
-class AliasStoreUnreadable(Exception):
-    """The alias file exists but could not be read, so writing would destroy it."""
-
-
-@contextmanager
-def _alias_lock(path: Path):
-    """Serialize read-modify-write cycles across processes (best effort)."""
-    if fcntl is None:  # pragma: no cover - Windows
-        yield
-        return
-    lock_fd = os.open(str(path) + ".lock", os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        os.close(lock_fd)
+    """Read saved aliases, retaining the historical legacy-path override."""
+    return _alias_store.load_aliases(strict, legacy_path=_LEGACY_ALIASES_FILE)
 
 
 def update_aliases(mutate):
-    """Apply `mutate(aliases)` to the alias file under an exclusive lock.
-
-    Two tool calls that each load, change and save the whole map would otherwise
-    lose one of the two writes — including a delete silently coming back.
-    """
-    path = aliases_file_path()
-    if not os.getenv(_ALIASES_ENV):
-        path.parent.mkdir(parents=True, exist_ok=True)
-    with _alias_lock(path):
-        aliases = load_aliases(strict=True)
-        result = mutate(aliases)
-        save_aliases(aliases)
-        return result
-
-
-def is_handle_like(value: str) -> bool:
-    """True for anything that could be a real username/phone/id/self reference."""
-    candidate = value.strip()
-    bare = candidate.lstrip("@")
-    return bool(
-        candidate.startswith("+")
-        or bare.lstrip("-").isdigit()
-        or bare.lower() in _SELF_REFS
-        or _HANDLE_RE.match(candidate)
-    )
-
-
-def _same_word(a: str, b: str) -> bool:
-    """True when two tokens are the same word, tolerating an inflected ending.
-
-    Russian inflects at the end ("Андрею"/"андрей", "главному"/"главный"), so a real
-    inflection keeps a long shared stem and swaps a few trailing characters. Three
-    conditions, each pinned by a table of name pairs in tests/test_aliases.py: a stem
-    of >=4 chars (or a one-character swap on equal-length words, so "лена"/"лене"
-    works without letting "олег"/"олеся" through), endings of at most three
-    characters, and a similarity backstop.
-    """
-    if a == b:
-        return True
-    shared = len(os.path.commonprefix([a, b]))
-    if len(a) - shared > 3 or len(b) - shared > 3:
-        return False
-    if not (shared >= 4 or (len(a) == len(b) and shared == len(a) - 1)):
-        return False
-    return SequenceMatcher(None, a, b).ratio() >= 0.65
+    """Apply a locked update without changing the compatibility fallback path."""
+    return _alias_store.update_aliases(mutate, legacy_path=_LEGACY_ALIASES_FILE)
 
 
 def fuzzy_aliases_enabled() -> bool:
     return _parse_bool_env(os.getenv("TELEGRAM_CONTACT_FUZZY"), True)
-
-
-def _covers(query_tokens: List[str], alias_tokens: List[str]) -> bool:
-    """True when every query token claims a DISTINCT alias token.
-
-    Without the distinctness two query words could land on the same alias word, so
-    "андрей андреев" matched a stored "андрей" and the surname the user added to
-    name someone else was free. ponytail: Kuhn's algorithm, lists are 1-3 tokens.
-    """
-    if len(query_tokens) > len(alias_tokens):
-        return False
-    taken: Dict[int, str] = {}
-
-    def assign(token: str, seen: set) -> bool:
-        for index, alias_token in enumerate(alias_tokens):
-            if index in seen or not _same_word(token, alias_token):
-                continue
-            seen.add(index)
-            if index not in taken or assign(taken[index], seen):
-                taken[index] = token
-                return True
-        return False
-
-    return all(assign(token, set()) for token in query_tokens)
 
 
 def match_aliases(query: str) -> List[tuple]:
@@ -1563,118 +1255,6 @@ async def resolve_input_entity(identifier: Union[int, str], client=None) -> Any:
     return await _resolve("get_input_entity", identifier, client, "input entity")
 
 
-def format_message(message) -> Dict[str, Any]:
-    """Helper function to format message information consistently.
-
-    Message text is sanitized to prevent prompt injection.
-    """
-    result = {
-        "id": message.id,
-        "date": message.date.isoformat(),
-        "text": sanitize_user_content(message.message),
-    }
-
-    if message.from_id:
-        result["from_id"] = utils.get_peer_id(message.from_id)
-
-    if message.media:
-        result["has_media"] = True
-        result["media_type"] = type(message.media).__name__
-
-    return result
-
-
-def get_sender_name(message) -> str:
-    """Helper function to get sender name from a message.
-
-    Returns a sanitized single-line display name to prevent prompt injection
-    via crafted Telegram display names.
-    """
-    if not message.sender:
-        return "Unknown"
-
-    # Check for group/channel title first
-    if hasattr(message.sender, "title") and message.sender.title:
-        return sanitize_name(message.sender.title)
-    elif hasattr(message.sender, "first_name"):
-        # User sender
-        first_name = getattr(message.sender, "first_name", "") or ""
-        last_name = getattr(message.sender, "last_name", "") or ""
-        full_name = f"{first_name} {last_name}".strip()
-        return sanitize_name(full_name) if full_name else "Unknown"
-    else:
-        return "Unknown"
-
-
-def get_sender_username(message) -> Optional[str]:
-    """Public @username of the message sender, if any (sanitized)."""
-    sender = getattr(message, "sender", None)
-    username = getattr(sender, "username", None) if sender else None
-    return sanitize_name(username) if username else None
-
-
-def get_sender_info(message) -> str:
-    """Sender display string: name (@username) [id=NNN].
-
-    Always exposes a numeric id (sender or from_id) so a user can be reached via
-    tg://user?id=<id> even when no public @username exists.
-    """
-    name = get_sender_name(message)
-    username = get_sender_username(message)
-    sid = getattr(message, "sender_id", None)
-    suffix = ""
-    if username:
-        suffix += f" (@{username})"
-    if sid:
-        suffix += f" [id={sid}]"
-    return f"{name}{suffix}"
-
-
-def get_engagement_info(message) -> str:
-    """Helper function to get engagement metrics (views, forwards, reactions) from a message."""
-    engagement_parts = []
-    views = getattr(message, "views", None)
-    if views is not None:
-        engagement_parts.append(f"views:{views}")
-    forwards = getattr(message, "forwards", None)
-    if forwards is not None:
-        engagement_parts.append(f"forwards:{forwards}")
-    reactions = getattr(message, "reactions", None)
-    if reactions is not None:
-        results = getattr(reactions, "results", None)
-        total_reactions = sum(getattr(r, "count", 0) or 0 for r in results) if results else 0
-        engagement_parts.append(f"reactions:{total_reactions}")
-    return f" | {', '.join(engagement_parts)}" if engagement_parts else ""
-
-
-def get_engagement_dict(message) -> Optional[Dict[str, Any]]:
-    """Return engagement metrics as a dict for JSON-formatted tool results."""
-    result = {}
-    views = getattr(message, "views", None)
-    if views is not None:
-        result["views"] = views
-    forwards = getattr(message, "forwards", None)
-    if forwards is not None:
-        result["forwards"] = forwards
-    reactions = getattr(message, "reactions", None)
-    if reactions is not None:
-        results = getattr(reactions, "results", None)
-        result["reactions"] = sum(getattr(r, "count", 0) or 0 for r in results) if results else 0
-    return result if result else None
-
-
-def _dedupe_paths(paths: List[Path]) -> List[Path]:
-    seen: set[str] = set()
-    result: List[Path] = []
-    for path in paths:
-        key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(path)
-    return result
-
-
 def _contains_forbidden_path_patterns(raw_path: str) -> Optional[str]:
     value = raw_path.strip()
     if not value:
@@ -1684,37 +1264,6 @@ def _contains_forbidden_path_patterns(raw_path: str) -> Optional[str]:
     if ".." in Path(value).parts:
         return "Path traversal is not allowed."
     return None
-
-
-def _coerce_root_uri_to_path(uri: str) -> Path:
-    parsed = urlparse(uri)
-    if parsed.scheme != "file":
-        raise ValueError(f"Unsupported root URI scheme: {parsed.scheme}")
-
-    decoded_path = unquote(parsed.path or "")
-    if parsed.netloc and parsed.netloc not in ("", "localhost"):
-        decoded_path = f"//{parsed.netloc}{decoded_path}"
-    if os.name == "nt" and decoded_path.startswith("/") and len(decoded_path) > 2:
-        # file:///C:/tmp -> C:/tmp on Windows
-        if decoded_path[2] == ":":
-            decoded_path = decoded_path[1:]
-    return Path(decoded_path).resolve(strict=True)
-
-
-def _path_is_within_root(candidate: Path, root: Path) -> bool:
-    root = root.resolve()
-    if root.is_file():
-        return candidate == root
-    return candidate == root or root in candidate.parents
-
-
-def _path_is_within_any_root(candidate: Path, roots: List[Path]) -> bool:
-    return any(_path_is_within_root(candidate, root) for root in roots)
-
-
-def _first_resolution_root(roots: List[Path]) -> Path:
-    first = roots[0]
-    return first if first.is_dir() else first.parent
 
 
 def _ensure_extension_allowed(tool_name: str, candidate: Path) -> Optional[str]:
@@ -1757,49 +1306,6 @@ def _is_roots_unsupported_error(error: Exception) -> bool:
     if isinstance(error, AttributeError):
         return "list_roots" in str(error)
     return False
-
-
-def _coerce_paths_from_list_roots_validation_error(error: Exception) -> List[Path]:
-    """Recover absolute filesystem roots when a client sends bare paths.
-
-    Some MCP clients (notably Cursor) return workspace roots as plain absolute
-    paths instead of ``file://`` URIs. The MCP SDK then fails pydantic validation
-    of ``ListRootsResult`` even though the roots themselves are usable. Extract
-    those paths from the validation error payload so file-path tools keep working.
-
-    Which error pydantic reports depends on the path's shape. A POSIX path like
-    ``/home/dev/ws`` has no scheme at all and yields ``url_parsing``, but on a
-    Windows path like ``C:\\Users\\dev\\ws`` the drive letter parses as a scheme,
-    so pydantic gets far enough to reject it as ``url_scheme`` instead. Accept
-    both, or the Windows branch below is unreachable.
-    """
-    errors_fn = getattr(error, "errors", None)
-    if not callable(errors_fn):
-        return []
-
-    try:
-        details = errors_fn()
-    except Exception:
-        return []
-
-    recovered: List[Path] = []
-    for item in details:
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") not in ("url_parsing", "url_scheme"):
-            continue
-        value = item.get("input")
-        if not isinstance(value, str):
-            continue
-        candidate = value.strip()
-        if not (candidate.startswith("/") or (len(candidate) > 2 and candidate[1] == ":")):
-            # Unix absolute path, or Windows drive path like C:\...
-            continue
-        try:
-            recovered.append(Path(candidate).expanduser().resolve())
-        except Exception:
-            continue
-    return _dedupe_paths(recovered)
 
 
 def _server_roots_fallback_enabled(value: Optional[str] = None) -> bool:
@@ -2047,7 +1553,3 @@ def _configure_allowed_roots_from_cli(argv: Optional[List[str]] = None) -> None:
 
     global SERVER_ALLOWED_ROOTS
     SERVER_ALLOWED_ROOTS = _dedupe_paths(resolved_roots)
-
-
-# Re-export shared runtime names for tool modules that use star imports.
-__all__ = [name for name in globals() if not name.startswith("__")]

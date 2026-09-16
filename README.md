@@ -640,33 +640,53 @@ The implementation is split into a small compatibility entrypoint and modular pa
 
 ```text
 main.py                    # historical entrypoint and compatibility exports
-telegram_mcp/runtime.py    # shared MCP setup, account routing, validation, file safety
+telegram_mcp/runtime.py    # shared MCP setup, account routing, validation, roots policy
 telegram_mcp/runner.py     # application startup
 telegram_mcp/tools/        # tool modules grouped by domain
+telegram_mcp/message_rendering.py  # message JSON/text rendering
+telegram_mcp/entity_formatting.py  # entity, sender, and engagement formatting
+telegram_mcp/rich_text.py   # rich-text parsing and Premium helpers
+telegram_mcp/alias_store.py # atomic alias persistence and locking
+telegram_mcp/alias_matching.py # alias normalization and token matching
+telegram_mcp/path_helpers.py # filesystem normalization
+telegram_mcp/serialization.py # shared JSON conversion
 sanitize.py                # output sanitization helpers
 tests/                     # pytest suite
 ```
 
+Tool implementations use explicit imports. Historical runtime exports remain
+available through compatibility facades. The [refactoring contract](docs/refactoring/behavior-contract.md)
+and [module map](docs/refactoring/module-map.md) describe the preserved boundaries
+and parity checks.
+
 Run tests:
 
 ```bash
-uv run pytest
+uv run --frozen pytest
 ```
 
 Run tests with coverage:
 
 ```bash
-uv run pytest --cov --cov-report=term-missing --cov-report=xml
+uv run --frozen pytest --cov --cov-report=term-missing --cov-report=xml
 ```
 
-Coverage is configured in `pyproject.toml` with an 80% minimum gate for deterministic unit-testable core modules. GitHub Actions runs the same coverage command and uploads `coverage.xml`.
+Coverage is configured in `pyproject.toml` with an 80% minimum gate for the core
+and its extracted helpers. Privacy checks use the same core-module manifest,
+plus all tool modules. GitHub Actions runs the same coverage command and uploads
+`coverage.xml`.
 
 Run formatting checks:
 
 ```bash
-uv run black --check .
-uv run flake8 .
+uv run --frozen black --check .
+uv run --frozen flake8 .
 ```
+
+CI and pre-commit use the versions in `uv.lock`. Flake8 reads `.flake8`, including
+the virtual-environment exclusions and the same error gate used locally and in CI.
+Broader style and complexity findings remain advisory. Docker's `requirements.txt`
+is checked against the runtime dependencies in `pyproject.toml`.
 
 ## Security Notes
 

@@ -1,6 +1,36 @@
 """Folders MCP tools."""
 
-from telegram_mcp.runtime import *
+import json
+from typing import List, Optional, Union
+
+from mcp.types import ToolAnnotations
+from telethon import functions, utils
+from telethon.tl.types import (
+    DialogFilter,
+    DialogFilterChatlist,
+    DialogFilterDefault,
+    TextWithEntities,
+)
+
+from sanitize import sanitize_name
+from telegram_mcp._compat import runtime_attribute_fallback as _runtime_attribute_fallback
+from telegram_mcp.entity_formatting import get_entity_type, get_marked_id
+from telegram_mcp.folder_filters import replace_folder_peers as _replace_folder_peers
+from telegram_mcp.runtime import (
+    ErrorCategory,
+    ensure_connected,
+    get_client,
+    log_and_format_error,
+    mcp,
+    resolve_entity,
+    resolve_input_entity,
+    validate_id,
+    with_account,
+)
+from telegram_mcp.serialization import json_serializer
+
+# Preserve historical runtime attributes without hiding implementation dependencies.
+__getattr__ = _runtime_attribute_fallback()
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List Folders", openWorldHint=True, readOnlyHint=True))
@@ -340,35 +370,9 @@ async def add_chat_to_folder(
             pinned_peers.append(peer)
 
         # Update the folder (keep all original attributes)
-        if isinstance(target_folder, DialogFilterChatlist):
-            updated_filter = DialogFilterChatlist(
-                id=target_folder.id,
-                title=target_folder.title,
-                emoticon=getattr(target_folder, "emoticon", None),
-                pinned_peers=pinned_peers,
-                include_peers=include_peers,
-                title_noanimate=getattr(target_folder, "title_noanimate", None),
-                color=getattr(target_folder, "color", None),
-            )
-        else:
-            updated_filter = DialogFilter(
-                id=target_folder.id,
-                title=target_folder.title,
-                emoticon=getattr(target_folder, "emoticon", None),
-                pinned_peers=pinned_peers,
-                include_peers=include_peers,
-                exclude_peers=list(getattr(target_folder, "exclude_peers", [])),
-                contacts=getattr(target_folder, "contacts", False),
-                non_contacts=getattr(target_folder, "non_contacts", False),
-                groups=getattr(target_folder, "groups", False),
-                broadcasts=getattr(target_folder, "broadcasts", False),
-                bots=getattr(target_folder, "bots", False),
-                exclude_muted=getattr(target_folder, "exclude_muted", False),
-                exclude_read=getattr(target_folder, "exclude_read", False),
-                exclude_archived=getattr(target_folder, "exclude_archived", False),
-                title_noanimate=getattr(target_folder, "title_noanimate", None),
-                color=getattr(target_folder, "color", None),
-            )
+        updated_filter = _replace_folder_peers(
+            target_folder, include_peers=include_peers, pinned_peers=pinned_peers
+        )
 
         await cl(functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter))
 
@@ -447,35 +451,9 @@ async def remove_chat_from_folder(
             return f"Chat {chat_id} was not in folder {folder_id}."
 
         # Update the folder (keep all original attributes)
-        if isinstance(target_folder, DialogFilterChatlist):
-            updated_filter = DialogFilterChatlist(
-                id=target_folder.id,
-                title=target_folder.title,
-                emoticon=getattr(target_folder, "emoticon", None),
-                pinned_peers=pinned_peers,
-                include_peers=include_peers,
-                title_noanimate=getattr(target_folder, "title_noanimate", None),
-                color=getattr(target_folder, "color", None),
-            )
-        else:
-            updated_filter = DialogFilter(
-                id=target_folder.id,
-                title=target_folder.title,
-                emoticon=getattr(target_folder, "emoticon", None),
-                pinned_peers=pinned_peers,
-                include_peers=include_peers,
-                exclude_peers=list(getattr(target_folder, "exclude_peers", [])),
-                contacts=getattr(target_folder, "contacts", False),
-                non_contacts=getattr(target_folder, "non_contacts", False),
-                groups=getattr(target_folder, "groups", False),
-                broadcasts=getattr(target_folder, "broadcasts", False),
-                bots=getattr(target_folder, "bots", False),
-                exclude_muted=getattr(target_folder, "exclude_muted", False),
-                exclude_read=getattr(target_folder, "exclude_read", False),
-                exclude_archived=getattr(target_folder, "exclude_archived", False),
-                title_noanimate=getattr(target_folder, "title_noanimate", None),
-                color=getattr(target_folder, "color", None),
-            )
+        updated_filter = _replace_folder_peers(
+            target_folder, include_peers=include_peers, pinned_peers=pinned_peers
+        )
 
         await cl(functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated_filter))
 

@@ -8,20 +8,36 @@ debouncing a burst (several messages typed in a row) into a single settled event
 
 import asyncio
 import json
+import logging
 import os
+from pathlib import Path
 import shlex
 import stat
 import time
-import logging
-from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 
-from telethon import events as _events
-from telethon import utils
+from mcp.types import ToolAnnotations
+from telethon import events as _events, utils
 
-from telegram_mcp.runtime import *  # mcp, clients, ToolAnnotations, log_and_format_error
+from sanitize import sanitize_name
+from telegram_mcp._compat import runtime_attribute_fallback as _runtime_attribute_fallback
+from telegram_mcp.entity_formatting import get_marked_id
+from telegram_mcp.runtime import (
+    _parse_bool_env,
+    apply_alias,
+    clients,
+    get_client,
+    log_and_format_error,
+    mcp,
+    resolve_entity,
+)
 
 # chat_id -> {first_ts, last_ts, count, first_id, last_id, name, username}
+
+# Preserve historical runtime attributes without hiding implementation dependencies.
+__getattr__ = _runtime_attribute_fallback()
+
+
 _pending_msgs: Dict[int, Dict[str, Any]] = {}
 _activity_event: Optional[asyncio.Event] = None
 

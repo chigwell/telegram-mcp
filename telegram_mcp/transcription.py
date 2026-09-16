@@ -28,7 +28,10 @@ from typing import Optional
 import httpx
 from telethon.tl import functions
 
-from telegram_mcp.runtime import account_is_premium, get_marked_id, is_premium_rpc_error
+from telegram_mcp.rich_text import account_is_premium, is_premium_rpc_error
+
+# Preserve the historical attribute without coupling cache code to runtime startup.
+from telegram_mcp.entity_formatting import get_marked_id as get_marked_id
 
 # ---------------------------------------------------------------------------
 # Configuration

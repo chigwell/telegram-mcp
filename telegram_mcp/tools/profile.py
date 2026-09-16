@@ -1,6 +1,29 @@
 """Profile MCP tools."""
 
-from telegram_mcp.runtime import *
+import json
+from typing import List, Optional, Union
+
+from mcp.server.fastmcp import Context
+from mcp.types import ToolAnnotations
+from telethon import functions
+
+from sanitize import sanitize_name, sanitize_user_content
+from telegram_mcp._compat import runtime_attribute_fallback as _runtime_attribute_fallback
+from telegram_mcp.entity_formatting import format_entity, get_marked_id
+from telegram_mcp.runtime import (
+    _resolve_readable_file_path,
+    ensure_connected,
+    get_client,
+    log_and_format_error,
+    logger,
+    mcp,
+    resolve_entity,
+    validate_id,
+    with_account,
+)
+
+# Preserve historical runtime attributes without hiding implementation dependencies.
+__getattr__ = _runtime_attribute_fallback()
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Me", openWorldHint=True, readOnlyHint=True))
@@ -160,7 +183,6 @@ async def set_privacy_settings(
             InputPrivacyValueAllowUsers,
             InputPrivacyValueDisallowUsers,
             InputPrivacyValueAllowAll,
-            InputPrivacyValueDisallowAll,
         )
 
         # Map the simplified keys to their corresponding input types
@@ -217,7 +239,7 @@ async def set_privacy_settings(
 
         # Apply the privacy settings
         try:
-            result = await cl(functions.account.SetPrivacyRequest(key=privacy_key, rules=rules))
+            await cl(functions.account.SetPrivacyRequest(key=privacy_key, rules=rules))
             return f"Privacy settings for {key} updated successfully."
         except TypeError as type_err:
             if "TLObject was expected" in str(type_err):
@@ -445,7 +467,7 @@ async def set_bot_commands(bot_username: str, commands: list, account: str = Non
         ]
 
         # Get the bot entity
-        bot = await resolve_entity(bot_username, cl)
+        await resolve_entity(bot_username, cl)
 
         # Set the commands with proper scope
         await cl(

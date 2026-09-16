@@ -55,19 +55,6 @@ telegram-mcp-generate-session = "session_string_generator:main"
 line-length = 99
 target-version = ['py311']
 
-[tool.flake8]
-ignore = ["E203", "E501", "W503"]
-max-line-length = 99
-max-complexity = 10
-exclude = [
-    ".git",
-    "__pycache__",
-    ".venv",
-    "build",
-    "dist",
-    "docs/source/conf.py",
-]
-
 [dependency-groups]
 dev = [
     "black>=25.9.0",
@@ -93,6 +80,17 @@ source = [
     "main",
     "sanitize",
     "telegram_mcp.runtime",
+    "telegram_mcp.serialization",
+    "telegram_mcp.entity_formatting",
+    "telegram_mcp.rich_text",
+    "telegram_mcp.message_rendering",
+    "telegram_mcp.inline_buttons",
+    "telegram_mcp.folder_filters",
+    "telegram_mcp.forum_requests",
+    "telegram_mcp.alias_matching",
+    "telegram_mcp.alias_store",
+    "telegram_mcp.path_helpers",
+    "telegram_mcp._compat",
 ]
 
 [tool.coverage.report]

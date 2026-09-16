@@ -1,6 +1,43 @@
 """Groups MCP tools."""
 
-from telegram_mcp.runtime import *
+import asyncio
+import json
+from typing import List, Optional, Union
+
+from mcp.server.fastmcp import Context
+from mcp.types import ToolAnnotations
+from telethon import functions, types
+import telethon.errors.rpcerrorlist
+from telethon.tl.types import (
+    Channel,
+    ChannelParticipantsAdmins,
+    ChannelParticipantsKicked,
+    Chat,
+    ChatAdminRights,
+    ChatBannedRights,
+    InputChatPhotoEmpty,
+    InputChatUploadedPhoto,
+)
+
+from sanitize import format_tool_result, sanitize_dict, sanitize_name
+from telegram_mcp._compat import runtime_attribute_fallback as _runtime_attribute_fallback
+from telegram_mcp.entity_formatting import get_marked_id
+from telegram_mcp.runtime import (
+    _is_flood_wait,
+    _resolve_readable_file_path,
+    ensure_connected,
+    get_client,
+    log_and_format_error,
+    logger,
+    mcp,
+    resolve_entity,
+    validate_id,
+    with_account,
+)
+from telegram_mcp.serialization import json_serializer
+
+# Preserve historical runtime attributes without hiding implementation dependencies.
+__getattr__ = _runtime_attribute_fallback()
 
 
 @mcp.tool(
@@ -534,7 +571,7 @@ async def promote_admin(
         )
 
         try:
-            result = await cl(
+            await cl(
                 functions.channels.EditAdminRequest(
                     channel=chat, user_id=user, admin_rights=admin_rights, rank="Admin"
                 )
@@ -590,7 +627,7 @@ async def demote_admin(
         )
 
         try:
-            result = await cl(
+            await cl(
                 functions.channels.EditAdminRequest(
                     channel=chat, user_id=user, admin_rights=admin_rights, rank=""
                 )
@@ -1275,21 +1312,13 @@ async def import_chat_invite(hash: str, account: str = None) -> str:
 
         # Try checking the invite before joining
         try:
-            from telethon.errors import (
-                InviteHashExpiredError,
-                InviteHashInvalidError,
-                UserAlreadyParticipantError,
-                ChatAdminRequiredError,
-                UsersTooMuchError,
-            )
-
             # Try to check invite info first (will often fail if not a member)
             invite_info = await cl(functions.messages.CheckChatInviteRequest(hash=hash))
             if hasattr(invite_info, "chat") and invite_info.chat:
                 # If we got chat info, we're already a member
                 chat_title = sanitize_name(getattr(invite_info.chat, "title", "Unknown Chat"))
                 return f"You are already a member of this chat: {chat_title}"
-        except Exception as check_err:
+        except Exception:
             # This often fails if not a member - just continue
             pass
 
