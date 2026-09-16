@@ -212,6 +212,21 @@ async def test_context_includes_replied_message_metadata(client):
 
 
 @pytest.mark.asyncio
+async def test_context_includes_hidden_link_urls(client):
+    link = types.MessageEntityTextUrl(0, 5, "https://t.me/c/1565619651/424991")
+    reply = _message("Bayan", [link], reply_to=types.MessageReplyHeader(reply_to_msg_id=2))
+    replied = _message("Media", [link])
+    client.get_messages.side_effect = [[], reply, [], replied]
+
+    result = json.loads(await messages.get_message_context(42, 1, account="test"))
+
+    assert result["results"][0]["link_urls"] == ["https://t.me/c/1565619651/424991"]
+    assert result["results"][0]["replied_message"]["link_urls"] == [
+        "https://t.me/c/1565619651/424991"
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("custom", [True, False])
 @pytest.mark.parametrize("tool", [messages.get_messages, messages.get_scheduled_messages])
 async def test_text_readers_expose_optional_metadata(client, tool, custom):
