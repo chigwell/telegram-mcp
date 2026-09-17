@@ -447,6 +447,154 @@ def _extract_created_topic_id(result) -> Optional[int]:
     return None
 
 
+def _forum_supergroup_error(entity) -> Optional[str]:
+    """Return a user-facing error when the entity cannot hold forum topics."""
+    if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
+        return "The specified chat is not a supergroup."
+    if not getattr(entity, "forum", False):
+        return (
+            "The specified supergroup does not have forum topics enabled. "
+            "Use enable_forum_topics first."
+        )
+    return None
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Edit Forum Topic",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def edit_forum_topic(
+    chat_id: Union[int, str],
+    topic_id: int,
+    title: str = None,
+    icon_emoji_id: int = None,
+    closed: bool = None,
+    hidden: bool = None,
+    account: str = None,
+) -> str:
+    """
+    Edit a forum topic in a forum-enabled supergroup. Pass only the fields to change.
+
+    Args:
+        chat_id: The forum-enabled supergroup ID or username.
+        topic_id: ID of the topic to edit.
+        title: New topic title.
+        icon_emoji_id: New custom emoji document ID for the icon (0 removes it).
+        closed: True closes the topic, False reopens it.
+        hidden: True hides the General topic, False shows it (General topic only).
+
+    Returns a JSON result with chat_id, topic_id and the fields that were changed.
+    """
+    changes = {
+        "title": title,
+        "icon_emoji_id": icon_emoji_id,
+        "closed": closed,
+        "hidden": hidden,
+    }
+    changes = {key: value for key, value in changes.items() if value is not None}
+    if not changes:
+        return "Nothing to change: pass title, icon_emoji_id, closed or hidden."
+
+    try:
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+
+        error = _forum_supergroup_error(entity)
+        if error:
+            return error
+
+        if "title" in changes:
+            changes["title"] = sanitize_user_content(changes["title"], max_length=128)
+
+        await cl(
+            functions.messages.EditForumTopicRequest(peer=entity, topic_id=topic_id, **changes)
+        )
+
+        record = {"chat_id": get_marked_id(entity), "topic_id": topic_id, **changes}
+        return format_tool_result([record])
+    except Exception as e:
+        return log_and_format_error(
+            "edit_forum_topic",
+            e,
+            chat_id=chat_id,
+            topic_id=topic_id,
+            title=title,
+            icon_emoji_id=icon_emoji_id,
+            closed=closed,
+            hidden=hidden,
+        )
+
+
+# Telegram deletes topic history in batches: a non-zero offset in the
+# AffectedHistory result means the same request has to be sent again.
+_DELETE_TOPIC_MAX_BATCHES = 100
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Delete Forum Topic",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def delete_forum_topic(
+    chat_id: Union[int, str],
+    topic_id: int,
+    account: str = None,
+) -> str:
+    """
+    Delete a forum topic together with all of its messages. This cannot be undone.
+
+    The General topic (ID 1) cannot be deleted; close or hide it with edit_forum_topic.
+
+    Args:
+        chat_id: The forum-enabled supergroup ID or username.
+        topic_id: ID of the topic to delete.
+
+    Returns a JSON result with chat_id, topic_id and the number of request batches sent.
+    """
+    try:
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+
+        error = _forum_supergroup_error(entity)
+        if error:
+            return error
+
+        batches = 0
+        while batches < _DELETE_TOPIC_MAX_BATCHES:
+            result = await cl(
+                functions.messages.DeleteTopicHistoryRequest(peer=entity, top_msg_id=topic_id)
+            )
+            batches += 1
+            if not getattr(result, "offset", 0):
+                break
+        else:
+            return (
+                f"Topic {topic_id} is still being deleted after {batches} batches; "
+                "call delete_forum_topic again to continue."
+            )
+
+        record = {
+            "chat_id": get_marked_id(entity),
+            "topic_id": topic_id,
+            "deleted": True,
+            "batches": batches,
+        }
+        return format_tool_result([record])
+    except Exception as e:
+        return log_and_format_error("delete_forum_topic", e, chat_id=chat_id, topic_id=topic_id)
+
+
 @mcp.tool(annotations=ToolAnnotations(title="List Chats", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
 async def list_chats(

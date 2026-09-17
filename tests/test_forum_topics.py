@@ -116,3 +116,95 @@ async def test_create_forum_topic_requires_forum_enabled(monkeypatch):
         == "The specified supergroup does not have forum topics enabled. Use enable_forum_topics first."
     )
     assert client.requests == []
+
+
+class SequenceClient:
+    def __init__(self, results):
+        self.requests = []
+        self.results = list(results)
+
+    async def __call__(self, request):
+        self.requests.append(request)
+        return self.results.pop(0)
+
+
+def _patch_client(monkeypatch, entity, client):
+    async def fake_resolve(chat_id, cl):
+        return entity
+
+    monkeypatch.setattr(chats, "get_client", lambda account=None: client)
+    monkeypatch.setattr(chats, "resolve_entity", fake_resolve)
+
+
+@pytest.mark.asyncio
+async def test_edit_forum_topic_sends_only_changed_fields(monkeypatch):
+    entity = _supergroup(forum=True)
+    client = RecordingClient()
+    _patch_client(monkeypatch, entity, client)
+
+    result = await chats.edit_forum_topic(chat_id=12345, topic_id=42, title="Renamed", closed=True)
+
+    payload = json.loads(result)
+    assert payload["results"] == [
+        {"chat_id": -1000000012345, "topic_id": 42, "title": "Renamed", "closed": True}
+    ]
+    assert len(client.requests) == 1
+    request = client.requests[0]
+    assert isinstance(request, functions.messages.EditForumTopicRequest)
+    assert request.peer is entity
+    assert request.topic_id == 42
+    assert request.title == "Renamed"
+    assert request.closed is True
+    assert request.icon_emoji_id is None
+    assert request.hidden is None
+
+
+@pytest.mark.asyncio
+async def test_edit_forum_topic_without_changes_sends_nothing(monkeypatch):
+    entity = _supergroup(forum=True)
+    client = RecordingClient()
+    _patch_client(monkeypatch, entity, client)
+
+    result = await chats.edit_forum_topic(chat_id=12345, topic_id=42)
+
+    assert result == "Nothing to change: pass title, icon_emoji_id, closed or hidden."
+    assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_delete_forum_topic_repeats_until_history_is_gone(monkeypatch):
+    entity = _supergroup(forum=True)
+    client = SequenceClient(
+        [
+            SimpleNamespace(pts=1, pts_count=100, offset=7),
+            SimpleNamespace(pts=2, pts_count=3, offset=0),
+        ]
+    )
+    _patch_client(monkeypatch, entity, client)
+
+    result = await chats.delete_forum_topic(chat_id=12345, topic_id=42)
+
+    payload = json.loads(result)
+    assert payload["results"] == [
+        {"chat_id": -1000000012345, "topic_id": 42, "deleted": True, "batches": 2}
+    ]
+    assert len(client.requests) == 2
+    for request in client.requests:
+        assert isinstance(request, functions.messages.DeleteTopicHistoryRequest)
+        assert request.peer is entity
+        assert request.top_msg_id == 42
+
+
+@pytest.mark.asyncio
+async def test_delete_forum_topic_requires_forum_enabled(monkeypatch):
+    entity = _supergroup(forum=False)
+    client = RecordingClient()
+    _patch_client(monkeypatch, entity, client)
+
+    result = await chats.delete_forum_topic(chat_id=12345, topic_id=42)
+
+    assert (
+        result
+        == "The specified supergroup does not have forum topics enabled. Use enable_forum_topics first."
+    )
+    assert client.requests == []
