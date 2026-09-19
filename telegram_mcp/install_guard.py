@@ -11,7 +11,8 @@ import json
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 DISTRIBUTION_NAME = "telegram-mcp"
 
@@ -156,7 +157,9 @@ def _direct_url_is_explicit_source_install(direct_url: str) -> bool:
     parsed_url = urlparse(raw_url)
 
     if parsed_url.scheme == "file":
-        source_path = Path(unquote(parsed_url.path)).resolve()
+        # url2pathname handles Windows drive-letter URLs (``/C:/...``) correctly;
+        # ``Path(unquote(path))`` mangles them into drive-relative paths (``C:...``).
+        source_path = Path(url2pathname(parsed_url.path)).resolve()
         return _project_root_declares_distribution_name(source_path)
 
     vcs_info = direct_url_data.get("vcs_info")
