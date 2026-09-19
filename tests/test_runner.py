@@ -260,3 +260,37 @@ async def test_serve_http_configures_allowed_hosts(monkeypatch):
     assert security.enable_dns_rebinding_protection is True
     assert security.allowed_hosts == ["mcp.example.com", "localhost:8765"]
     assert security.allowed_origins == ["https://mcp.example.com"]
+
+
+def test_file_extension_overrides_are_validated_before_tools_are_pruned(monkeypatch):
+    """TELEGRAM_FILE_EXTENSIONS must not be rejected for a tool that exposure hid.
+
+    ``_apply_exposed_tools_mode`` removes non-exposed tools from the tool
+    manager, and ``_apply_file_extension_overrides`` validates tool names
+    against that same manager. Running them in the wrong order aborts startup
+    with "unknown tool send_file" on a configuration that is perfectly valid:
+    narrowing send_file's extensions while send_file is not exposed at all.
+    """
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        runner._runtime,
+        "_apply_exposed_tools_mode",
+        lambda *a, **k: calls.append("exposed") or [],
+    )
+    monkeypatch.setattr(
+        runner._runtime,
+        "_apply_file_extension_overrides",
+        lambda *a, **k: calls.append("extensions") or {},
+    )
+    monkeypatch.setattr(runner, "_configure_allowed_roots_from_cli", lambda *a, **k: None)
+    monkeypatch.setattr(runner._transcription, "validate_transcription_config", lambda: None)
+    monkeypatch.setattr(runner, "_session_lock_shared", lambda: None)
+    monkeypatch.setattr(runner.asyncio, "run", lambda coro: coro.close())
+
+    runner.main()
+
+    assert calls.index("extensions") < calls.index("exposed"), (
+        "TELEGRAM_FILE_EXTENSIONS must be validated against the full tool set, "
+        "before TELEGRAM_EXPOSED_TOOLS prunes it"
+    )
