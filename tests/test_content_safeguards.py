@@ -101,8 +101,43 @@ async def test_call_tool_timeout_returns_an_explicit_annotated_error(monkeypatch
 
     assert response.root.isError is True
     assert response.root.content[0].text == (
-        "Telegram MCP tool timed out after 0.01s (code: GEN-TIMEOUT)."
+        "Telegram MCP tool timed out after 0.01s (code: GEN-TIMEOUT). "
+        "Completion is unknown; a write may already have succeeded. "
+        "Check destination state before retrying non-idempotent operations."
     )
+    assert response.root.content[0].annotations.audience == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_timeout_after_accepted_write_reports_unknown_completion_once(monkeypatch):
+    marker = "synthetic-write-marker-4f1c"
+    accepted_writes = []
+
+    async def original_handler(req):
+        accepted_writes.append(marker)  # the write landed, then the call stalled
+        await asyncio.Event().wait()
+
+    from mcp.types import CallToolRequest
+
+    handlers = runtime.mcp._mcp_server.request_handlers
+    installed_handler = handlers[CallToolRequest]
+    handlers[CallToolRequest] = original_handler
+    monkeypatch.setenv("TELEGRAM_TOOL_TIMEOUT_SECONDS", "0.01")
+    try:
+        runtime._install_annotation_hook()
+        response = await handlers[CallToolRequest](None)
+    finally:
+        handlers[CallToolRequest] = installed_handler
+
+    assert accepted_writes == [marker]  # dispatched exactly once, never retried
+    assert response.root.isError is True
+    assert len(response.root.content) == 1
+    text = response.root.content[0].text
+    assert "code: GEN-TIMEOUT" in text
+    assert "Completion is unknown" in text
+    assert "a write may already have succeeded" in text
+    assert "before retrying" in text
+    assert marker not in text
     assert response.root.content[0].annotations.audience == ["user"]
 
 
