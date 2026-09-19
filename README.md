@@ -214,6 +214,33 @@ normal authority inside the server process; read-only mode only prevents
 non-read-only tools from being registered and exposed through MCP. Accepted
 values are `all` (the default), `read-only`, and `read-only+<tool>,<tool>`.
 
+A separate, hardcoded allowlist restricts `send_voice`, `send_sticker`,
+`set_profile_photo`, and `edit_chat_photo` to their expected file extensions;
+`send_file` and `upload_file` accept any extension by default. Use
+`TELEGRAM_FILE_EXTENSIONS` to add allowlists for those two, or to tighten or
+replace any of the hardcoded ones, in the same `tool:.ext,.ext` shape as
+`TELEGRAM_EXPOSED_TOOLS`, with entries separated by `;`:
+
+```env
+TELEGRAM_FILE_EXTENSIONS=send_file:.pdf,.png,.jpg;upload_file:.pdf,.png
+```
+
+Naming a tool that already has a hardcoded default replaces that tool's whole
+set rather than adding to it; any tool left unnamed keeps its default (so
+leaving this unset keeps today's behavior unchanged). Extensions are
+case-insensitive and the leading dot is optional (`pdf` and `.pdf` are
+equivalent). An unknown tool name, a malformed extension, or the same tool
+named twice aborts startup, the same way a typo in `TELEGRAM_EXPOSED_TOOLS`
+does.
+
+This is defence in depth against accidents, not a security boundary. The check
+reads the final suffix, so an allowlist of `.pdf` still accepts
+`payload.exe.pdf`, and it says nothing about the bytes in the file. What it
+does reliably block is the careless case: extensionless secrets such as
+`id_rsa` or a bare `.env`. Files with ordinary extensions — `.pem`, `.key`, a
+`.json` token file, a `.sqlite` cookie store — are not covered unless you
+leave them out of the list yourself.
+
 Voice transcription (see [Voice transcription](#voice-transcription) above) is
 off by default in the sense that no transcript is ever fetched unless you ask
 for one — `transcribe_voice` is always available, and listings only pick up
@@ -535,7 +562,9 @@ Security behavior:
 - Traversal, wildcard-like, shell-like, and null-byte path patterns are rejected.
 - Relative paths resolve under the first allowed root.
 - Downloads default to `<first_root>/downloads/`.
-- Size and extension limits are enforced for sensitive media tools.
+- Size and extension limits are enforced for sensitive media tools. `send_file`
+  and `upload_file` have no extension limit by default; see
+  `TELEGRAM_FILE_EXTENSIONS` above to add one.
 
 Run with allowed roots:
 

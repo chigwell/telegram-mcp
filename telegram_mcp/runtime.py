@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 import sys
 import json
 import time
@@ -291,6 +292,114 @@ def _apply_exposed_tools_mode(server: FastMCP = mcp, mode: Optional[str] = None)
             server._tool_manager.remove_tool(tool.name)
             removed.append(tool.name)
     return removed
+
+
+_FILE_EXTENSION_TOKEN_PATTERN = re.compile(r"^\.[A-Za-z0-9_-]+$")
+_FILE_EXTENSIONS_ENTRY_SEPARATOR = ";"
+_FILE_EXTENSIONS_TOOL_SEPARATOR = ":"
+_FILE_EXTENSIONS_LIST_SEPARATOR = ","
+
+
+def _get_file_extension_overrides(value: Optional[str] = None) -> dict[str, set[str]]:
+    """Parse ``TELEGRAM_FILE_EXTENSIONS`` into a tool -> extension-set mapping.
+
+    ``TELEGRAM_FILE_EXTENSIONS=send_file:.pdf,.png;upload_file:.pdf`` mirrors
+    the ``TELEGRAM_EXPOSED_TOOLS`` convention: unset (or blank) means no
+    overrides at all, which keeps today's behaviour unchanged. A malformed
+    entry fails loudly here, at parse time, the same way a malformed
+    ``TELEGRAM_EXPOSED_TOOLS`` mode fails loudly in
+    ``_get_exposed_tools_mode`` -- a typo must not silently produce a
+    narrower (or wider) allowlist that looks like it worked.
+
+    This only parses the tool -> extensions shape; it does not know the set
+    of real tool names, so it cannot reject an unknown tool. That check
+    happens in ``_apply_file_extension_overrides``, which has a server to
+    check against.
+    """
+    raw_value = os.getenv("TELEGRAM_FILE_EXTENSIONS", "") if value is None else value
+    raw_value = raw_value.strip()
+    if not raw_value:
+        return {}
+
+    overrides: dict[str, set[str]] = {}
+    for entry in raw_value.split(_FILE_EXTENSIONS_ENTRY_SEPARATOR):
+        entry = entry.strip()
+        if not entry:
+            continue
+        tool_name, separator, raw_extensions = entry.partition(_FILE_EXTENSIONS_TOOL_SEPARATOR)
+        tool_name = tool_name.strip().lower()
+        if not separator or not tool_name:
+            raise SystemExit(
+                f"Invalid TELEGRAM_FILE_EXTENSIONS '{raw_value}'. Each entry must look "
+                f"like 'tool{_FILE_EXTENSIONS_TOOL_SEPARATOR}.ext{_FILE_EXTENSIONS_LIST_SEPARATOR}.ext', "
+                f"entries separated by '{_FILE_EXTENSIONS_ENTRY_SEPARATOR}'."
+            )
+
+        extensions: set[str] = set()
+        for raw_extension in raw_extensions.split(_FILE_EXTENSIONS_LIST_SEPARATOR):
+            token = raw_extension.strip().lower()
+            if not token:
+                raise SystemExit(
+                    f"Invalid TELEGRAM_FILE_EXTENSIONS '{raw_value}'. Tool '{tool_name}' "
+                    "has an empty extension entry."
+                )
+            if not token.startswith("."):
+                token = f".{token}"
+            if not _FILE_EXTENSION_TOKEN_PATTERN.match(token):
+                raise SystemExit(
+                    f"Invalid TELEGRAM_FILE_EXTENSIONS '{raw_value}'. Malformed extension "
+                    f"'{raw_extension.strip()}' for tool '{tool_name}'."
+                )
+            extensions.add(token)
+
+        # extensions is never empty here: an empty raw_extensions still yields
+        # one blank token from split(","), which is caught above.
+        if tool_name in overrides:
+            # Fail loudly rather than last-wins: silently dropping the first
+            # list would hand the operator a narrower or wider allowlist than
+            # the one they wrote, with no way to notice.
+            raise SystemExit(
+                f"Invalid TELEGRAM_FILE_EXTENSIONS '{raw_value}'. Tool "
+                f"'{tool_name}' is named more than once."
+            )
+        overrides[tool_name] = extensions
+    return overrides
+
+
+def _apply_file_extension_overrides(
+    server: FastMCP = mcp, value: Optional[str] = None
+) -> dict[str, set[str]]:
+    """Rebuild ``EXTENSION_ALLOWLISTS`` from defaults plus ``TELEGRAM_FILE_EXTENSIONS``.
+
+    Overrides merge over ``_DEFAULT_EXTENSION_ALLOWLISTS``: naming a tool
+    that already has a hardcoded default replaces that tool's whole set
+    (not a union), and any tool not mentioned keeps its default (including
+    ``send_file``/``upload_file``, which have no default and so stay
+    unrestricted when unset). This is the only thing that changes --
+    ``_ensure_extension_allowed`` itself is untouched and keeps reading the
+    module-level ``EXTENSION_ALLOWLISTS`` dict.
+
+    An unknown tool name aborts startup exactly like an unknown name in a
+    ``TELEGRAM_EXPOSED_TOOLS`` allowlist: validated against the server's own
+    registered tools, not a hardcoded guess at what tools exist. That check
+    reads the tool manager, so this must run *before*
+    ``_apply_exposed_tools_mode`` prunes it -- otherwise narrowing the
+    extensions of a tool that exposure hid would abort startup on a valid
+    configuration.
+    """
+    global EXTENSION_ALLOWLISTS
+    overrides = _get_file_extension_overrides(value)
+    if overrides:
+        registered = {tool.name for tool in server._tool_manager.list_tools()}
+        unknown = sorted(set(overrides) - registered)
+        if unknown:
+            # Fail loudly: a typo must not silently degrade into an allowlist
+            # that looks like it worked.
+            raise SystemExit(
+                f"Invalid TELEGRAM_FILE_EXTENSIONS: unknown tool(s) {', '.join(unknown)}."
+            )
+    EXTENSION_ALLOWLISTS = {**_DEFAULT_EXTENSION_ALLOWLISTS, **overrides}
+    return EXTENSION_ALLOWLISTS
 
 
 # ---------------------------------------------------------------------------
@@ -735,12 +844,18 @@ except Exception:
 SERVER_ALLOWED_ROOTS: list[Path] = []
 DEFAULT_DOWNLOAD_SUBDIR = "downloads"
 DISALLOWED_PATH_PATTERNS = ("*", "?", "[", "]", "{", "}", "~", "\x00")
-EXTENSION_ALLOWLISTS: dict[str, set[str]] = {
+_DEFAULT_EXTENSION_ALLOWLISTS: dict[str, set[str]] = {
     "send_voice": {".ogg", ".opus"},
     "send_sticker": {".webp"},
     "set_profile_photo": {".jpg", ".jpeg", ".png", ".webp"},
     "edit_chat_photo": {".jpg", ".jpeg", ".png", ".webp"},
 }
+# Mutable, TELEGRAM_FILE_EXTENSIONS-aware allowlist actually consulted by
+# _ensure_extension_allowed(). Rebuilt from _DEFAULT_EXTENSION_ALLOWLISTS by
+# _apply_file_extension_overrides() at startup; defaults to the hardcoded
+# values so importing this module without calling that function (e.g. tests)
+# keeps today's behaviour.
+EXTENSION_ALLOWLISTS: dict[str, set[str]] = dict(_DEFAULT_EXTENSION_ALLOWLISTS)
 MAX_FILE_BYTES: dict[str, int] = {
     "download_media": 200 * 1024 * 1024,  # 200 MB
     "send_file": 200 * 1024 * 1024,  # 200 MB

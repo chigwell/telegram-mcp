@@ -218,6 +218,12 @@ async def _main() -> None:
 
 def main() -> None:
     _configure_allowed_roots_from_cli(sys.argv[1:])
+    # Before _apply_exposed_tools_mode(): that prunes non-exposed tools from
+    # the tool manager, and the extension overrides validate tool names
+    # against that same manager. Narrowing send_file's extensions while
+    # send_file is not exposed is a valid configuration, so the name check
+    # has to see the full tool set.
+    _runtime._apply_file_extension_overrides()
     _runtime._apply_exposed_tools_mode()
     _transcription.validate_transcription_config()
     _session_lock_shared()  # fail loudly at startup on a bad toggle
