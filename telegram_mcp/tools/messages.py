@@ -1468,6 +1468,10 @@ async def forward_message(
 
     Telegram validates sender and topic permissions; errors never fall back to
     another sender or topic. Discovery is opt-in and does not change defaults.
+
+    When topic_id, send_as, drop_author or silent is used, the result also lists
+    the destination message IDs Telegram returned for this request, or says
+    that none were returned.
     """
     try:
         if topic_id is not None and (type(topic_id) is not int or topic_id <= 0):
@@ -1497,30 +1501,47 @@ async def forward_message(
                     ids_to_forward = sibling_ids
                     expanded_from_album = True
 
+        destination_note = ""
         if topic_id is not None or send_as is not None or drop_author or silent:
             sender = await resolve_input_entity(send_as, cl) if send_as is not None else None
-            await cl(
-                functions.messages.ForwardMessagesRequest(
-                    from_peer=from_entity,
-                    id=ids_to_forward if isinstance(ids_to_forward, list) else [ids_to_forward],
-                    to_peer=to_entity,
-                    top_msg_id=topic_id,
-                    send_as=sender,
-                    drop_author=drop_author,
-                    silent=silent,
-                )
+            request = functions.messages.ForwardMessagesRequest(
+                from_peer=from_entity,
+                id=ids_to_forward if isinstance(ids_to_forward, list) else [ids_to_forward],
+                to_peer=to_entity,
+                top_msg_id=topic_id,
+                send_as=sender,
+                drop_author=drop_author,
+                silent=silent,
+            )
+            result = await cl(request)
+            # Correlate only this request's random IDs, in request order; never
+            # infer destination IDs from unrelated updates in the response.
+            returned_ids = {
+                update.random_id: update.id
+                for update in getattr(result, "updates", None) or []
+                if isinstance(update, types.UpdateMessageID)
+            }
+            destination_ids = [
+                returned_ids[random_id]
+                for random_id in request.random_id
+                if random_id in returned_ids
+            ]
+            destination_note = (
+                f" Destination message IDs: {destination_ids or 'not returned by Telegram'}."
             )
         else:
             await cl.forward_messages(to_entity, ids_to_forward, from_entity)
         count = len(ids_to_forward) if isinstance(ids_to_forward, list) else 1
         if count == 1:
-            return f"Message {message_id} forwarded from {from_chat_id} to {to_chat_id}."
-        if expanded_from_album:
-            return (
+            summary = f"Message {message_id} forwarded from {from_chat_id} to {to_chat_id}."
+        elif expanded_from_album:
+            summary = (
                 f"Album of {count} messages forwarded from {from_chat_id} "
                 f"to {to_chat_id} (auto-expanded from message {message_id})."
             )
-        return f"{count} messages forwarded from {from_chat_id} to {to_chat_id}."
+        else:
+            summary = f"{count} messages forwarded from {from_chat_id} to {to_chat_id}."
+        return summary + destination_note
     except Exception as e:
         return log_and_format_error(
             "forward_message",

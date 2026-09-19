@@ -26,6 +26,7 @@ class RecordingClient:
             "sender": types.InputPeerChannel(33, 303),
         }
         self.album = []
+        self.build_updates = None  # callable(request) -> updates echoing its random_ids
 
     async def resolve(self, identifier, client):
         assert client is self
@@ -39,6 +40,10 @@ class RecordingClient:
         bytes(request)  # Exercise the real SDK serializer, not a fake TL schema.
         if self.error:
             raise self.error
+        if self.build_updates:
+            return types.Updates(
+                self.build_updates(request), [], [], datetime.now(timezone.utc), 1
+            )
         return self.result
 
     async def forward_messages(self, *args, **kwargs):
@@ -91,7 +96,10 @@ async def test_legacy_album_and_explicit_batch_are_unchanged(client, message_id,
 )
 async def test_routed_forward_uses_native_request(client, route):
     result = await messages.forward_message("source", [10, 12], "destination", **route)
-    assert result == "2 messages forwarded from source to destination."
+    assert result == (
+        "2 messages forwarded from source to destination. "
+        "Destination message IDs: not returned by Telegram."
+    )
     assert client.legacy == []
     assert client.reads == []
     assert len(client.requests) == 1
@@ -252,3 +260,49 @@ async def test_discovery_readonly_account_fanout(client, monkeypatch):
     result = await messages.get_send_as("destination")
     assert "[first]" in result and "[second]" in result
     assert len(client.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_native_forward_reports_request_correlated_destination_ids(client):
+    def updates(request):
+        first, second = request.random_id
+        return [
+            types.UpdateMessageID(id=999, random_id=first ^ second ^ 1),  # unrelated request
+            types.UpdateMessageID(id=701, random_id=second),  # out of order
+            types.UpdateNewMessage(  # never inferred from
+                message=types.Message(id=555, peer_id=types.PeerUser(22), message="other"),
+                pts=1,
+                pts_count=1,
+            ),
+            types.UpdateMessageID(id=700, random_id=first),
+        ]
+
+    client.build_updates = updates
+    result = await messages.forward_message("source", [10, 12], "destination", topic_id=7)
+    assert result == (
+        "2 messages forwarded from source to destination. Destination message IDs: [700, 701]."
+    )
+    assert client.legacy == []
+
+
+@pytest.mark.asyncio
+async def test_native_forward_reports_only_ids_telegram_returned(client):
+    def updates(request):
+        return [types.UpdateMessageID(id=701, random_id=request.random_id[1])]
+
+    client.build_updates = updates
+    result = await messages.forward_message("source", [10, 12], "destination", silent=True)
+    assert result.endswith("Destination message IDs: [701].")
+
+
+@pytest.mark.asyncio
+async def test_native_forward_states_when_no_ids_were_returned(client):
+    def updates(request):
+        return [types.UpdateMessageID(id=999, random_id=request.random_id[0] ^ 1)]
+
+    client.build_updates = updates
+    result = await messages.forward_message("source", 10, "destination", drop_author=True)
+    assert result == (
+        "Message 10 forwarded from source to destination. "
+        "Destination message IDs: not returned by Telegram."
+    )
