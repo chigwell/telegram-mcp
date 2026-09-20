@@ -24,7 +24,7 @@ from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
 from mcp.shared.exceptions import McpError
 from pythonjsonlogger import jsonlogger
 from telethon import TelegramClient, functions, types, utils
-from telethon.errors import AuthKeyDuplicatedError, FloodWaitError
+from telethon.errors import AuthKeyDuplicatedError, FloodWaitError, BotMethodInvalidError
 from telethon.sessions import StringSession
 from telethon.tl.types import (
     User,
@@ -1609,7 +1609,10 @@ async def _resolve_with_retries(
             return await get(identifier)
         except ValueError as error:
             last_error = error
-            await client.get_dialogs()
+            try:
+                await client.get_dialogs()
+            except (BotMethodInvalidError, Exception):
+                pass
             try:
                 return await get(identifier)
             except ValueError as error:
@@ -1620,7 +1623,10 @@ async def _resolve_with_retries(
             return await get(identifier)
         except ValueError as error:
             last_error = error
-            await client.get_dialogs()
+            try:
+                await client.get_dialogs()
+            except (BotMethodInvalidError, Exception):
+                pass
             try:
                 return await get(identifier)
             except ValueError as error:

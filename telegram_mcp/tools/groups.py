@@ -49,7 +49,10 @@ async def create_group(title: str, user_ids: List[Union[int, str]], account: str
                 # If we can't determine the chat ID directly from the result
                 # Try to find it in recent dialogs
                 await asyncio.sleep(1)  # Give Telegram a moment to register the new group
-                dialogs = await cl.get_dialogs(limit=5)  # Get recent dialogs
+                try:
+                    dialogs = await cl.get_dialogs(limit=5)  # Get recent dialogs
+                except BotMethodInvalidError:
+                    dialogs = []
                 for dialog in dialogs:
                     if dialog.title == title:
                         return f"Group created with ID: {get_marked_id(dialog.entity)}"

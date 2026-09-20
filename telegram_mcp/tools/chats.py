@@ -3,6 +3,7 @@
 import secrets
 import struct
 
+from telethon.errors import BotMethodInvalidError
 from telethon.tl.tlobject import TLObject, TLRequest
 
 from telegram_mcp.runtime import *
@@ -167,7 +168,10 @@ async def get_chats(account: str = None, page: int = 1, page_size: int = 20) -> 
     try:
         cl = get_client(account)
         await ensure_connected(cl)
-        dialogs = await cl.get_dialogs()
+        try:
+            dialogs = await cl.get_dialogs()
+        except BotMethodInvalidError:
+            return "Listing chats/dialogs is not supported for bot accounts (Telegram API restriction: bots cannot fetch dialog lists)."
         start = (page - 1) * page_size
         end = start + page_size
         if start >= len(dialogs):
@@ -479,7 +483,10 @@ async def list_chats(
     try:
         cl = get_client(account)
         await ensure_connected(cl)
-        dialogs = await cl.get_dialogs(limit=limit, archived=archived)
+        try:
+            dialogs = await cl.get_dialogs(limit=limit, archived=archived)
+        except BotMethodInvalidError:
+            return "Listing chats is not supported for bot accounts (Telegram API restriction: bots cannot fetch dialog lists)."
 
         records = []
         for dialog in dialogs:
