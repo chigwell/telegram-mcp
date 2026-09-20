@@ -362,7 +362,11 @@ async def _transcribe_via_groq(cl, msg) -> dict:
         return _too_large_for_groq(size, limit)
 
     file_attr = getattr(msg, "file", None)
-    ext = (getattr(file_attr, "ext", None) or ".oga").lstrip(".")
+    ext = (getattr(file_attr, "ext", None) or "ogg").lstrip(".")
+    # Telegram voice notes carry 'oga' (Opus-in-Ogg), which Groq rejects with 400
+    # unsupported_audio_format. Groq requires .ogg, so normalize oga -> ogg.
+    if ext.lower() == "oga":
+        ext = "ogg"
     mime = getattr(file_attr, "mime_type", None) or "audio/ogg"
 
     try:

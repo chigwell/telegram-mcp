@@ -446,8 +446,51 @@ async def test_transcribe_via_groq_success(monkeypatch):
 
     assert result == {"status": "ok", "text": "hello world", "lang": "ru"}
     assert calls[0]["headers"]["Authorization"] == "Bearer test-key"
-    assert calls[0]["files"]["file"][0] == "voice.oga"
+    assert calls[0]["files"]["file"][0] == "voice.ogg"
     assert calls[0]["data"]["model"] == transcription.GROQ_MODEL
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ext_in,expected_filename",
+    [
+        (".oga", "voice.ogg"),
+        ("oga", "voice.ogg"),
+        (".ogg", "voice.ogg"),
+        (".mp3", "voice.mp3"),
+        (".wav", "voice.wav"),
+        (None, "voice.ogg"),
+    ],
+)
+async def test_transcribe_via_groq_normalizes_audio_file_extension(
+    monkeypatch, ext_in, expected_filename
+):
+    """Groq API audio transcription only accepts [flac mp3 mp4 mpeg mpga m4a ogg opus wav webm].
+    Telegram voice notes arrive as .oga, which Groq rejects with 400 unsupported_audio_format.
+    Naming the upload as .ogg satisfies Groq while preserving the identical audio content (issue #219).
+    """
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    calls = []
+    response = _FakeGroqResponse({"text": "ok", "language": "en"})
+    monkeypatch.setattr(
+        transcription.httpx, "AsyncClient", lambda **kw: _FakeHttpxClient(response, calls)
+    )
+
+    file_obj = (
+        SimpleNamespace(duration=10, ext=ext_in, mime_type="audio/ogg")
+        if ext_in is not None
+        else None
+    )
+    msg = _voice_msg(file=file_obj)
+
+    async def _download_media(m, file=None):
+        return b"audio-bytes"
+
+    client = SimpleNamespace(download_media=_download_media)
+    result = await transcription._transcribe_via_groq(client, msg)
+
+    assert result["status"] == "ok"
+    assert calls[0]["files"]["file"][0] == expected_filename
 
 
 @pytest.mark.asyncio
