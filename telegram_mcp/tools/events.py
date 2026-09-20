@@ -56,6 +56,8 @@ def _scan_settled(
     """
     soonest_remaining = None
     for cid, rec in list(_pending_msgs.items()):
+        if is_chat_allowlist_enabled() and not is_chat_allowed(cid):
+            continue
         if only is not None and cid != only:
             continue
         quiet = now - rec["last_ts"]
@@ -207,6 +209,8 @@ async def _on_new_incoming(event) -> None:
         if getattr(sender, "bot", False) or getattr(sender, "is_self", False):
             return
         chat_id = event.chat_id
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, sender):
+            return
         now = time.monotonic()
         msg_id = event.message.id
         rec = _pending_msgs.get(chat_id)
@@ -252,6 +256,7 @@ def register_incoming_handlers() -> None:
         title="Wait For New Message", openWorldHint=True, readOnlyHint=True
     )
 )
+@validate_id("chat_id")
 async def wait_for_new_message(
     timeout: float = 50.0,
     chat_id: Optional[Union[int, str]] = None,
@@ -283,7 +288,10 @@ async def wait_for_new_message(
         deadline = time.monotonic() + timeout
         while True:
             pending = {
-                cid: rec for cid, rec in _pending_msgs.items() if target is None or cid == target
+                cid: rec
+                for cid, rec in _pending_msgs.items()
+                if (target is None or cid == target)
+                and (not is_chat_allowlist_enabled() or is_chat_allowed(cid))
             }
             if pending:
                 chats = [
@@ -323,6 +331,7 @@ async def wait_for_new_message(
         title="Wait For Settled Message", openWorldHint=True, readOnlyHint=True
     )
 )
+@validate_id("chat_id")
 async def wait_for_settled_message(
     settle_ms: int = 6000,
     max_wait_ms: int = 50000,

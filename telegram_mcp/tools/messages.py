@@ -416,6 +416,17 @@ async def get_messages(
     try:
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
+
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+            err = check_chat_access(chat_id, entity)
+            return log_and_format_error(
+                "get_messages",
+                ChatAccessDeniedError(err),
+                prefix=ErrorCategory.PRIVACY,
+                user_message=err,
+                chat_id=chat_id,
+            )
+
         offset = (page - 1) * page_size
         messages = await cl.get_messages(entity, limit=page_size, add_offset=offset)
         if not messages:
@@ -566,6 +577,17 @@ async def send_message(
     try:
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
+
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+            err = check_chat_access(chat_id, entity)
+            return log_and_format_error(
+                "send_message",
+                ChatAccessDeniedError(err),
+                prefix=ErrorCategory.PRIVACY,
+                user_message=err,
+                chat_id=chat_id,
+            )
+
         if parse_mode and parse_mode.lower() in RICH_PARSE_MODES:
             conflict = _chip_conflict(format_date)
             if conflict:
@@ -2024,6 +2046,8 @@ async def search_global(
         records = []
         for msg in messages:
             chat = msg.chat
+            if is_chat_allowlist_enabled() and not is_chat_allowed(msg.chat_id, chat):
+                continue
             chat_name = (
                 getattr(chat, "title", None) or getattr(chat, "first_name", "") or str(msg.chat_id)
             )
@@ -2146,6 +2170,7 @@ async def get_pinned_messages(chat_id: Union[int, str], account: str = None) -> 
     annotations=ToolAnnotations(title="Create Poll", openWorldHint=True, destructiveHint=True)
 )
 @with_account(readonly=False)
+@validate_id("chat_id")
 async def create_poll(
     chat_id: int,
     question: str,
@@ -2171,6 +2196,16 @@ async def create_poll(
     try:
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
+
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+            err = check_chat_access(chat_id, entity)
+            return log_and_format_error(
+                "create_poll",
+                ChatAccessDeniedError(err),
+                prefix=ErrorCategory.PRIVACY,
+                user_message=err,
+                chat_id=chat_id,
+            )
 
         # Validate options
         if len(options) < 2:
@@ -2454,6 +2489,13 @@ async def get_drafts(account: str = None) -> str:
                             peer_id = -peer.chat_id
                         elif hasattr(peer, "channel_id"):
                             peer_id = -1000000000000 - peer.channel_id
+
+                    if (
+                        is_chat_allowlist_enabled()
+                        and peer_id is not None
+                        and not is_chat_allowed(peer_id)
+                    ):
+                        continue
 
                     draft_data = {
                         "peer_id": peer_id,

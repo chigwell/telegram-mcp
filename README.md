@@ -33,6 +33,7 @@ Message sent successfully:
 - [Device Identity](#device-identity)
 - [Proxy Support](#proxy-support)
 - [File Path Security](#file-path-security)
+- [Chat Access Privacy (Allowlist)](#chat-access-privacy-allowlist)
 - [Docker](#docker)
 - [Development](#development)
 - [Security Notes](#security-notes)
@@ -596,6 +597,23 @@ From an MCP client configuration, pass the same roots after `main.py`:
   }
 }
 ```
+
+## Chat Access Privacy (Allowlist)
+
+To restrict AI agents or MCP clients to specific chats only (preventing access to all private or corporate conversations), configure `TELEGRAM_ALLOWED_CHAT_IDS`:
+
+```env
+# Comma-separated list of allowed chat IDs, supergroup IDs, or usernames
+TELEGRAM_ALLOWED_CHAT_IDS=12345678,-100123456789,@allowed_channel
+```
+
+When `TELEGRAM_ALLOWED_CHAT_IDS` is set:
+- **`list_chats` / `get_chats`:** Only chats matching the allowlist are returned; all other conversations remain completely invisible to the agent.
+- **Messaging & Chat Tools (`send_message`, `get_messages`, `get_chat`, `create_poll`, etc.):** Any attempt to interact with a chat outside the allowlist is rejected with a structured error message: `Access to chat '<chat_id>' is restricted by privacy policy (TELEGRAM_ALLOWED_CHAT_IDS)`.
+- **Search & Drafts (`search_global`, `get_drafts`):** Global searches and draft listings omit unallowed conversations.
+- **Incoming Events:** Notifications and debounce feeds only process events from allowed chats.
+
+If `TELEGRAM_ALLOWED_CHAT_IDS` is unset or empty, the server operates in unrestricted mode (default), preserving 100% backward compatibility.
 
 ## Docker
 

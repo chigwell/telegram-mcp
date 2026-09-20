@@ -16,12 +16,32 @@ from telegram_mcp.runtime import *
 from telegram_mcp.runner import _main, main
 from telegram_mcp.tools import *
 
-# Backward-compatible alias for callers/tests that monkeypatch main.SERVER_ALLOWED_ROOTS.
+# Backward-compatible alias for callers/tests that monkeypatch main.SERVER_ALLOWED_ROOTS / main.ALLOWED_CHAT_IDS.
 SERVER_ALLOWED_ROOTS = _runtime.SERVER_ALLOWED_ROOTS
+ALLOWED_CHAT_IDS = _runtime.ALLOWED_CHAT_IDS
 
 
 def _sync_runtime_roots() -> None:
     _runtime.SERVER_ALLOWED_ROOTS = SERVER_ALLOWED_ROOTS
+
+
+def _sync_runtime_chat_allowlist() -> None:
+    _runtime.ALLOWED_CHAT_IDS = ALLOWED_CHAT_IDS
+
+
+def is_chat_allowlist_enabled() -> bool:
+    _sync_runtime_chat_allowlist()
+    return _runtime.is_chat_allowlist_enabled()
+
+
+def is_chat_allowed(chat_identifier=None, entity=None) -> bool:
+    _sync_runtime_chat_allowlist()
+    return _runtime.is_chat_allowed(chat_identifier, entity)
+
+
+def check_chat_access(chat_identifier=None, entity=None):
+    _sync_runtime_chat_allowlist()
+    return _runtime.check_chat_access(chat_identifier, entity)
 
 
 async def _get_effective_allowed_roots(ctx):
