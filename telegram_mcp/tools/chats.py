@@ -172,6 +172,8 @@ async def get_chats(account: str = None, page: int = 1, page_size: int = 20) -> 
             dialogs = await cl.get_dialogs()
         except BotMethodInvalidError:
             return "Listing chats/dialogs is not supported for bot accounts (Telegram API restriction: bots cannot fetch dialog lists)."
+        if is_chat_allowlist_enabled():
+            dialogs = [d for d in dialogs if is_chat_allowed(get_marked_id(d.entity), d.entity)]
         start = (page - 1) * page_size
         end = start + page_size
         if start >= len(dialogs):
@@ -492,6 +494,10 @@ async def list_chats(
         for dialog in dialogs:
             entity = dialog.entity
 
+            # Enforce privacy allowlist
+            if is_chat_allowlist_enabled() and not is_chat_allowed(get_marked_id(entity), entity):
+                continue
+
             # Filter by type if requested
             current_type = get_entity_filter_type(entity)
 
@@ -612,6 +618,16 @@ async def get_chat(chat_id: Union[int, str], account: str = None) -> str:
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
 
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+            err = check_chat_access(chat_id, entity)
+            return log_and_format_error(
+                "get_chat",
+                ChatAccessDeniedError(err),
+                prefix=ErrorCategory.PRIVACY,
+                user_message=err,
+                chat_id=chat_id,
+            )
+
         record = {"id": get_marked_id(entity)}
 
         is_user = isinstance(entity, User)
@@ -710,7 +726,10 @@ async def search_public_chats(query: str, limit: int = 20, account: str = None) 
         cl = get_client(account)
         await ensure_connected(cl)
         result = await cl(functions.contacts.SearchRequest(q=query, limit=limit))
-        entities = [format_entity(e) for e in result.chats + result.users]
+        all_entities = result.chats + result.users
+        if is_chat_allowlist_enabled():
+            all_entities = [e for e in all_entities if is_chat_allowed(get_marked_id(e), e)]
+        entities = [format_entity(e) for e in all_entities]
         return json.dumps(entities, indent=2)
     except Exception as e:
         return log_and_format_error("search_public_chats", e, query=query, limit=limit)
@@ -737,6 +756,7 @@ async def resolve_username(username: str, account: str = None) -> str:
     annotations=ToolAnnotations(title="Get Full Chat", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
+@validate_id("chat_id")
 async def get_full_chat(chat_id: Union[int, str], account: str = None) -> str:
     """
     Get full info of a channel or group including description/about text.
@@ -751,6 +771,16 @@ async def get_full_chat(chat_id: Union[int, str], account: str = None) -> str:
         cl = get_client(account)
         await ensure_connected(cl)
         entity = await resolve_entity(chat_id, cl)
+
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+            err = check_chat_access(chat_id, entity)
+            return log_and_format_error(
+                "get_full_chat",
+                ChatAccessDeniedError(err),
+                prefix=ErrorCategory.PRIVACY,
+                user_message=err,
+                chat_id=chat_id,
+            )
 
         # Basic ("legacy") groups are not channels: GetFullChannelRequest cannot
         # cast an InputPeerChat and raises TypeError. They are served by
