@@ -23,6 +23,19 @@ from telegram_mcp.runtime import (
 from telegram_mcp.tools import chats, messages
 
 
+@pytest.fixture(autouse=True)
+def _reset_chat_allowlist_global_state(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_ALLOWED_CHAT_IDS", raising=False)
+    monkeypatch.setattr(runtime, "ALLOWED_CHAT_IDS", None)
+    if hasattr(main, "ALLOWED_CHAT_IDS"):
+        monkeypatch.setattr(main, "ALLOWED_CHAT_IDS", None)
+    yield
+    monkeypatch.delenv("TELEGRAM_ALLOWED_CHAT_IDS", raising=False)
+    monkeypatch.setattr(runtime, "ALLOWED_CHAT_IDS", None)
+    if hasattr(main, "ALLOWED_CHAT_IDS"):
+        monkeypatch.setattr(main, "ALLOWED_CHAT_IDS", None)
+
+
 class FakeDialog:
     def __init__(self, entity, unread_count=0, archived=False):
         self.entity = entity
@@ -357,6 +370,7 @@ async def test_create_poll_blocks_unallowed_chat(monkeypatch):
 def test_main_compatibility_aliases(monkeypatch):
     monkeypatch.delenv("TELEGRAM_ALLOWED_CHAT_IDS", raising=False)
     monkeypatch.setattr(main, "ALLOWED_CHAT_IDS", None)
+    monkeypatch.setattr(runtime, "ALLOWED_CHAT_IDS", None)
 
     assert not main.is_chat_allowlist_enabled()
 
