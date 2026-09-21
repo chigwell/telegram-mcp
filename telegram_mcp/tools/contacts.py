@@ -151,7 +151,10 @@ async def get_direct_chat_by_contact(contact_query: str, account: Optional[str] 
             return f"No contacts found matching '{contact_query}'."
         # If we found contacts, look for direct chats with them
         records = []
-        dialogs = await cl.get_dialogs()
+        try:
+            dialogs = await cl.get_dialogs()
+        except BotMethodInvalidError:
+            dialogs = []
         for contact in found_contacts:
             contact_name = sanitize_name(
                 f"{getattr(contact, 'first_name', '')} {getattr(contact, 'last_name', '')}".strip()
@@ -204,7 +207,10 @@ async def get_contact_chats(contact_id: Union[int, str], account: Optional[str] 
         )
 
         # Find direct chat
-        dialogs = await cl.get_dialogs()
+        try:
+            dialogs = await cl.get_dialogs()
+        except BotMethodInvalidError:
+            dialogs = []
 
         records = []
 
