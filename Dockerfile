@@ -1,48 +1,65 @@
-# Use an official Python runtime as a parent image (Alpine-based for minimal vulnerabilities)
-FROM python:3.13-alpine
+# =============================================================================
+# Base stage: official minimal Alpine Python runtime
+# =============================================================================
+FROM python:3.13-alpine AS base
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Prevent Python from writing pyc files to disc
-ENV PYTHONDONTWRITEBYTECODE=1
-# Ensure Python output is sent straight to terminal (useful for logs)
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Install system dependencies if needed (e.g., for certain Python packages)
-# RUN apt-get update && apt-get install -y --no-install-recommends some-package && rm -rf /var/lib/apt/lists/*
+# =============================================================================
+# Builder stage: build wheels / dependencies
+# =============================================================================
+FROM base AS builder
 
-# Copy dependency definition files
-# If using Poetry:
-# COPY pyproject.toml poetry.lock* ./
-# RUN pip install --no-cache-dir poetry
-# RUN poetry config virtualenvs.create false && poetry install --no-dev --no-interaction --no-ansi
-# If using pip with requirements.txt:
 COPY requirements.txt ./
-RUN pip install --no-cache-dir --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# Copy the rest of the application code
+# =============================================================================
+# Development / Test stage: includes dev tooling from pyproject.toml
+# =============================================================================
+FROM base AS development
+
+# Copy installed production packages
+COPY --from=builder /install /usr/local
+
+# Copy dev dependencies and install test/lint tools
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir black flake8 pytest pytest-asyncio pytest-cov
+
+# Copy application source and tests
 COPY main.py sanitize.py ./
 COPY telegram_mcp ./telegram_mcp
-# COPY session_string_generator.py . # Optional: if needed within the container, otherwise can be run outside
+COPY tests ./tests
 
-# Create a non-root user and switch to it
-RUN adduser --disabled-password --gecos "" appuser && chown -R appuser:appuser /app
+CMD ["pytest", "--cov", "--cov-report=term-missing"]
+
+# =============================================================================
+# Production stage: slim runtime container with non-root appuser
+# =============================================================================
+FROM base AS production
+
+# Copy only installed dependencies from builder
+COPY --from=builder /install /usr/local
+
+# Copy application source code
+COPY main.py sanitize.py ./
+COPY telegram_mcp ./telegram_mcp
+
+# Create non-root user and setup directories
+RUN adduser --disabled-password --gecos "" appuser && \
+    mkdir -p /app/data/transcripts && \
+    chown -R appuser:appuser /app
+
 USER appuser
 
-# Define environment variables needed by the application
-# These should be provided at runtime, not hardcoded (especially secrets)
-ENV TELEGRAM_API_ID=""
-ENV TELEGRAM_API_HASH=""
-# Specify one of the following at runtime:
-# Default session filename
-ENV TELEGRAM_SESSION_NAME="telegram_mcp_session"
-# Or provide the session string directly
-ENV TELEGRAM_SESSION_STRING=""
+# Runtime environment variables (to be supplied at run/container start)
+ENV TELEGRAM_API_ID="" \
+    TELEGRAM_API_HASH="" \
+    TELEGRAM_SESSION_NAME="telegram_mcp_session" \
+    TELEGRAM_SESSION_STRING=""
 
-# Expose any ports if the application were a web server (not needed for stdio MCP)
-# EXPOSE 8000
-
-# Define the command to run the application
 CMD ["python", "main.py"]
