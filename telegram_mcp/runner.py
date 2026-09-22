@@ -190,10 +190,31 @@ async def _main() -> None:
         warm_task = asyncio.create_task(_warm_caches())
 
         transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
-        print(
-            f"Telegram client(s) started ({labels}). Running MCP server ({transport})...",
-            file=sys.stderr,
-        )
+
+        # Validate transport mode
+        VALID_TRANSPORTS = ("stdio", "http", "sse")
+        if transport not in VALID_TRANSPORTS:
+            accepted = ", ".join(VALID_TRANSPORTS)
+            print(
+                f"Invalid MCP_TRANSPORT '{transport}'. Expected one of: {accepted}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        # Startup log with host:port for HTTP/SSE transports
+        if transport in ("http", "sse"):
+            host = os.getenv("MCP_HOST", "127.0.0.1")
+            port = os.getenv("MCP_PORT", "8765")
+            print(
+                f"Telegram client(s) started ({labels}). Running MCP server ({transport}) on {host}:{port}...",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Telegram client(s) started ({labels}). Running MCP server ({transport})...",
+                file=sys.stderr,
+            )
+
         await _serve(transport)
     except Exception as e:
         print(f"Error starting client: {e}", file=sys.stderr)
@@ -229,6 +250,17 @@ async def _main() -> None:
 
 def main() -> None:
     _configure_allowed_roots_from_cli(sys.argv[1:])
+    # Apply CLI transport/host/port overrides to environment (runtime sets globals)
+    transport = _runtime._CLI_TRANSPORT or "stdio"
+    host = _runtime._CLI_HOST
+    port = _runtime._CLI_PORT
+
+    if transport != "stdio":
+        os.environ["MCP_TRANSPORT"] = transport
+    if host:
+        os.environ["MCP_HOST"] = host
+    if port is not None:
+        os.environ["MCP_PORT"] = str(port)
     # Before _apply_exposed_tools_mode(): that prunes non-exposed tools from
     # the tool manager, and the extension overrides validate tool names
     # against that same manager. Narrowing send_file's extensions while
