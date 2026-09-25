@@ -589,12 +589,13 @@ bypassing the proxy.
 
 ## File Path Security
 
-File-path tools are disabled until allowed roots are configured. This affects tools such as `send_file`, `download_media`, `upload_file`, `send_voice`, `send_sticker`, `set_profile_photo`, and `edit_chat_photo`.
+File-path and media tools (`send_file`, `download_media`, `upload_file`, `send_voice`, `send_sticker`, `set_profile_photo`, `edit_chat_photo`, and `send_album`) are registered and supported, but remain strictly disabled by default until allowed roots are configured (safe-by-default to prevent unauthorized file access).
 
 Allowed roots can come from:
 
-- Server CLI arguments, used as a fallback.
-- MCP client Roots, when supported by the client.
+- **Environment Variable (`TELEGRAM_ALLOWED_ROOTS`):** Semicolon- (`;`) or comma- (`,`) separated paths (also supports colon `:` on POSIX systems). Ideal for Docker, headless daemon setups, and MCP clients that pass settings via environment.
+- **Server CLI arguments:** Positional folder paths passed to `main.py`, used as a server-side fallback.
+- **MCP client Roots:** Configured directly in supported MCP clients (`roots/list`).
 
 Security behavior:
 
@@ -617,13 +618,20 @@ Security behavior:
   and `upload_file` have no extension limit by default; see
   `TELEGRAM_FILE_EXTENSIONS` above to add one.
 
-Run with allowed roots:
+Run with allowed roots via environment variable:
+
+```bash
+# Semicolon- or comma-separated roots
+TELEGRAM_ALLOWED_ROOTS="/data/telegram,/tmp/telegram-mcp" uv run main.py
+```
+
+Or run with allowed roots via CLI positional arguments:
 
 ```bash
 uv run main.py /data/telegram /tmp/telegram-mcp
 ```
 
-From an MCP client configuration, pass the same roots after `main.py`:
+From an MCP client configuration, you can pass roots via `env` or as arguments after `main.py`:
 
 ```json
 {
