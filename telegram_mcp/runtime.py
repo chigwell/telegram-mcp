@@ -194,7 +194,10 @@ def _install_annotation_hook() -> None:
                                 type="text",
                                 text=(
                                     "Telegram MCP tool timed out after "
-                                    f"{timeout:g}s (code: GEN-TIMEOUT)."
+                                    f"{timeout:g}s (code: GEN-TIMEOUT). "
+                                    "Completion is unknown; a write may already have "
+                                    "succeeded. Check destination state before retrying "
+                                    "non-idempotent operations."
                                 ),
                             )
                         ],
@@ -2315,6 +2318,19 @@ _CLI_HOST = None
 _CLI_PORT = None
 
 
+def _parse_allowed_roots_env(value: Optional[str]) -> List[str]:
+    """Parse a delimiter-separated list of paths from an environment variable string.
+
+    Supports semicolon (;) and comma (,) across all platforms, as well as colon (:)
+    when not part of a Windows drive letter prefix (e.g. C:\\path).
+    """
+    if not value or not value.strip():
+        return []
+    raw = value.strip()
+    tokens = re.split(r"[;,]|(?<!\b[a-zA-Z]):", raw)
+    return [part.strip("\"' \t\r\n") for part in tokens if part.strip("\"' \t\r\n")]
+
+
 def _configure_allowed_roots_from_cli(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         prog="telegram-mcp",
@@ -2330,8 +2346,13 @@ def _configure_allowed_roots_from_cli(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--port", type=int)
     parsed, _unknown = parser.parse_known_args(argv or [])
 
+    raw_roots: List[str] = list(parsed.allowed_roots)
+    env_roots = os.getenv("TELEGRAM_ALLOWED_ROOTS", "")
+    if env_roots:
+        raw_roots.extend(_parse_allowed_roots_env(env_roots))
+
     resolved_roots: List[Path] = []
-    for raw_root in parsed.allowed_roots:
+    for raw_root in raw_roots:
         root = Path(raw_root).expanduser()
         if not root.exists():
             try:

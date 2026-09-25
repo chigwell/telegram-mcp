@@ -9,7 +9,7 @@ on:
 
 jobs:
   docker_build:
-    name: Build Docker Image
+    name: Build Docker Image (Multistage)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -21,8 +21,26 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image
-        run: docker build --file Dockerfile --tag telegram-mcp:ci .
+      - name: Build production target
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: production
+          tags: telegram-mcp:latest,telegram-mcp:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and test development target
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: development
+          tags: telegram-mcp:dev
+          load: true
+          cache-from: type=gha
 
   docker_compose:
     name: Build & Validate Docker Compose
@@ -37,7 +55,6 @@ jobs:
           echo "TELEGRAM_API_ID=DUMMY_ID" > .env
           echo "TELEGRAM_API_HASH=DUMMY_HASH" >> .env
           echo "TELEGRAM_SESSION_STRING=DUMMY_SESSION" >> .env
-          # Add other required variables with dummy values if needed
 
       - name: Validate Compose file syntax
         run: docker compose config

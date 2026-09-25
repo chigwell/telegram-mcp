@@ -25,6 +25,7 @@ Message sent successfully:
 
 ## Contents
 
+- [Skills & Practical Workflows](skills/README.md)
 - [What It Can Do](#what-it-can-do)
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
@@ -39,6 +40,15 @@ Message sent successfully:
 - [Security Notes](#security-notes)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
+
+## Skills & Workflows
+
+Looking for ready-to-use workflows, prompt examples, or integration recipes?
+Explore the [**Skills Documentation**](skills/README.md) for step-by-step guides on:
+- [Summarizing unread messages safely](skills/examples/summarize-latest-unread.md)
+- [Drafting replies without sending](skills/examples/draft-replies-without-sending.md)
+- [Triaging action items & urgent requests](skills/examples/triage-and-action-items.md)
+- [Searching chat history and expanding context](skills/examples/search-chat-and-summarize-context.md)
 
 ## What It Can Do
 
@@ -159,7 +169,10 @@ uv sync
 uv run session_string_generator.py
 ```
 
-Follow the prompts. Save the generated session string securely.
+Follow the prompts. Save the generated session string securely. A session
+string is convenient for initial setup and portable deployments; for a
+long-running server, migrate it to a persistent file session after configuring
+your environment (see below).
 
 For scripted setup or operational runbooks, choose the login method explicitly:
 
@@ -188,6 +201,43 @@ TELEGRAM_API_ID=your_api_id_here
 TELEGRAM_API_HASH=your_api_hash_here
 TELEGRAM_SESSION_STRING=your_session_string_here
 ```
+
+### Recommended: Persistent Session for Long-Running Servers
+
+`StringSession` stores the Telegram authorization key, but not Telethon's update
+state. After a restart, a busy account can therefore receive a large backlog of
+updates. A local SQLite session persists the update cursor and entity cache, so
+subsequent reconnects receive only the missed delta.
+
+Stop all running telegram-mcp processes, then migrate the string configured in
+`.env`:
+
+```bash
+uv run telegram-mcp-migrate-session
+```
+
+The command verifies the new session with Telegram and prints the exact setting
+to use. Update `.env` as instructed, for example:
+
+```env
+# Remove or comment this out; it takes precedence when both are present.
+# TELEGRAM_SESSION_STRING=your_session_string_here
+TELEGRAM_SESSION_NAME=/absolute/path/to/telegram_mcp_session
+```
+
+The resulting `.session` file contains account credentials. Keep it private and
+do not commit it. The repository's `.gitignore` already excludes session files.
+
+For a labeled account, use `--account` with the same label:
+
+```bash
+uv run telegram-mcp-migrate-session --account work
+```
+
+This reads `TELEGRAM_SESSION_STRING_WORK` and writes the corresponding
+`TELEGRAM_SESSION_NAME_WORK` instruction. Use `--target PATH` to choose another
+destination. Do not run the migration while another process is using the source
+session.
 
 By default, all Telegram MCP tools are exposed. If you want to prevent MCP
 clients from sending messages or performing chat/account mutations, set
@@ -374,8 +424,10 @@ Telegram throttles and may flag accounts that open many parallel sessions.
 
 Every tool call also has a server-side ceiling of 55 seconds, configured with
 `TELEGRAM_TOOL_TIMEOUT_SECONDS`. A timed-out Telegram request returns an explicit
-MCP error instead of leaving the client waiting indefinitely. Set the value to
-`0` only for a deliberately unbounded operator session.
+MCP error instead of leaving the client waiting indefinitely. The error says
+that completion is unknown: a write may already have succeeded, so check the
+destination before retrying. Set the value to `0` only for a deliberately
+unbounded operator session.
 
 Register the shared server with clients:
 
@@ -539,12 +591,13 @@ bypassing the proxy.
 
 ## File Path Security
 
-File-path tools are disabled until allowed roots are configured. This affects tools such as `send_file`, `download_media`, `upload_file`, `send_voice`, `send_sticker`, `set_profile_photo`, and `edit_chat_photo`.
+File-path and media tools (`send_file`, `download_media`, `upload_file`, `send_voice`, `send_sticker`, `set_profile_photo`, `edit_chat_photo`, and `send_album`) are registered and supported, but remain strictly disabled by default until allowed roots are configured (safe-by-default to prevent unauthorized file access).
 
 Allowed roots can come from:
 
-- Server CLI arguments, used as a fallback.
-- MCP client Roots, when supported by the client.
+- **Environment Variable (`TELEGRAM_ALLOWED_ROOTS`):** Semicolon- (`;`) or comma- (`,`) separated paths (also supports colon `:` on POSIX systems). Ideal for Docker, headless daemon setups, and MCP clients that pass settings via environment.
+- **Server CLI arguments:** Positional folder paths passed to `main.py`, used as a server-side fallback.
+- **MCP client Roots:** Configured directly in supported MCP clients (`roots/list`).
 
 Security behavior:
 
@@ -567,13 +620,20 @@ Security behavior:
   and `upload_file` have no extension limit by default; see
   `TELEGRAM_FILE_EXTENSIONS` above to add one.
 
-Run with allowed roots:
+Run with allowed roots via environment variable:
+
+```bash
+# Semicolon- or comma-separated roots
+TELEGRAM_ALLOWED_ROOTS="/data/telegram,/tmp/telegram-mcp" uv run main.py
+```
+
+Or run with allowed roots via CLI positional arguments:
 
 ```bash
 uv run main.py /data/telegram /tmp/telegram-mcp
 ```
 
-From an MCP client configuration, pass the same roots after `main.py`:
+From an MCP client configuration, you can pass roots via `env` or as arguments after `main.py`:
 
 ```json
 {
@@ -751,7 +811,7 @@ Telegram messages, display names, chat titles, and button labels are untrusted c
   Then set `TELEGRAM_SESSION_STRING` in `.env`. The MCP server does not perform
   interactive phone-code login over stdio.
 - **Invalid API credentials:** verify `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` at [my.telegram.org/apps](https://my.telegram.org/apps).
-- **Database is locked:** prefer string sessions, or make sure no other process is using the same file session.
+- **Database is locked:** make sure no other process is using the same file session.
 - **`AuthKeyDuplicatedError` / "Another telegram-mcp process is already connected with this session":** two processes tried to connect the same Telegram session at once (e.g. an MCP client restarted the connector before the old process exited), which Telegram rejects and can invalidate the session for both. The server now takes an exclusive lock per session before connecting; a second concurrent launch waits briefly (default 20s, override with `TELEGRAM_LOCK_GRACE_SECONDS`) for the first to release it and otherwise exits without ever calling `connect()`, instead of racing into a duplicate connection. Retry once only one instance is running — the refusal names the PID holding the lock. If several instances on this host are meant to share one session (all reaching Telegram from the same IP), set `TELEGRAM_SESSION_LOCK=shared`; see [Sharing one session from one host](#sharing-one-session-from-one-host).
 - **File tools are disabled:** pass allowed roots or configure MCP Roots in your client.
 - **Path rejected:** ensure the path is inside an allowed root and does not use traversal or wildcard patterns.
