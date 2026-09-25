@@ -45,7 +45,6 @@ from telethon.tl.types import (
     DialogFilterDefault,
     TextWithEntities,
 )
-import re
 import hashlib
 import tempfile
 
@@ -2312,6 +2311,13 @@ async def _resolve_writable_file_path(
     return candidate, None
 
 
+# Global variables to store CLI-parsed configuration for runner.py
+global _CLI_TRANSPORT, _CLI_HOST, _CLI_PORT
+_CLI_TRANSPORT = None
+_CLI_HOST = None
+_CLI_PORT = None
+
+
 def _parse_allowed_roots_env(value: Optional[str]) -> List[str]:
     """Parse a delimiter-separated list of paths from an environment variable string.
 
@@ -2331,10 +2337,13 @@ def _configure_allowed_roots_from_cli(argv: Optional[List[str]] = None) -> None:
         add_help=False,
         description=(
             "Optional positional arguments define server-side allowed roots "
-            "for file-path tools."
+            "for file-path tools. Also accepts --transport, --host, and --port CLI flags."
         ),
     )
     parser.add_argument("allowed_roots", nargs="*")
+    parser.add_argument("--transport", choices=["stdio", "http", "sse"], default="stdio")
+    parser.add_argument("--host")
+    parser.add_argument("--port", type=int)
     parsed, _unknown = parser.parse_known_args(argv or [])
 
     raw_roots: List[str] = list(parsed.allowed_roots)
@@ -2353,8 +2362,11 @@ def _configure_allowed_roots_from_cli(argv: Optional[List[str]] = None) -> None:
         resolved = root.resolve(strict=True)
         resolved_roots.append(resolved)
 
-    global SERVER_ALLOWED_ROOTS
+    global SERVER_ALLOWED_ROOTS, _CLI_TRANSPORT, _CLI_HOST, _CLI_PORT
     SERVER_ALLOWED_ROOTS = _dedupe_paths(resolved_roots)
+    _CLI_TRANSPORT = parsed.transport
+    _CLI_HOST = parsed.host
+    _CLI_PORT = parsed.port
 
 
 # Re-export shared runtime names for tool modules that use star imports.
