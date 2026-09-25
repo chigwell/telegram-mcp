@@ -195,7 +195,10 @@ def _install_annotation_hook() -> None:
                                 type="text",
                                 text=(
                                     "Telegram MCP tool timed out after "
-                                    f"{timeout:g}s (code: GEN-TIMEOUT)."
+                                    f"{timeout:g}s (code: GEN-TIMEOUT). "
+                                    "Completion is unknown; a write may already have "
+                                    "succeeded. Check destination state before retrying "
+                                    "non-idempotent operations."
                                 ),
                             )
                         ],
