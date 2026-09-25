@@ -44,12 +44,13 @@ proxy = [
 "Bug Tracker" = "https://github.com/chigwell/telegram-mcp/issues"
 
 [tool.setuptools]
-py-modules = ["main", "sanitize", "session_string_generator"]
+py-modules = ["main", "migrate_session", "sanitize", "session_string_generator"]
 packages = ["telegram_mcp", "telegram_mcp.tools"]
 
 [project.scripts]
 telegram-mcp = "main:main"
 telegram-mcp-generate-session = "session_string_generator:main"
+telegram-mcp-migrate-session = "migrate_session:main"
 
 [tool.black]
 line-length = 99
