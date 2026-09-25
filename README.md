@@ -25,6 +25,7 @@ Message sent successfully:
 
 ## Contents
 
+- [Skills & Practical Workflows](skills/README.md)
 - [What It Can Do](#what-it-can-do)
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
@@ -39,6 +40,15 @@ Message sent successfully:
 - [Security Notes](#security-notes)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
+
+## Skills & Workflows
+
+Looking for ready-to-use workflows, prompt examples, or integration recipes?
+Explore the [**Skills Documentation**](skills/README.md) for step-by-step guides on:
+- [Summarizing unread messages safely](skills/examples/summarize-latest-unread.md)
+- [Drafting replies without sending](skills/examples/draft-replies-without-sending.md)
+- [Triaging action items & urgent requests](skills/examples/triage-and-action-items.md)
+- [Searching chat history and expanding context](skills/examples/search-chat-and-summarize-context.md)
 
 ## What It Can Do
 
