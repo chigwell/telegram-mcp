@@ -2172,29 +2172,98 @@ async def get_pinned_messages(chat_id: Union[int, str], account: str = None) -> 
 @with_account(readonly=False)
 @validate_id("chat_id")
 async def create_poll(
-    chat_id: int,
+    chat_id: Union[int, str],
     question: str,
-    options: list,
+    options: Union[List[str], List[Dict[str, Any]], str],
     multiple_choice: bool = False,
     quiz_mode: bool = False,
     public_votes: bool = True,
-    close_date: str = None,
-    account: str = None,
+    close_date: Optional[str] = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Create a poll in a chat using Telegram's native poll feature.
 
     Args:
-        chat_id: The ID of the chat to send the poll to
-        question: The poll question
-        options: List of answer options (2-10 options)
-        multiple_choice: Whether users can select multiple answers
-        quiz_mode: Whether this is a quiz (has correct answer)
-        public_votes: Whether votes are public
-        close_date: Optional close date in ISO format (YYYY-MM-DD HH:MM:SS)
+        chat_id: The ID or username of the chat to send the poll to.
+        question: The poll question.
+        options: List of answer options (2-10 options). Can be a list of strings
+            or option objects, or a JSON string / comma-separated string.
+        multiple_choice: Whether users can select multiple answers.
+        quiz_mode: Whether this is a quiz (has correct answer).
+        public_votes: Whether votes are public.
+        close_date: Optional close date in ISO format (YYYY-MM-DD HH:MM:SS).
+        account: Account name to use (optional).
     """
     try:
+        # Validate question
+        if not question or not str(question).strip():
+            return "Error: Poll question cannot be empty."
+        question_text = str(question).strip()
+        if len(question_text) > 300:
+            return "Error: Poll question cannot exceed 300 characters."
+
+        # Parse and normalize options
+        if isinstance(options, str):
+            options_str = options.strip()
+            if options_str.startswith("[") and options_str.endswith("]"):
+                try:
+                    parsed = json.loads(options_str)
+                    if isinstance(parsed, list):
+                        options = parsed
+                except Exception:
+                    pass
+            if isinstance(options, str):
+                sep = "\n" if "\n" in options_str else ","
+                options = [opt.strip() for opt in options_str.split(sep) if opt.strip()]
+
+        if not isinstance(options, (list, tuple)):
+            return "Error: Poll options must be a list of strings."
+
+        raw_options = options
+        normalized_options: List[str] = []
+        for opt in raw_options:
+            if isinstance(opt, dict):
+                # Try common keys used by LLMs: "option", "text", "value", "title", "label"
+                val = None
+                for key in ("option", "text", "value", "title", "label"):
+                    if key in opt and opt[key] is not None:
+                        val = str(opt[key]).strip()
+                        break
+                if val is None:
+                    # Pick the first non-empty value in the dict
+                    for v in opt.values():
+                        if v is not None and str(v).strip():
+                            val = str(v).strip()
+                            break
+                opt_str = val if val is not None else ""
+            else:
+                opt_str = str(opt).strip()
+
+            if not opt_str:
+                return "Error: Poll options cannot be empty."
+            if len(opt_str) > 100:
+                return "Error: Each poll option cannot exceed 100 characters."
+            normalized_options.append(opt_str)
+
+        if len(normalized_options) < 2:
+            return "Error: Poll must have at least 2 options."
+        if len(normalized_options) > 10:
+            return "Error: Poll can have at most 10 options."
+
+        if len(set(normalized_options)) != len(normalized_options):
+            return "Error: Poll options must be unique."
+
+        # Parse close date if provided
+        close_date_obj = None
+        if close_date:
+            try:
+                close_date_obj = datetime.fromisoformat(close_date.replace("Z", "+00:00"))
+            except ValueError:
+                return "Invalid close_date format. Use YYYY-MM-DD HH:MM:SS format."
+
         cl = get_client(account)
+        await ensure_connected(cl)
         entity = await resolve_entity(chat_id, cl)
 
         if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
@@ -2207,30 +2276,16 @@ async def create_poll(
                 chat_id=chat_id,
             )
 
-        # Validate options
-        if len(options) < 2:
-            return "Error: Poll must have at least 2 options."
-        if len(options) > 10:
-            return "Error: Poll can have at most 10 options."
-
-        # Parse close date if provided
-        close_date_obj = None
-        if close_date:
-            try:
-                close_date_obj = datetime.fromisoformat(close_date.replace("Z", "+00:00"))
-            except ValueError:
-                return f"Invalid close_date format. Use YYYY-MM-DD HH:MM:SS format."
-
         # Create the poll using InputMediaPoll with SendMediaRequest
         from telethon.tl.types import InputMediaPoll, Poll, PollAnswer, TextWithEntities
         import random
 
         poll = Poll(
             id=random.randint(0, 2**63 - 1),
-            question=TextWithEntities(text=question, entities=[]),
+            question=TextWithEntities(text=question_text, entities=[]),
             answers=[
                 PollAnswer(text=TextWithEntities(text=option, entities=[]), option=bytes([i]))
-                for i, option in enumerate(options)
+                for i, option in enumerate(normalized_options)
             ],
             # Telethon 1.44 made `hash` a required argument on Poll. It caches
             # server-side results, so a poll being created sends 0.
