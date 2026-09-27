@@ -104,6 +104,22 @@ async def test_connect_authorized_client_allows_different_sessions_concurrently(
 
 
 @pytest.mark.asyncio
+async def test_connect_authorized_client_refuses_same_session_under_another_label():
+    first = _FakeClient(authorized=True, identity="shared-session")
+    second = _FakeClient(authorized=True, identity="shared-session")
+
+    await runner._connect_authorized_client("default", first)
+
+    with pytest.raises(runner.SessionLockError, match="already connected"):
+        await runner._connect_authorized_client("work", second)
+
+    assert second.connected is False
+
+    runner._session_locks["default"].release()
+    runner._session_locks.clear()
+
+
+@pytest.mark.asyncio
 async def test_shared_lock_mode_lets_instances_share_a_session(monkeypatch):
     monkeypatch.setenv("TELEGRAM_SESSION_LOCK", "shared")
     first = _FakeClient(authorized=True, identity="shared-session")
