@@ -631,6 +631,7 @@ async def send_scheduled_message(
     chat_id: Union[int, str],
     message: str,
     schedule_date: Union[str, int],
+    parse_mode: Optional[str] = None,
     account: str = None,
 ) -> str:
     """
@@ -641,8 +642,19 @@ async def send_scheduled_message(
         schedule_date: When to send the message. Either an ISO-8601 string
             (e.g. "2026-05-01T14:30:00" or "2026-05-01T14:30:00Z") or a Unix
             timestamp (int). Naive datetimes are treated as UTC.
+        parse_mode: Optional formatting mode. Use 'html' for HTML tags (<b>, <i>,
+            <code>, <pre>, <a href="...">), 'md' or 'markdown' for Markdown (**bold**,
+            __italic__, `code`, ```pre```), or 'plain' to send the text verbatim.
+            If omitted, the client default applies (Markdown), as in earlier versions.
+            Rich modes ('rich', 'rich_md', 'rich_markdown', 'rich_html') are not
+            supported for scheduled messages.
     """
     try:
+        if parse_mode and parse_mode.lower() in RICH_PARSE_MODES:
+            return (
+                f"parse_mode='{parse_mode}' is not supported for scheduled messages. "
+                "Use 'md', 'html' or 'plain'."
+            )
         cl = get_client(account)
         await ensure_connected(cl)
         dt, schedule_error = parse_schedule_date(schedule_date)
@@ -650,7 +662,12 @@ async def send_scheduled_message(
             return schedule_error
 
         entity = await resolve_entity(chat_id, cl)
-        result = await cl.send_message(entity, message, schedule=dt)
+        kwargs = {"schedule": dt}
+        if parse_mode is not None:
+            # Omitted parse_mode keeps Telethon's client default (Markdown) for
+            # backward compatibility; 'plain' maps to None, which disables parsing.
+            kwargs["parse_mode"] = None if parse_mode.lower() == "plain" else parse_mode
+        result = await cl.send_message(entity, message, **kwargs)
         message_id = getattr(result, "id", None)
         return f"Scheduled message {message_id} for {dt.isoformat()} in chat {chat_id}."
     except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
