@@ -2221,12 +2221,20 @@ async def send_reaction(
     Args:
         chat_id: The chat ID or username
         message_id: The message ID to react to
-        emoji: The emoji to react with (e.g., "👍", "❤️", "🔥", "😂", "😮", "😢", "🎉", "💩", "👎")
+        emoji: A standard emoji (e.g., "👍") or custom:<document_id> from get_message_reactions.
         big: Whether to show a big animation for the reaction (default: False)
     """
     try:
         cl = get_client(account)
-        from telethon.tl.types import ReactionEmoji
+        from telethon.tl.types import ReactionCustomEmoji, ReactionEmoji
+
+        if emoji.startswith("custom:"):
+            document_id = emoji.removeprefix("custom:")
+            if not document_id.isascii() or not document_id.isdigit() or int(document_id) <= 0:
+                return "Invalid custom reaction. Use custom:<positive document ID>."
+            reaction = ReactionCustomEmoji(document_id=int(document_id))
+        else:
+            reaction = ReactionEmoji(emoticon=emoji)
 
         peer = await resolve_input_entity(chat_id, cl)
         await cl(
@@ -2234,7 +2242,7 @@ async def send_reaction(
                 peer=peer,
                 msg_id=message_id,
                 big=big,
-                reaction=[ReactionEmoji(emoticon=emoji)],
+                reaction=[reaction],
             )
         )
         return f"Reaction '{emoji}' sent to message {message_id} in chat {chat_id}."
@@ -2304,6 +2312,15 @@ async def get_message_reactions(
         from telethon.tl.types import ReactionEmoji, ReactionCustomEmoji
 
         peer = await resolve_input_entity(chat_id, cl)
+        message = await cl.get_messages(peer, ids=message_id)
+        if message is None:
+            return f"Message {message_id} not found in chat {chat_id}."
+
+        if not getattr(getattr(message, "reactions", None), "results", None):
+            return json.dumps(
+                {"message_id": message_id, "chat_id": str(chat_id), "reactions": [], "count": 0},
+                indent=2,
+            )
 
         result = await cl(
             functions.messages.GetMessageReactionsListRequest(
@@ -2312,9 +2329,6 @@ async def get_message_reactions(
                 limit=limit,
             )
         )
-
-        if not result.reactions:
-            return f"No reactions on message {message_id} in chat {chat_id}."
 
         reactions_data = []
         for reaction in result.reactions:
