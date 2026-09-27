@@ -214,19 +214,13 @@ async def create_folder(
     """
     try:
         cl = get_client(account)
-        # Get existing folders to check count and find next ID
+        # Get existing folders to find the next available ID
         result = await cl(functions.messages.GetDialogFiltersRequest())
 
         existing_ids = set()
-        folder_count = 0
         for f in result.filters:
             if isinstance(f, (DialogFilter, DialogFilterChatlist)):
                 existing_ids.add(f.id)
-                folder_count += 1
-
-        # Telegram limit: max 10 custom folders
-        if folder_count >= 10:
-            return "Cannot create folder: Telegram limit is 10 folders. Delete one first."
 
         # Find next available ID (IDs 0 and 1 are reserved for system)
         new_id = 2
@@ -262,7 +256,20 @@ async def create_folder(
             exclude_archived=exclude_archived,
         )
 
-        await cl(functions.messages.UpdateDialogFilterRequest(id=new_id, filter=new_filter))
+        # Don't pre-emptively cap folder count client-side: Telegram's actual
+        # limit differs by account (10 for regular accounts, 20 for Premium)
+        # and may change server-side. Let the API call be the source of
+        # truth and surface the real error if the account is at its limit.
+        try:
+            await cl(functions.messages.UpdateDialogFilterRequest(id=new_id, filter=new_filter))
+        except telethon.errors.rpcerrorlist.BadRequestError as e:
+            if "DIALOG_FILTERS_TOO_MUCH" in (getattr(e, "message", None) or str(e)):
+                return (
+                    "Cannot create folder: you've reached Telegram's folder limit "
+                    "for your account (10 for regular accounts, 20 for Premium). "
+                    "Delete a folder first."
+                )
+            raise
 
         return json.dumps(
             {
