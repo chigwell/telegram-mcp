@@ -1058,9 +1058,17 @@ async def list_messages(
         # Prepare filter parameters
         params = {}
         if search_query:
-            # IMPORTANT: Do not combine offset_date with search.
-            # Use server-side search alone, then enforce date bounds client-side.
+            # With search, Telethon sends offset_date as messages.search
+            # max_date ("sending date smaller than") on the first request only
+            # and pages by offset_id after that, so walking newest -> oldest
+            # starts at to_date instead of at the newest match. What must not
+            # be combined with search is reverse=True (max_date then cuts off
+            # the direction being walked). The client-side checks below stay
+            # as a safety net in case the server ignores max_date.
             params["search"] = search_query
+            if to_date_obj:
+                # Next midnight exactly: whole seconds, so to_date stays inclusive.
+                params["offset_date"] = to_date_obj + timedelta(microseconds=1)
             messages = []
             async for msg in cl.iter_messages(entity, **params):  # newest -> oldest
                 if to_date_obj and msg.date > to_date_obj:
