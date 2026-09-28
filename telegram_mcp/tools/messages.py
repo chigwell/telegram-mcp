@@ -2654,7 +2654,7 @@ async def clear_draft(chat_id: Union[int, str], account: str = None) -> str:
     annotations=ToolAnnotations(
         title="Export Unread Messages",
         openWorldHint=True,
-        readOnlyHint=True,
+        readOnlyHint=False,
         destructiveHint=False,
     )
 )

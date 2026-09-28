@@ -261,6 +261,9 @@ TELEGRAM_EXPOSED_TOOLS=read-only+send_message,reply_to_message,send_file
 An unknown name in the allowlist aborts startup, so a typo cannot silently
 degrade into a narrower surface that looks like it worked.
 
+At startup the server prints the names of the tools the mode hides to stderr;
+those are the names the `+` list accepts.
+
 This is an MCP tool-surface restriction, not a Telegram session sandbox or
 reduced Telegram account permission. The Telegram session string still has its
 normal authority inside the server process; read-only mode only prevents

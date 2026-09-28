@@ -1125,7 +1125,7 @@ async def get_banned_users(chat_id: Union[int, str], account: str = None) -> str
 
 
 @mcp.tool(
-    annotations=ToolAnnotations(title="Get Invite Link", openWorldHint=True, readOnlyHint=True)
+    annotations=ToolAnnotations(title="Get Invite Link", openWorldHint=True, readOnlyHint=False)
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
@@ -1222,7 +1222,7 @@ async def join_chat_by_link(link: str, account: str = None) -> str:
 
 
 @mcp.tool(
-    annotations=ToolAnnotations(title="Export Chat Invite", openWorldHint=True, readOnlyHint=True)
+    annotations=ToolAnnotations(title="Export Chat Invite", openWorldHint=True, readOnlyHint=False)
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
