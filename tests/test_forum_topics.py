@@ -208,3 +208,105 @@ async def test_delete_forum_topic_requires_forum_enabled(monkeypatch):
         == "The specified supergroup does not have forum topics enabled. Use enable_forum_topics first."
     )
     assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_list_topics_sends_get_forum_topics_request(monkeypatch):
+    entity = _supergroup(forum=True)
+    topic = SimpleNamespace(
+        id=10,
+        title="Engineering",
+        total_messages=42,
+        unread_count=3,
+        closed=False,
+        hidden=False,
+        top_message=None,
+    )
+    client = RecordingClient(SimpleNamespace(topics=[topic], messages=[]))
+    _patch_client(monkeypatch, entity, client)
+
+    result = await chats.list_topics(chat_id=12345, limit=50, offset_topic=5, search_query="Eng")
+
+    payload = json.loads(result)
+    assert payload["results"] == [
+        {
+            "id": 10,
+            "title": "Engineering",
+            "total_messages": 42,
+            "unread": 3,
+            "closed": False,
+            "hidden": False,
+        }
+    ]
+    assert len(client.requests) == 1
+    request = client.requests[0]
+    assert isinstance(request, chats.GetForumTopicsRequest)
+    assert request.channel is entity
+    assert request.limit == 50
+    assert request.offset_topic == 5
+    assert request.q == "Eng"
+
+
+@pytest.mark.asyncio
+async def test_list_topics_requires_forum_enabled(monkeypatch):
+    entity = _supergroup(forum=False)
+    client = RecordingClient()
+    _patch_client(monkeypatch, entity, client)
+
+    result = await chats.list_topics(chat_id=12345)
+
+    assert result == "The specified supergroup does not have forum topics enabled."
+    assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_list_topics_requires_supergroup(monkeypatch):
+    entity = Channel(
+        id=99999,
+        title="Broadcast Channel",
+        photo=None,
+        date=None,
+        creator=True,
+        left=False,
+        broadcast=True,
+        verified=False,
+        megagroup=False,
+        restricted=False,
+        signatures=False,
+        min=False,
+        scam=False,
+        has_link=False,
+        has_geo=False,
+        slowmode_enabled=False,
+        call_active=False,
+        call_not_empty=False,
+        fake=False,
+        gigagroup=False,
+        noforwards=False,
+        join_to_send=False,
+        join_request=False,
+        forum=False,
+        stories_hidden=False,
+        stories_hidden_min=False,
+        stories_unavailable=False,
+        access_hash=67890,
+    )
+    client = RecordingClient()
+    _patch_client(monkeypatch, entity, client)
+
+    result = await chats.list_topics(chat_id=99999)
+
+    assert result == "The specified chat is not a supergroup."
+    assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_list_topics_empty(monkeypatch):
+    entity = _supergroup(forum=True)
+    client = RecordingClient(SimpleNamespace(topics=[], messages=[]))
+    _patch_client(monkeypatch, entity, client)
+
+    result = await chats.list_topics(chat_id=12345)
+
+    assert result == "No topics found for this chat."
+    assert len(client.requests) == 1

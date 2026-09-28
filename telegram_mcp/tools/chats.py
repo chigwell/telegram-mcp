@@ -231,8 +231,9 @@ async def subscribe_public_channel(channel: Union[int, str], account: str = None
 
 @mcp.tool(annotations=ToolAnnotations(title="List Topics", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
+@validate_id("chat_id")
 async def list_topics(
-    chat_id: int,
+    chat_id: Union[int, str],
     limit: int = 200,
     offset_topic: int = 0,
     search_query: str = None,
@@ -246,7 +247,7 @@ async def list_topics(
     reply_to_message for text.
 
     Args:
-        chat_id: The ID of the forum-enabled chat (supergroup).
+        chat_id: The forum-enabled supergroup ID or username.
         limit: Maximum number of topics to retrieve.
         offset_topic: Topic ID offset for pagination.
         search_query: Optional query to filter topics by title.
