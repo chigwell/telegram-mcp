@@ -434,3 +434,23 @@ def test_cli_host_and_port_flags(monkeypatch):
     runtime._configure_allowed_roots_from_cli(["--host", "0.0.0.0", "--port", "9000"])
     assert runtime._CLI_HOST == "0.0.0.0"
     assert runtime._CLI_PORT == 9000
+
+
+def test_main_prints_the_tools_exposure_hides(monkeypatch, capsys):
+    """The hidden names are what a user copies into read-only+<tool>."""
+    monkeypatch.setattr(runner, "_configure_allowed_roots_from_cli", lambda *a, **k: None)
+    monkeypatch.setattr(runner._runtime, "_apply_file_extension_overrides", lambda: None)
+    monkeypatch.setattr(
+        runner._runtime,
+        "_apply_exposed_tools_mode",
+        lambda: ["send_message", "export_chat_invite"],
+    )
+    monkeypatch.setattr(runner._transcription, "validate_transcription_config", lambda: None)
+    monkeypatch.setattr(runner, "_session_lock_shared", lambda: None)
+    monkeypatch.setattr(runner.asyncio, "run", lambda coro: coro.close())
+
+    runner.main()
+
+    err = capsys.readouterr().err
+    assert "hides 2 tool(s)" in err
+    assert "export_chat_invite, send_message" in err
