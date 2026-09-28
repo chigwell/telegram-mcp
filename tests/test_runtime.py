@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1291,3 +1292,65 @@ def test_stderr_utf8_reconfigure():
     test_text = "Testing stderr with unicode: 🔥 🚀 café\n"
     sys.stderr.write(test_text)
     sys.stderr.flush()
+
+
+def test_resolve_session_path_special_cases():
+    """Verify empty, absolute, and :memory: sessions return untouched."""
+    assert runtime._resolve_session_path("") == ""
+    assert runtime._resolve_session_path(None) is None
+    assert runtime._resolve_session_path(":memory:") == ":memory:"
+    abs_path = os.path.abspath("some/path/my_session.session")
+    assert runtime._resolve_session_path(abs_path) == abs_path
+
+
+def test_resolve_session_path_resolves_existing_in_project_root(tmp_path, monkeypatch):
+    """Verify relative session name resolves to project root when session file exists there."""
+    fake_root = tmp_path / "project"
+    fake_root.mkdir()
+    session_file = fake_root / "my_custom.session"
+    session_file.touch()
+
+    monkeypatch.setattr(runtime, "PROJECT_ROOT", str(fake_root))
+
+    # Even if current directory is somewhere else
+    sub_dir = tmp_path / "other_dir"
+    sub_dir.mkdir()
+    monkeypatch.chdir(sub_dir)
+
+    resolved = runtime._resolve_session_path("my_custom")
+    assert resolved == str(fake_root / "my_custom")
+
+
+def test_resolve_session_path_resolves_in_subdirectory(tmp_path, monkeypatch):
+    """Verify relative session name resolves to project root when invoked from a subdirectory."""
+    fake_root = tmp_path / "project"
+    sub_dir = fake_root / "sub" / "deep"
+    sub_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(runtime, "PROJECT_ROOT", str(fake_root))
+    monkeypatch.chdir(sub_dir)
+
+    # Even if the file does not exist yet, running from a subdirectory resolves against project root
+    resolved = runtime._resolve_session_path("new_account")
+    assert resolved == str(fake_root / "new_account")
+
+
+def test_discover_accounts_resolves_session_name_against_project_root(tmp_path, monkeypatch):
+    """Verify _discover_accounts resolves TELEGRAM_SESSION_NAME against project root."""
+    fake_root = tmp_path / "project"
+    fake_root.mkdir()
+    (fake_root / "app_session.session").touch()
+
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_SESSION_NAME", "app_session")
+    monkeypatch.setattr(runtime, "PROJECT_ROOT", str(fake_root))
+    monkeypatch.setattr(runtime, "TelegramClient", _FakeTelegramClient)
+
+    # Run from outside root
+    other_dir = tmp_path / "outside"
+    other_dir.mkdir()
+    monkeypatch.chdir(other_dir)
+
+    accounts = runtime._discover_accounts()
+    assert "default" in accounts
+    assert accounts["default"].args[0] == str(fake_root / "app_session")
