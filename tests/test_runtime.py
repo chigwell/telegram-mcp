@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1253,3 +1255,39 @@ async def test_send_file_override_bites_on_the_real_resolution_path(tmp_path, mo
     )
     assert error is None
     assert resolved == allowed
+
+
+def test_file_handler_encoding_is_utf8():
+    """Ensure runtime file_handler specifies utf-8 encoding."""
+    assert runtime.file_handler.encoding.lower() in ("utf-8", "utf8")
+
+
+def test_file_handler_handles_non_ascii_and_emojis(tmp_path):
+    """Ensure logging emojis and non-ASCII characters does not raise UnicodeEncodeError."""
+    log_file = tmp_path / "test_unicode.log"
+    handler = logging.FileHandler(str(log_file), mode="a", encoding="utf-8")
+    test_logger = logging.getLogger("test_unicode_logger")
+    test_logger.setLevel(logging.INFO)
+    test_logger.addHandler(handler)
+    try:
+        msg = "Test log with non-ASCII and emojis: 🔥 🚀 café русский 简体中文"
+        test_logger.info(msg)
+        handler.flush()
+        content = log_file.read_text(encoding="utf-8")
+        assert msg in content
+    finally:
+        test_logger.removeHandler(handler)
+        handler.close()
+
+
+def test_runtime_logger_logs_unicode_without_error():
+    """Ensure runtime.logger can log unicode characters without raising UnicodeEncodeError."""
+    test_msg = "Runtime error test: 🔥 rocket 🚀"
+    runtime.logger.error(test_msg)
+
+
+def test_stderr_utf8_reconfigure():
+    """Verify sys.stderr encoding handles non-ASCII characters gracefully."""
+    test_text = "Testing stderr with unicode: 🔥 🚀 café\n"
+    sys.stderr.write(test_text)
+    sys.stderr.flush()

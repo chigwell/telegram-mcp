@@ -9,6 +9,13 @@ import sqlite3
 import logging
 import mimetypes
 import unicodedata
+
+# Ensure sys.stderr is reconfigured for UTF-8 on Windows where possible
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except Exception:
+        pass
 from contextlib import contextmanager
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta, timezone
@@ -816,7 +823,7 @@ script_dir = os.path.dirname(package_dir)
 log_file_path = os.path.join(script_dir, "mcp_errors.log")
 
 try:
-    file_handler = logging.FileHandler(log_file_path, mode="a")  # Append mode
+    file_handler = logging.FileHandler(log_file_path, mode="a", encoding="utf-8")  # Append mode
     file_handler.setLevel(logging.ERROR)
 
     # Create formatters
