@@ -1194,31 +1194,37 @@ async def transcribe_voice(
     """
     Transcribe a voice message or video note (video circle) to text.
 
-    Two engines behind one interface:
-    - "groq" (default, override with TELEGRAM_TRANSCRIBE_ENGINE): Groq-hosted
-      whisper-large-v3-turbo. Downloads the audio and sends it to Groq - not
-      free, and leaves the server. Does not drop the recording's last words.
+    Engines (default TELEGRAM_TRANSCRIBE_ENGINE, otherwise "groq"):
+    - "groq": Groq-hosted whisper-large-v3-turbo. Downloads the audio and
+      sends it to Groq - not free, and leaves the server. Does not drop the
+      recording's last words.
     - "telegram": native Telegram Premium transcription. Free, audio never
       leaves Telegram, but empirically drops the last speech segment in
       roughly 2 of 3 recordings (proven with per-segment timestamps). Use for
       chats you don't want sent to a third party, or when Groq is unavailable.
       Requires Telegram Premium on this account; polls briefly (up to ~20s)
       while Telegram finishes a long recording.
+    - "openai": any OpenAI-compatible transcription endpoint
+      (TELEGRAM_TRANSCRIBE_OPENAI_URL, optional API key), e.g. OpenAI or a
+      self-hosted Parakeet/speaches server.
+    - "whisper": a local faster-whisper model on this server. Audio never
+      leaves the machine; slower on CPU.
 
     Results are cached per engine, by (chat_id, message_id, engine) - a
     repeat call with the same engine returns the cached text without
-    hitting either API again. Asking for an engine that has no cached
-    result transcribes with it, even when the other engine's text is
+    hitting any engine again. Asking for an engine that has no cached
+    result transcribes with it, even when another engine's text is
     already cached.
 
     The returned text is a machine transcript, not a verbatim quote: proper
-    names, punctuation and occasional words drift under both engines.
+    names, punctuation and occasional words drift under every engine.
 
     Args:
         chat_id: The chat ID or username.
         message_id: The message ID containing the voice/video-note media.
-        engine: "groq" or "telegram". Defaults to TELEGRAM_TRANSCRIBE_ENGINE
-            (groq unless configured otherwise).
+        engine: "groq", "telegram", "openai" or "whisper".
+            Defaults to TELEGRAM_TRANSCRIBE_ENGINE (groq unless configured
+            otherwise).
     """
     try:
         mode = transcription.transcribe_mode()
@@ -1233,10 +1239,11 @@ async def transcribe_voice(
 
         chosen_engine = (engine or transcription.default_engine()).strip().lower()
         if chosen_engine not in transcription.ENGINES:
-            return f"Invalid engine '{engine}'. Use 'telegram' or 'groq'."
+            accepted = ", ".join(f"'{name}'" for name in sorted(transcription.ENGINES))
+            return f"Invalid engine '{engine}'. Use one of: {accepted}."
 
         # Pinned to the chosen engine on purpose: a cached telegram transcript
-        # must not answer a groq request. The native engine drops the last
+        # must not answer a request for any other engine. The native engine drops the last
         # speech segment and the loss cannot be seen in the text.
         cached = transcription.get_cached_transcript(
             numeric_chat_id, message_id, source=chosen_engine
@@ -1261,11 +1268,9 @@ async def transcribe_voice(
         if not transcription.is_transcribable(msg):
             return f"Message {message_id} has no voice message or video note to transcribe."
 
-        if chosen_engine == "groq" and not os.getenv("GROQ_API_KEY"):
-            return (
-                "GROQ_API_KEY is not configured on this server. "
-                "Use engine='telegram' or set GROQ_API_KEY."
-            )
+        config_error = transcription.engine_config_error(chosen_engine)
+        if config_error:
+            return config_error
 
         duration = transcription.voice_duration(msg)
         # Cache-first and locked by (chat, message, engine): two concurrent

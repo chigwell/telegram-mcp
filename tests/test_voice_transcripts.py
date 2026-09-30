@@ -485,3 +485,43 @@ async def test_transcribe_voice_explicit_engine_overrides_default(
     await messages.transcribe_voice(chat_id=1, message_id=5, engine="telegram", account=None)
 
     assert seen_engine["engine"] == "telegram"
+
+
+@pytest.mark.asyncio
+async def test_transcribe_voice_openai_without_url(monkeypatch, transcript_cache_dir):
+    monkeypatch.delenv("TELEGRAM_TRANSCRIBE_OPENAI_URL", raising=False)
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE", "on-demand")
+    entity = SimpleNamespace()
+    client = _FakeClient(messages_by_id={5: _voice_msg(id=5)})
+    _patch_client(monkeypatch, client, entity, 1)
+
+    result = await messages.transcribe_voice(
+        chat_id=1, message_id=5, engine="openai", account=None
+    )
+
+    assert "TELEGRAM_TRANSCRIBE_OPENAI_URL" in result
+
+
+@pytest.mark.asyncio
+async def test_transcribe_voice_openai_caches_under_its_own_engine(
+    monkeypatch, transcript_cache_dir
+):
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE", "on-demand")
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_OPENAI_URL", "http://localhost:5092/v1")
+    transcription.save_transcript(1, 5, "groq", "groq text")
+    monkeypatch.setattr(
+        transcription,
+        "transcribe",
+        _async_return({"status": "ok", "text": "openai text", "lang": "nl"}),
+    )
+    entity = SimpleNamespace()
+    client = _FakeClient(messages_by_id={5: _voice_msg(id=5)})
+    _patch_client(monkeypatch, client, entity, 1)
+
+    result = json.loads(
+        await messages.transcribe_voice(chat_id=1, message_id=5, engine="OpenAI", account=None)
+    )
+
+    assert result["text"] == "openai text"
+    assert result["source"] == "openai"
+    assert transcription.get_cached_transcript(1, 5, source="openai")["text"] == "openai text"
