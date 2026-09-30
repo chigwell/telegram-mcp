@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import pytest
+from telethon.tl import types
 
 from telegram_mcp.tools import events
 
@@ -315,3 +316,95 @@ def _target(chat_id):
         return chat_id if value is not None else None
 
     return _resolve
+
+
+# --- mention gating for group chats ---------------------------------------
+
+
+def _FakeSender(name="Seth Bodington", username="sethb"):
+    """A real Telethon User — utils.get_display_name type-checks its argument."""
+    return types.User(id=abs(hash(name)) % 10**9, first_name=name, username=username, bot=False)
+
+
+def _FakeChat(title="Set(h)Up"):
+    """A real Telethon Chat, for the same reason."""
+    return types.Chat(
+        id=abs(hash(title)) % 10**9,
+        title=title,
+        photo=None,
+        participants_count=3,
+        date=None,
+        version=1,
+    )
+
+
+class _FakeMessage:
+    def __init__(self, msg_id=1, mentioned=False):
+        self.id = msg_id
+        self.mentioned = mentioned
+
+
+class _FakeEvent:
+    """Minimum surface _on_new_incoming touches."""
+
+    def __init__(self, chat_id, is_private, mentioned=False, msg_id=1, sender=None, chat=None):
+        self.chat_id = chat_id
+        self.is_private = is_private
+        self.message = _FakeMessage(msg_id, mentioned)
+        self._sender = sender or _FakeSender()
+        self._chat = chat or _FakeChat()
+
+    async def get_sender(self):
+        return self._sender
+
+    async def get_chat(self):
+        return self._chat
+
+
+@pytest.mark.asyncio
+async def test_group_message_without_mention_is_ignored():
+    await events._on_new_incoming(_FakeEvent(-5348307578, is_private=False, mentioned=False))
+    assert events._pending_msgs == {}
+
+
+@pytest.mark.asyncio
+async def test_group_mention_records_the_room_not_the_sender():
+    await events._on_new_incoming(_FakeEvent(-5348307578, is_private=False, mentioned=True))
+
+    rec = events._pending_msgs[-5348307578]
+    assert rec["is_group"] is True
+    assert rec["name"] == "Set(h)Up"          # the room, never the person
+    assert rec["senders"] == ["Seth Bodington"]
+
+    summary = events._burst_summary(-5348307578, rec)
+    assert summary["is_group"] is True
+    assert summary["name"] == "Set(h)Up"
+    assert summary["senders"] == ["Seth Bodington"]
+
+
+@pytest.mark.asyncio
+async def test_group_burst_collects_distinct_senders():
+    chat = _FakeChat()
+    await events._on_new_incoming(
+        _FakeEvent(-1, False, mentioned=True, msg_id=1, sender=_FakeSender("Seth"), chat=chat)
+    )
+    await events._on_new_incoming(
+        _FakeEvent(-1, False, mentioned=True, msg_id=2, sender=_FakeSender("Glen"), chat=chat)
+    )
+    await events._on_new_incoming(
+        _FakeEvent(-1, False, mentioned=True, msg_id=3, sender=_FakeSender("Seth"), chat=chat)
+    )
+
+    rec = events._pending_msgs[-1]
+    assert rec["count"] == 3
+    assert rec["senders"] == ["Seth", "Glen"]
+
+
+@pytest.mark.asyncio
+async def test_private_message_needs_no_mention_and_keeps_old_shape():
+    await events._on_new_incoming(_FakeEvent(1078244326, is_private=True, mentioned=False))
+
+    rec = events._pending_msgs[1078244326]
+    assert rec["is_group"] is False
+    assert rec["name"] == "Seth Bodington"
+    assert rec["username"] == "sethb"
