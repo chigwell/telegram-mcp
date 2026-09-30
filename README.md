@@ -74,12 +74,17 @@ Aliases live in `${XDG_STATE_HOME:-~/.local/state}/telegram-mcp/aliases.json` (o
 
 ### Voice transcription
 
-`transcribe_voice(chat_id, message_id, engine=None)` turns a voice message or video note into text. Two engines are available:
+`transcribe_voice(chat_id, message_id, engine=None)` turns a voice message or video note into text. Five engines are available:
 
 - `groq` (default): uploads the recording to Groq's hosted `whisper-large-v3-turbo`. Leaves the server and costs a download+upload per call, but doesn't drop the recording's last few words the way native transcription does. Requires `GROQ_API_KEY`. Groq caps the size of a single upload, so a recording above `TELEGRAM_TRANSCRIBE_GROQ_MAX_MB` (default 25, the free-tier limit) is refused locally with a `too_large` error naming its size instead of being downloaded and rejected by the API. Raise the limit if your Groq tier allows bigger files, or transcribe that message with `engine='telegram'`, which has no such cap.
 - `telegram`: native Telegram Premium transcription (`messages.TranscribeAudioRequest`). Free and never leaves Telegram, but empirically drops the last speech segment in roughly 2 of 3 recordings and requires Telegram Premium on the account. Long recordings come back `pending` and are polled automatically.
+- `parakeet`: a self-hosted [Parakeet ASR server](https://github.com/achetronic/parakeet) (NVIDIA Parakeet TDT, OpenAI-compatible API). The audio goes only to your own server. Point `TELEGRAM_TRANSCRIBE_PARAKEET_URL` at it (default `http://localhost:5092`), set `TELEGRAM_TRANSCRIBE_PARAKEET_API_KEY` if the server has `PARAKEET_API_KEY` set, and set `TELEGRAM_TRANSCRIBE_LANGUAGE` for anything that isn't English — the server assumes `en` when no language is sent. Uploads above `TELEGRAM_TRANSCRIBE_PARAKEET_MAX_MB` (default 25, the server's own cap) are refused locally.
+- `openai`: any OpenAI-compatible `/audio/transcriptions` endpoint — OpenAI itself, [speaches](https://github.com/speaches-ai/speaches), LocalAI, a vLLM Whisper deployment, and so on. Set `TELEGRAM_TRANSCRIBE_OPENAI_URL` to the API base URL (e.g. `https://api.openai.com/v1`; a full `.../audio/transcriptions` URL also works), `TELEGRAM_TRANSCRIBE_OPENAI_API_KEY` for the bearer token (optional for keyless local servers), and `TELEGRAM_TRANSCRIBE_OPENAI_MODEL` (default `whisper-1`). Size cap: `TELEGRAM_TRANSCRIBE_OPENAI_MAX_MB` (default 25).
+- `whisper`: a local [faster-whisper](https://github.com/SYSTRAN/faster-whisper) model loaded inside the MCP server process. The audio never leaves the machine. Install the extra with `pip install 'telegram-mcp[whisper]'` (or `uv sync --extra whisper`). `TELEGRAM_TRANSCRIBE_WHISPER_MODEL` picks the model (default `small`; e.g. `large-v3-turbo` for better quality), `TELEGRAM_TRANSCRIBE_WHISPER_DEVICE` (`auto`/`cpu`/`cuda`), `TELEGRAM_TRANSCRIBE_WHISPER_COMPUTE_TYPE` (e.g. `int8` on CPU) and `TELEGRAM_TRANSCRIBE_WHISPER_MODEL_DIR` (where models are downloaded) tune it. The model is loaded once on first use and recordings are transcribed one at a time. Not available in the Alpine Docker image; run a Parakeet or OpenAI-compatible server next to the container instead.
 
-The engine is chosen per call via the `engine` argument, or otherwise defaults to `TELEGRAM_TRANSCRIBE_ENGINE` (`groq` or `telegram`). Results are cached by `(chat_id, message_id, engine)` in a local SQLite file so repeat reads and repeat listings never re-transcribe the same message. Concurrent requests for the same uncached recording are collapsed too: the second one waits for the first and returns its transcript, so a burst of callers costs one paid call, not one per caller. Every transcript is returned with a `note` marking it as a machine transcript, not a verbatim quote — treat it as a paraphrase, not exact wording.
+`TELEGRAM_TRANSCRIBE_LANGUAGE` (ISO-639-1, e.g. `nl`) is passed as a language hint to every engine except `telegram`; unset, the engines auto-detect. `TELEGRAM_TRANSCRIBE_TIMEOUT` (default 120 seconds) bounds a single request to the HTTP engines (`groq`, `parakeet`, `openai`).
+
+The engine is chosen per call via the `engine` argument, or otherwise defaults to `TELEGRAM_TRANSCRIBE_ENGINE` (`groq`, `telegram`, `parakeet`, `openai` or `whisper`). Results are cached by `(chat_id, message_id, engine)` in a local SQLite file so repeat reads and repeat listings never re-transcribe the same message. Concurrent requests for the same uncached recording are collapsed too: the second one waits for the first and returns its transcript, so a burst of callers costs one paid call, not one per caller. Every transcript is returned with a `note` marking it as a machine transcript, not a verbatim quote — treat it as a paraphrase, not exact wording.
 
 `get_history`, `get_messages`, and `list_messages` fill in already-cached transcripts for voice messages instead of leaving the text empty, controlled by `TELEGRAM_TRANSCRIBE`:
 
@@ -304,12 +309,14 @@ already-cached transcripts. Enable prefetching or pick an engine explicitly:
 
 ```env
 TELEGRAM_TRANSCRIBE=on-demand       # off / on-demand (default) / auto
-TELEGRAM_TRANSCRIBE_ENGINE=groq     # groq (default) or telegram
+TELEGRAM_TRANSCRIBE_ENGINE=groq     # groq (default), telegram, parakeet, openai or whisper
 GROQ_API_KEY=your_groq_api_key_here # required whenever engine=groq is used
 ```
 
 `engine=groq` requires `GROQ_API_KEY`; `engine=telegram` requires Telegram
-Premium on the account. `TELEGRAM_TRANSCRIBE_MAX_VOICES` (default 5) and
+Premium on the account; `engine=openai` requires `TELEGRAM_TRANSCRIBE_OPENAI_URL`;
+`engine=whisper` requires the `whisper` extra; `engine=parakeet` works against
+`http://localhost:5092` out of the box. `TELEGRAM_TRANSCRIBE_MAX_VOICES` (default 5) and
 `TELEGRAM_TRANSCRIBE_MAX_SECONDS` (default 300) bound how much `auto` mode
 prefetches per listing call; `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default
 `data/transcripts`) sets where the SQLite cache is written; `TELEGRAM_TRANSCRIBE_GROQ_MAX_MB`

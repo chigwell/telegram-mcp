@@ -38,6 +38,12 @@ dependencies = [
 proxy = [
     "python-socks>=2.4.3",
 ]
+# Required only for the local transcription engine (TELEGRAM_TRANSCRIBE_ENGINE=whisper).
+whisper = [
+    "faster-whisper>=1.1.0",
+    # faster-whisper 1.2.1 passes av.open(metadata_errors=...), which PyAV 19 removed.
+    "av<19",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/chigwell/telegram-mcp"
