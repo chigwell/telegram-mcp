@@ -567,9 +567,42 @@ def _load_whisper_model(settings: tuple):
     return model
 
 
+def _decode_audio(data: bytes, sampling_rate: int):
+    """Mono float32 samples at ``sampling_rate``, decoded with PyAV.
+
+    Mirrors faster_whisper.audio.decode_audio, which faster-whisper 1.2.1
+    cannot run on PyAV 19: it passes ``av.open(metadata_errors=...)``, an
+    argument PyAV 19 removed (fix pending upstream in
+    SYSTRAN/faster-whisper#1495). Handing the model an array skips that
+    function entirely, so any PyAV version works. Drop this once a
+    faster-whisper release carries the fix.
+    """
+    import av
+    import numpy as np
+
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=sampling_rate)
+    chunks = []
+    with av.open(io.BytesIO(data), mode="r") as container:
+        frames = container.decode(audio=0)
+        while True:
+            try:
+                frame = next(frames)
+            except StopIteration:
+                break
+            except av.error.InvalidDataError:
+                continue  # a corrupt packet costs one frame, not the recording
+            frame.pts = None  # the resampler rejects non-monotonic timestamps
+            chunks.extend(out.to_ndarray() for out in resampler.resample(frame))
+    chunks.extend(out.to_ndarray() for out in resampler.resample(None))
+    if not chunks:
+        return np.zeros(0, dtype=np.float32)
+    return np.concatenate(chunks, axis=None).astype(np.float32) / 32768.0
+
+
 def _run_whisper(data: bytes, settings: tuple, language: Optional[str]) -> tuple:
     model = _load_whisper_model(settings)
-    segments, info = model.transcribe(io.BytesIO(data), language=language, vad_filter=True)
+    audio = _decode_audio(data, model.feature_extractor.sampling_rate)
+    segments, info = model.transcribe(audio, language=language, vad_filter=True)
     # segments is a lazy generator: the actual decoding happens here, so it
     # must be consumed inside the worker thread.
     text = "".join(segment.text for segment in segments).strip()

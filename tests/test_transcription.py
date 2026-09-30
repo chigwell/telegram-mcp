@@ -980,10 +980,11 @@ class _FakeWhisperModel:
     def __init__(self, name, device=None, compute_type=None, download_root=None):
         self.args = (name, device, compute_type, download_root)
         self.calls = []
+        self.feature_extractor = SimpleNamespace(sampling_rate=16000)
         _FakeWhisperModel.instances.append(self)
 
     def transcribe(self, audio, language=None, vad_filter=False):
-        self.calls.append({"audio": audio.read(), "language": language})
+        self.calls.append({"audio": audio, "language": language})
         segments = (SimpleNamespace(text=t) for t in [" hallo", " wereld "])
         return segments, SimpleNamespace(language="nl")
 
@@ -999,6 +1000,7 @@ def fake_whisper(monkeypatch):
     monkeypatch.setattr(transcription, "whisper_available", lambda: True)
     monkeypatch.setattr(transcription, "_WHISPER_MODELS", {})
     monkeypatch.setattr(transcription, "_WHISPER_SEMAPHORE", None)
+    monkeypatch.setattr(transcription, "_decode_audio", lambda data, rate: ("decoded", data, rate))
     return _FakeWhisperModel
 
 
@@ -1023,7 +1025,9 @@ async def test_whisper_transcribes_locally_and_reuses_the_model(monkeypatch, fak
     assert len(fake_whisper.instances) == 1
     model = fake_whisper.instances[0]
     assert model.args == ("large-v3-turbo", "cpu", "int8", None)
-    assert model.calls[0] == {"audio": b"audio", "language": None}
+    # The model gets decoded samples, never the raw bytes: faster-whisper's own
+    # decoder breaks on PyAV 19.
+    assert model.calls[0] == {"audio": ("decoded", b"audio", 16000), "language": None}
 
 
 @pytest.mark.asyncio
@@ -1056,3 +1060,33 @@ async def test_whisper_inference_failure_is_error(monkeypatch, fake_whisper):
 
     assert result["status"] == "error"
     assert "bad audio" in result["error"]
+
+
+def test_decode_audio_produces_mono_float32_at_the_requested_rate():
+    """Real PyAV round trip: a 1s 48 kHz stereo Opus-in-Ogg tone, like a
+    Telegram voice note, comes back as ~16000 mono float32 samples."""
+    av = pytest.importorskip("av")
+    np = pytest.importorskip("numpy")
+    import io as _io
+
+    buf = _io.BytesIO()
+    with av.open(buf, "w", format="ogg") as out:
+        stream = out.add_stream("libopus", rate=48000)
+        stream.layout = "stereo"
+        t = np.arange(48000) / 48000
+        tone = (np.sin(2 * np.pi * 440 * t) * 10000).astype(np.int16)
+        frame = av.AudioFrame.from_ndarray(
+            np.stack([tone, tone]).reshape(1, -1), format="s16", layout="stereo"
+        )
+        frame.sample_rate = 48000
+        for packet in stream.encode(frame):
+            out.mux(packet)
+        for packet in stream.encode(None):
+            out.mux(packet)
+
+    audio = transcription._decode_audio(buf.getvalue(), 16000)
+
+    assert audio.dtype == np.float32
+    assert audio.ndim == 1
+    assert abs(len(audio) - 16000) < 800
+    assert 0.1 < float(np.abs(audio).max()) <= 1.0

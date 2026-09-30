@@ -41,8 +41,8 @@ proxy = [
 # Required only for the local transcription engine (TELEGRAM_TRANSCRIBE_ENGINE=whisper).
 whisper = [
     "faster-whisper>=1.1.0",
-    # faster-whisper 1.2.1 passes av.open(metadata_errors=...), which PyAV 19 removed.
-    "av<19",
+    # Decoded directly (see transcription._decode_audio), not only via faster-whisper.
+    "av>=11",
 ]
 
 [project.urls]
