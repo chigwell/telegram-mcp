@@ -1,9 +1,10 @@
 """Event-driven incoming-message tracking + debounce (settle window).
 
 Lets agents react to new client messages instead of polling. A Telethon
-NewMessage(incoming=True) handler records incoming private (non-bot, non-self)
-messages per chat; the two tools below expose them, with wait_for_settled_message
-debouncing a burst (several messages typed in a row) into a single settled event.
+NewMessage(incoming=True) handler records incoming (non-bot, non-self) messages
+per chat — every private one, and group or channel ones only when they mention
+us; the two tools below expose them, with wait_for_settled_message debouncing a
+burst (several messages typed in a row) into a single settled event.
 """
 
 import asyncio
@@ -85,7 +86,9 @@ def _burst_summary(chat_id: int, rec: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "event": True,
         "chat_id": chat_id,
+        "is_group": rec.get("is_group", False),
         "name": sanitize_name(rec["name"]),
+        "senders": [sanitize_name(s) for s in rec.get("senders", [])],
         "username": rec["username"],
         "message_count": rec["count"],
         "first_message_id": rec["first_id"],
@@ -199,9 +202,16 @@ def _maybe_autostart_feed() -> None:
 
 
 async def _on_new_incoming(event) -> None:
-    """Record incoming private (non-bot, non-self) messages for the debounce tools."""
+    """Record incoming (non-bot, non-self) messages for the debounce tools.
+
+    Private messages always count. A group or channel message counts only when
+    it mentions us — an @username, a text mention, or a reply to one of our own
+    messages all set Telegram's `mentioned` flag. A busy room therefore costs
+    nothing until someone actually addresses us.
+    """
     try:
-        if not event.is_private:
+        is_group = not event.is_private
+        if is_group and not getattr(event.message, "mentioned", False):
             return
         sender = await event.get_sender()
         if sender is None:
@@ -213,6 +223,17 @@ async def _on_new_incoming(event) -> None:
             return
         now = time.monotonic()
         msg_id = event.message.id
+        sender_name = utils.get_display_name(sender) or str(chat_id)
+        if is_group:
+            # `name` must be the ROOM for a group, never the sender — a consumer
+            # that sees a person's name against a group chat_id will treat the
+            # burst as a DM and address its reply to the wrong place.
+            chat = await event.get_chat()
+            chat_name = utils.get_display_name(chat) or str(chat_id)
+            chat_username = getattr(chat, "username", None)
+        else:
+            chat_name = sender_name
+            chat_username = getattr(sender, "username", None)
         rec = _pending_msgs.get(chat_id)
         if rec is None:
             _pending_msgs[chat_id] = {
@@ -221,8 +242,10 @@ async def _on_new_incoming(event) -> None:
                 "count": 1,
                 "first_id": msg_id,
                 "last_id": msg_id,
-                "name": utils.get_display_name(sender) or str(chat_id),
-                "username": getattr(sender, "username", None),
+                "name": chat_name,
+                "username": chat_username,
+                "is_group": is_group,
+                "senders": [sender_name],
             }
         else:
             # Handlers for the same chat can interleave across the get_sender()
@@ -231,6 +254,10 @@ async def _on_new_incoming(event) -> None:
             rec["first_id"] = min(rec["first_id"], msg_id)
             rec["last_id"] = max(rec["last_id"], msg_id)
             rec["count"] += 1
+            # A group burst can carry several people; keep them in arrival order.
+            senders = rec.setdefault("senders", [])
+            if sender_name not in senders:
+                senders.append(sender_name)
         _maybe_autostart_feed()
         _get_activity_event().set()
     except Exception:
