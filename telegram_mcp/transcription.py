@@ -1,6 +1,6 @@
 """Voice/video-note transcription: engines, SQLite cache, and batch budget.
 
-Five engines behind one interface (see ``transcribe``):
+Four engines behind one interface (see ``transcribe``):
 
 * ``telegram`` - native Premium ``messages.transcribeAudio``. Free, but drops
   the last speech segment in roughly 2 of 3 real recordings (proven with
@@ -11,16 +11,14 @@ Five engines behind one interface (see ``transcribe``):
   but costs a download+upload per voice message and sends the audio to a
   third party. Primary engine by owner decision (2026-08-20); ``telegram``
   is the free/private fallback.
-* ``parakeet`` - a self-hosted achetronic/parakeet server (NVIDIA Parakeet
-  TDT over ONNX) speaking the OpenAI transcription API. Audio stays on
-  infrastructure the owner runs.
 * ``openai`` - any OpenAI-compatible ``/audio/transcriptions`` endpoint
-  (OpenAI itself, speaches, LocalAI, a vLLM whisper, ...) at a configured
-  base URL, with an optional API key.
+  (OpenAI itself, a self-hosted achetronic/parakeet or speaches server,
+  LocalAI, a vLLM whisper, ...) at a configured base URL, with an optional
+  API key.
 * ``whisper`` - a local faster-whisper model loaded in this process. Never
   leaves the machine; needs the ``whisper`` extra installed.
 
-``groq``, ``parakeet`` and ``openai`` share one HTTP path
+``groq`` and ``openai`` share one HTTP path
 (:func:`_transcribe_via_openai_compatible`); only their settings differ.
 
 Every transcript is a machine reading, not a verbatim quote (proper names and
@@ -49,15 +47,10 @@ from telegram_mcp.runtime import account_is_premium, get_marked_id, is_premium_r
 # ---------------------------------------------------------------------------
 
 _TRANSCRIBE_MODES = {"off", "on-demand", "auto"}
-ENGINES = {"telegram", "groq", "parakeet", "openai", "whisper"}
+ENGINES = {"telegram", "groq", "openai", "whisper"}
 
 GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3-turbo"
-
-PARAKEET_DEFAULT_URL = "http://localhost:5092"
-# achetronic/parakeet accepts and ignores the model field; sent for servers
-# that front it with something stricter.
-PARAKEET_MODEL = "parakeet-tdt-0.6b"
 
 OPENAI_DEFAULT_MODEL = "whisper-1"
 
@@ -91,8 +84,8 @@ def transcribe_mode() -> str:
 
 
 def default_engine() -> str:
-    """``TELEGRAM_TRANSCRIBE_ENGINE``: telegram | groq | parakeet | openai |
-    whisper (default groq).
+    """``TELEGRAM_TRANSCRIBE_ENGINE``: telegram | groq | openai | whisper
+    (default groq).
 
     Groq is the primary engine (owner decision 2026-08-20: native Telegram
     transcription drops the last speech segment in ~2 of 3 recordings).
@@ -119,9 +112,9 @@ def validate_transcription_config() -> None:
 def transcribe_language() -> Optional[str]:
     """``TELEGRAM_TRANSCRIBE_LANGUAGE``: ISO-639-1 hint (``nl``, ``en``, ...).
 
-    Unset lets whisper-style engines detect the language themselves. Parakeet
-    is the exception: the server assumes ``en`` when no language is sent, so
-    non-English chats on that engine need this set.
+    Unset lets whisper-style engines detect the language themselves. Some
+    OpenAI-compatible servers do not detect it: achetronic/parakeet assumes
+    ``en`` when no language is sent, so non-English chats need this set.
     """
     raw = os.getenv("TELEGRAM_TRANSCRIBE_LANGUAGE", "").strip().lower()
     return raw or None
@@ -136,19 +129,12 @@ def _env_float(name: str, default: float) -> float:
     return value if value > 0 else default
 
 
-def _endpoint(base: str, *, api_prefix: str) -> str:
-    """Accept either a base URL or the full transcriptions URL.
-
-    ``api_prefix`` is appended when the base does not already carry it:
-    parakeet is configured as ``http://host:5092`` (prefix ``/v1``), the
-    openai engine as ``https://api.openai.com/v1`` like the OpenAI SDKs'
-    base_url (no prefix).
-    """
+def _endpoint(base: str) -> str:
+    """Accept either a base URL (``https://api.openai.com/v1``, like the
+    OpenAI SDKs' base_url) or the full transcriptions URL."""
     url = base.strip().rstrip("/")
     if url.endswith("/audio/transcriptions"):
         return url
-    if api_prefix and not url.endswith(api_prefix):
-        url += api_prefix
     return url + "/audio/transcriptions"
 
 
@@ -185,26 +171,12 @@ def http_engine_config(engine: str) -> Optional[HttpEngineConfig]:
             max_mb_env="TELEGRAM_TRANSCRIBE_GROQ_MAX_MB",
             timeout=_http_timeout(),
         )
-    if engine == "parakeet":
-        base = os.getenv("TELEGRAM_TRANSCRIBE_PARAKEET_URL", "").strip() or PARAKEET_DEFAULT_URL
-        return HttpEngineConfig(
-            engine="parakeet",
-            label="Parakeet",
-            url=_endpoint(base, api_prefix="/v1"),
-            api_key=os.getenv("TELEGRAM_TRANSCRIBE_PARAKEET_API_KEY") or None,
-            model=PARAKEET_MODEL,
-            response_format="verbose_json",
-            # The server's own upload cap.
-            max_bytes=int(_env_float("TELEGRAM_TRANSCRIBE_PARAKEET_MAX_MB", 25.0) * 1048576),
-            max_mb_env="TELEGRAM_TRANSCRIBE_PARAKEET_MAX_MB",
-            timeout=_http_timeout(),
-        )
     if engine == "openai":
         base = os.getenv("TELEGRAM_TRANSCRIBE_OPENAI_URL", "").strip()
         return HttpEngineConfig(
             engine="openai",
             label="OpenAI-compatible",
-            url=_endpoint(base, api_prefix="") if base else None,
+            url=_endpoint(base) if base else None,
             api_key=os.getenv("TELEGRAM_TRANSCRIBE_OPENAI_API_KEY") or None,
             model=os.getenv("TELEGRAM_TRANSCRIBE_OPENAI_MODEL", "").strip()
             or OPENAI_DEFAULT_MODEL,
@@ -521,7 +493,7 @@ def _upload_name(msg) -> tuple:
 
 async def _transcribe_via_openai_compatible(cl, msg, cfg: HttpEngineConfig) -> dict:
     """POST the recording to an OpenAI-style ``/audio/transcriptions``
-    endpoint (groq, parakeet, openai). Deletes the bytes as soon as the
+    endpoint (groq, openai). Deletes the bytes as soon as the
     request returns."""
     if not cfg.url:
         return {"status": "error", "error": engine_config_error(cfg.engine)}

@@ -835,7 +835,7 @@ async def test_recording_within_the_limit_still_uploads(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Self-hosted and custom engines: parakeet, openai-compatible, local whisper
+# Custom engines: openai-compatible (incl. self-hosted Parakeet), local whisper
 # ---------------------------------------------------------------------------
 
 
@@ -847,34 +847,33 @@ def _bytes_client(payload=b"raw-audio-bytes"):
     return SimpleNamespace(download_media=_download_media)
 
 
-@pytest.mark.parametrize("engine", ["parakeet", "openai", "whisper"])
+@pytest.mark.parametrize("engine", ["openai", "whisper"])
 def test_default_engine_accepts_new_engines(monkeypatch, engine):
     monkeypatch.setenv("TELEGRAM_TRANSCRIBE_ENGINE", engine)
     assert transcription.default_engine() == engine
 
 
 @pytest.mark.parametrize(
-    "base,prefix,expected",
+    "base,expected",
     [
-        ("http://localhost:5092", "/v1", "http://localhost:5092/v1/audio/transcriptions"),
-        ("http://localhost:5092/", "/v1", "http://localhost:5092/v1/audio/transcriptions"),
-        ("http://localhost:5092/v1", "/v1", "http://localhost:5092/v1/audio/transcriptions"),
-        ("https://api.openai.com/v1", "", "https://api.openai.com/v1/audio/transcriptions"),
+        ("https://api.openai.com/v1", "https://api.openai.com/v1/audio/transcriptions"),
+        ("http://localhost:5092/v1/", "http://localhost:5092/v1/audio/transcriptions"),
         (
             "https://x.example/v1/audio/transcriptions",
-            "",
             "https://x.example/v1/audio/transcriptions",
         ),
     ],
 )
-def test_endpoint_accepts_base_or_full_url(base, prefix, expected):
-    assert transcription._endpoint(base, api_prefix=prefix) == expected
+def test_endpoint_accepts_base_or_full_url(base, expected):
+    assert transcription._endpoint(base) == expected
 
 
 @pytest.mark.asyncio
-async def test_parakeet_posts_to_default_local_server_without_auth(monkeypatch):
-    monkeypatch.delenv("TELEGRAM_TRANSCRIBE_PARAKEET_URL", raising=False)
-    monkeypatch.delenv("TELEGRAM_TRANSCRIBE_PARAKEET_API_KEY", raising=False)
+async def test_openai_compatible_keyless_server_with_language_hint(monkeypatch):
+    """E.g. a local Parakeet server: no auth, and it assumes English unless
+    told otherwise."""
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_OPENAI_URL", "http://localhost:5092/v1")
+    monkeypatch.delenv("TELEGRAM_TRANSCRIBE_OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("TELEGRAM_TRANSCRIBE_LANGUAGE", "NL")
     calls = []
     response = _FakeGroqResponse({"text": " hallo daar ", "language": "nl"})
@@ -882,44 +881,28 @@ async def test_parakeet_posts_to_default_local_server_without_auth(monkeypatch):
         transcription.httpx, "AsyncClient", lambda **kw: _FakeHttpxClient(response, calls)
     )
 
-    result = await transcription.transcribe(_bytes_client(), None, _voice_msg(), "parakeet")
+    result = await transcription.transcribe(_bytes_client(), None, _voice_msg(), "openai")
 
     assert result == {"status": "ok", "text": "hallo daar", "lang": "nl"}
     assert calls[0]["url"] == "http://localhost:5092/v1/audio/transcriptions"
     assert calls[0]["headers"] == {}
-    # Parakeet assumes English unless told otherwise.
     assert calls[0]["data"]["language"] == "nl"
     assert calls[0]["files"]["file"][0] == "voice.ogg"
 
 
 @pytest.mark.asyncio
-async def test_parakeet_sends_api_key_when_configured(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_PARAKEET_URL", "http://asr.lan:5092")
-    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_PARAKEET_API_KEY", "secret")
-    calls = []
-    response = _FakeGroqResponse({"text": "ok"})
-    monkeypatch.setattr(
-        transcription.httpx, "AsyncClient", lambda **kw: _FakeHttpxClient(response, calls)
-    )
-
-    await transcription.transcribe(_bytes_client(), None, _voice_msg(), "parakeet")
-
-    assert calls[0]["url"] == "http://asr.lan:5092/v1/audio/transcriptions"
-    assert calls[0]["headers"]["Authorization"] == "Bearer secret"
-
-
-@pytest.mark.asyncio
-async def test_parakeet_oversized_recording_names_its_own_limit(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_PARAKEET_MAX_MB", "1")
+async def test_openai_compatible_oversized_recording_names_its_own_limit(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_OPENAI_URL", "http://localhost:5092/v1")
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_OPENAI_MAX_MB", "1")
     msg = _voice_msg(
         file=SimpleNamespace(duration=900, ext=".oga", mime_type="audio/ogg", size=3 * 1048576)
     )
 
-    result = await transcription.transcribe(_bytes_client(), None, msg, "parakeet")
+    result = await transcription.transcribe(_bytes_client(), None, msg, "openai")
 
     assert result["reason"] == "too_large"
-    assert "Parakeet" in result["error"]
-    assert "TELEGRAM_TRANSCRIBE_PARAKEET_MAX_MB" in result["error"]
+    assert "OpenAI-compatible" in result["error"]
+    assert "TELEGRAM_TRANSCRIBE_OPENAI_MAX_MB" in result["error"]
 
 
 @pytest.mark.asyncio
@@ -988,7 +971,6 @@ def test_engine_config_error(monkeypatch):
     assert "GROQ_API_KEY" in transcription.engine_config_error("groq")
     assert "TELEGRAM_TRANSCRIBE_OPENAI_URL" in transcription.engine_config_error("openai")
     assert "faster-whisper" in transcription.engine_config_error("whisper")
-    assert transcription.engine_config_error("parakeet") is None
     assert transcription.engine_config_error("telegram") is None
 
 

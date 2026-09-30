@@ -1204,11 +1204,9 @@ async def transcribe_voice(
       chats you don't want sent to a third party, or when Groq is unavailable.
       Requires Telegram Premium on this account; polls briefly (up to ~20s)
       while Telegram finishes a long recording.
-    - "parakeet": a self-hosted Parakeet ASR server
-      (TELEGRAM_TRANSCRIBE_PARAKEET_URL). Audio stays on the owner's
-      infrastructure.
     - "openai": any OpenAI-compatible transcription endpoint
-      (TELEGRAM_TRANSCRIBE_OPENAI_URL, optional API key).
+      (TELEGRAM_TRANSCRIBE_OPENAI_URL, optional API key), e.g. OpenAI or a
+      self-hosted Parakeet/speaches server.
     - "whisper": a local faster-whisper model on this server. Audio never
       leaves the machine; slower on CPU.
 
@@ -1224,7 +1222,7 @@ async def transcribe_voice(
     Args:
         chat_id: The chat ID or username.
         message_id: The message ID containing the voice/video-note media.
-        engine: "groq", "telegram", "parakeet", "openai" or "whisper".
+        engine: "groq", "telegram", "openai" or "whisper".
             Defaults to TELEGRAM_TRANSCRIBE_ENGINE (groq unless configured
             otherwise).
     """
