@@ -198,6 +198,21 @@ def message_to_dict(msg, chat_id: Optional[int] = None) -> dict:
     if media_label:
         d["media"] = media_label
 
+    page = getattr(msg, "web_preview", None)
+    if page is not None and getattr(page, "url", None):
+        d["web_preview"] = {
+            k: sanitize_user_content(v) if k != "url" else v
+            for k in ("url", "site_name", "title", "description")
+            if (v := getattr(page, k, None))
+        }
+
+    poll = getattr(msg, "poll", None)
+    if poll is not None and getattr(poll, "poll", None) is not None:
+        d["poll"] = {
+            "question": sanitize_user_content(poll.poll.question.text),
+            "answers": [sanitize_user_content(a.text.text) for a in poll.poll.answers],
+        }
+
     if not text:
         voice_info = transcription.voice_attachment_info(msg, chat_id)
         if voice_info is not None:
@@ -1132,49 +1147,7 @@ async def list_messages(
         numeric_chat_id = get_marked_id(entity)
         await transcription.prefetch_transcripts(cl, entity, numeric_chat_id, messages)
 
-        records = []
-        for msg in messages:
-            record = {
-                "id": msg.id,
-                "sender": get_sender_info(msg),
-                "date": msg.date,
-                "text": sanitize_user_content(msg.message),
-                **get_custom_emoji_metadata(msg),
-            }
-            # Upstream bug: this hand-built record never called get_media_label,
-            # so a voice/photo/etc. with no caption was indistinguishable from
-            # an actually-empty message. message_to_dict (used by get_history)
-            # already gets this right.
-            media_label = get_media_label(msg)
-            if media_label:
-                record["media"] = media_label
-
-            if not getattr(msg, "message", None):
-                voice_info = transcription.voice_attachment_info(msg, numeric_chat_id)
-                if voice_info is not None:
-                    if voice_info["duration"] is not None:
-                        record["duration"] = voice_info["duration"]
-                    if voice_info["transcript_status"] == "ready":
-                        record["transcript"] = voice_info["transcript"]
-                        record["transcript_source"] = voice_info["transcript_source"]
-                        record["transcript_note"] = "Machine transcript, not a verbatim quote."
-                    elif voice_info["transcript_status"] == "pending":
-                        record["transcript_status"] = "pending"
-
-            grouped_id = getattr(msg, "grouped_id", None)
-            if grouped_id is not None:
-                record["grouped_id"] = grouped_id
-            reply_to_id = getattr(msg.reply_to, "reply_to_msg_id", None) if msg.reply_to else None
-            if reply_to_id:
-                record["reply_to"] = reply_to_id
-            reply_quote = get_reply_quote(msg)
-            if reply_quote:
-                record["reply_quote"] = reply_quote
-            engagement = get_engagement_dict(msg)
-            if engagement:
-                record["engagement"] = engagement
-            records.append(record)
-
+        records = [message_to_dict(msg, numeric_chat_id) for msg in messages]
         return format_tool_result(records)
     except Exception as e:
         return log_and_format_error("list_messages", e, chat_id=chat_id)
@@ -1364,52 +1337,17 @@ async def get_message_context(
         # Combine messages in chronological order
         all_messages = list(messages_before) + list(central_message) + list(messages_after)
         all_messages.sort(key=lambda m: m.id)
+        numeric_chat_id = get_marked_id(chat)
         records = []
         for msg in all_messages:
-            sender_name = get_sender_name(msg)
-            record = {
-                "id": msg.id,
-                "sender": sender_name,
-                "date": msg.date,
-                "is_target": msg.id == message_id,
-                "text": sanitize_user_content(msg.message),
-                **get_custom_emoji_metadata(msg),
-            }
-            if getattr(msg, "sender_id", None):
-                record["sender_id"] = msg.sender_id
-            _username = get_sender_username(msg)
-            if _username:
-                record["username"] = _username
-            grouped_id = getattr(msg, "grouped_id", None)
-            if grouped_id is not None:
-                record["grouped_id"] = grouped_id
-            link_urls = _link_urls(msg)
-            if link_urls:
-                record["link_urls"] = link_urls
+            record = message_to_dict(msg, numeric_chat_id)
+            record["is_target"] = msg.id == message_id
 
-            # Check if this message is a reply and get the replied message
-            reply_quote = get_reply_quote(msg)
-            if reply_quote:
-                record["reply_quote"] = reply_quote
             if msg.reply_to and msg.reply_to.reply_to_msg_id:
-                record["reply_to"] = msg.reply_to.reply_to_msg_id
                 try:
                     replied_msg = await cl.get_messages(chat, ids=msg.reply_to.reply_to_msg_id)
                     if replied_msg:
-                        replied_record = {
-                            "sender": get_sender_name(replied_msg),
-                            "text": sanitize_user_content(replied_msg.message),
-                            **get_custom_emoji_metadata(replied_msg),
-                        }
-                        if getattr(replied_msg, "sender_id", None):
-                            replied_record["sender_id"] = replied_msg.sender_id
-                        _r_username = get_sender_username(replied_msg)
-                        if _r_username:
-                            replied_record["username"] = _r_username
-                        reply_link_urls = _link_urls(replied_msg)
-                        if reply_link_urls:
-                            replied_record["link_urls"] = reply_link_urls
-                        record["replied_message"] = replied_record
+                        record["replied_message"] = message_to_dict(replied_msg, numeric_chat_id)
                 except Exception:
                     record["replied_message"] = None
 
@@ -2023,21 +1961,9 @@ async def search_messages(
         entity = await resolve_entity(chat_id, cl)
         messages = await cl.get_messages(entity, limit=limit, search=query)
 
-        records = []
-        for msg in messages:
-            record = {
-                "id": msg.id,
-                "sender": get_sender_info(msg),
-                "date": msg.date,
-                "text": sanitize_user_content(msg.message),
-                **get_custom_emoji_metadata(msg),
-            }
-            if msg.reply_to and msg.reply_to.reply_to_msg_id:
-                record["reply_to"] = msg.reply_to.reply_to_msg_id
-            reply_quote = get_reply_quote(msg)
-            if reply_quote:
-                record["reply_quote"] = reply_quote
-            records.append(record)
+        numeric_chat_id = get_marked_id(entity)
+        await transcription.prefetch_transcripts(cl, entity, numeric_chat_id, messages)
+        records = [message_to_dict(msg, numeric_chat_id) for msg in messages]
         return format_tool_result(records)
     except Exception as e:
         return log_and_format_error(
@@ -2085,11 +2011,7 @@ async def search_global(
                 {
                     "chat_name": sanitize_name(chat_name),
                     "chat_id": msg.chat_id,
-                    "id": msg.id,
-                    "sender": get_sender_info(msg),
-                    "date": msg.date,
-                    "text": sanitize_user_content(msg.message),
-                    **get_custom_emoji_metadata(msg),
+                    **message_to_dict(msg, msg.chat_id),
                 }
             )
 
