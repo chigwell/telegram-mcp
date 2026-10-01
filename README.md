@@ -336,6 +336,26 @@ uv run main.py
 
 ## MCP Client Configuration
 
+### Claude Desktop extension (.mcpb)
+
+The repository ships a `manifest.json`, so it can be packed into a
+[Claude Desktop extension](https://github.com/modelcontextprotocol/mcpb) and
+installed without editing any JSON:
+
+```bash
+npx @anthropic-ai/mcpb pack . telegram-mcp.mcpb
+```
+
+Open the resulting `telegram-mcp.mcpb` with Claude Desktop (or drag it onto
+Settings → Extensions) and fill in the API ID, API hash and session string
+(see [Quick Start](#quick-start) for generating one). Claude Desktop installs
+Python and the dependencies itself via `uv`, and masks the API hash and
+session string as sensitive fields. The allowed-chats and files-directory fields map to
+`TELEGRAM_ALLOWED_CHAT_IDS` and `TELEGRAM_ALLOWED_ROOTS`. `.mcpbignore` keeps
+`.env`, session files and logs out of the bundle.
+
+### Manual configuration
+
 For Claude Desktop or Cursor, point the MCP server at a cloned checkout of
 this project:
 
