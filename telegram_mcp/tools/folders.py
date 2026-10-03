@@ -1,39 +1,419 @@
 """Folders MCP tools."""
 
+import copy
+
 from telegram_mcp.runtime import *
 
 
-async def _configured_folder_limit(cl) -> Optional[tuple[int, bool]]:
-    """Read the current account tier and its limit; unknown data defers to Telegram."""
+class _FolderValidationError(ValidationError):
+    """Validation messages authored here contain no caller or provider payload."""
+
+
+_FOLDER_FLAGS = (
+    "contacts",
+    "non_contacts",
+    "groups",
+    "broadcasts",
+    "bots",
+    "exclude_muted",
+    "exclude_read",
+    "exclude_archived",
+    "title_noanimate",
+)
+_PEER_FIELDS = {
+    "include_chat_ids": "include_peers",
+    "pinned_chat_ids": "pinned_peers",
+    "exclude_chat_ids": "exclude_peers",
+}
+_TITLE_LIMIT_UTF16 = 12  # Telegram's official client limit, not an app-config key.
+
+
+def _positive_config_number(value):
+    if not isinstance(value, types.JsonNumber):
+        return None
+    number = value.value
+    if isinstance(number, bool) or not isinstance(number, (int, float)):
+        return None
+    try:
+        integer = int(number)
+        return integer if integer > 0 and integer == number else None
+    except (ValueError, OverflowError):
+        return None
+
+
+async def _read_folder_limits(cl):
+    premium = None
     try:
         me = await cl.get_me()
-        if me is None or not hasattr(me, "premium"):
-            return None
-        premium = bool(me.premium)
-        key = "dialog_filters_limit_premium" if premium else "dialog_filters_limit_default"
-        # No cached config: hash=0 requests the full current configuration.
+        if me is not None and hasattr(me, "premium"):
+            premium = bool(me.premium)
+    except Exception:
+        pass
+    values = {}
+    available = False
+    try:
         result = await cl(functions.help.GetAppConfigRequest(hash=0))
-        if not isinstance(result, types.help.AppConfig) or not isinstance(
+        if isinstance(result, types.help.AppConfig) and isinstance(
             result.config, types.JsonObject
         ):
-            return None
-        for entry in result.config.value:
-            if entry.key != key:
-                continue
-            if not isinstance(entry.value, types.JsonNumber):
-                return None
-            value = entry.value.value
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                return None
-            limit = int(value)
-            if limit > 0 and limit == value:
-                return limit, premium
-            return None
+            available = True
+            values = {
+                entry.key: _positive_config_number(entry.value) for entry in result.config.value
+            }
     except Exception:
-        # Config/account lookup is best-effort. The mutation's RPC error remains
-        # authoritative if these reads fail or the returned limit is unusable.
-        return None
+        pass
+    keys = {
+        "folders": "dialog_filters_limit",
+        "chats_per_folder": "dialog_filters_chats_limit",
+        "pinned_per_folder": "dialogs_folder_pinned_limit",
+    }
+    tier = None if premium is None else "premium" if premium else "default"
+    return {
+        "premium": premium,
+        "config_available": available,
+        "limits": {
+            name: values.get(f"{key}_{tier}") if tier else None for name, key in keys.items()
+        },
+        "config_keys": {name: f"{key}_{tier}" if tier else None for name, key in keys.items()},
+        "title_limit_utf16": _TITLE_LIMIT_UTF16,
+        "unknown_limits": "Unknown limits defer to Telegram's server validation.",
+    }
+
+
+async def _configured_folder_limit(cl) -> Optional[tuple[int, bool]]:
+    settings = await _read_folder_limits(cl)
+    limit = settings["limits"]["folders"]
+    return (limit, settings["premium"]) if limit is not None else None
+
+
+def _stable_peer_id(peer, self_id=None):
+    if isinstance(peer, types.InputPeerSelf):
+        if self_id is None:
+            raise _FolderValidationError(
+                "Cannot resolve Saved Messages identity for a complete snapshot."
+            )
+        return self_id
+    return utils.get_peer_id(peer)
+
+
+async def _snapshot_self_id(cl, filters):
+    if any(
+        isinstance(peer, types.InputPeerSelf)
+        for f in filters
+        for field in _PEER_FIELDS.values()
+        for peer in getattr(f, field, [])
+    ):
+        me = await cl.get_me()
+        if me is None:
+            raise _FolderValidationError(
+                "Account identity is unavailable; snapshot would be incomplete."
+            )
+        return me.id
     return None
+
+
+def _folder_state(f, self_id=None):
+    if isinstance(f, DialogFilterDefault):
+        return {"id": 0, "type": "system", "editable": False}
+    shared = isinstance(f, DialogFilterChatlist)
+    definition = {
+        "title": f.title.text if isinstance(f.title, TextWithEntities) else f.title,
+        "title_entities": [entity.to_dict() for entity in getattr(f.title, "entities", [])],
+        "emoticon": getattr(f, "emoticon", None),
+        "color": getattr(f, "color", None),
+        "title_noanimate": getattr(f, "title_noanimate", None),
+    }
+    for name, field in _PEER_FIELDS.items():
+        if hasattr(f, field):
+            definition[name] = [_stable_peer_id(peer, self_id) for peer in getattr(f, field)]
+    if not shared:
+        definition.update({name: getattr(f, name, None) for name in _FOLDER_FLAGS})
+    state = {
+        "id": f.id,
+        "type": "shared" if shared else "private",
+        "editable": not shared,
+        "definition": definition,
+    }
+    if shared:
+        state["has_my_invites"] = getattr(f, "has_my_invites", None)
+    # include/exclude ordering is normalized by Telegram; pin and entity order matter.
+    canonical = dict(definition)
+    for field in ("include_chat_ids", "exclude_chat_ids"):
+        if field in canonical:
+            canonical[field] = sorted(canonical[field])
+    state["revision"] = hashlib.sha256(
+        json.dumps(
+            {"id": f.id, "type": state["type"], "definition": canonical},
+            sort_keys=True,
+            ensure_ascii=True,
+        ).encode()
+    ).hexdigest()
+    return state
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Get Folder Limits", openWorldHint=True, readOnlyHint=True)
+)
+@with_account(readonly=True)
+async def get_folder_limits(account: str = None) -> str:
+    """Read effective Premium-aware folder, explicit-chat and pin limits from app config.
+
+    Missing/unusable values are null, never invented defaults. Title limit uses UTF-16 units.
+    """
+    try:
+        return json.dumps(await _read_folder_limits(get_client(account)), indent=2)
+    except Exception as e:
+        return log_and_format_error("get_folder_limits", e, ErrorCategory.FOLDER)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Get Folder Snapshot", openWorldHint=True, readOnlyHint=True)
+)
+@with_account(readonly=True)
+async def get_folder_snapshot(account: str = None) -> str:
+    """Read complete folder definitions and order without chat content or access hashes.
+
+    Private definition objects can be passed as update_folder patches to restore state.
+    Includes title entities, display fields, rules and ordered pins. Title text is untrusted
+    data and is kept verbatim for restoration. Shared definitions are read-only metadata,
+    not a backup of exported invites or an account-wide undo. No chat resolution is needed.
+    """
+    try:
+        if is_chat_allowlist_enabled():
+            return "Error: complete folder snapshots are unavailable with a chat allowlist."
+        cl = get_client(account)
+        result = await cl(functions.messages.GetDialogFiltersRequest())
+        self_id = await _snapshot_self_id(cl, result.filters)
+        states = [_folder_state(f, self_id) for f in result.filters]
+        return json.dumps(
+            {
+                "schema_version": 1,
+                "folders": states,
+                "folder_order": [f["id"] for f in states],
+                "tags_enabled": getattr(result, "tags_enabled", None),
+                "scope": "folder definitions only; shared invite state and chat state are not restorable",
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return log_and_format_error("get_folder_snapshot", e, ErrorCategory.FOLDER)
+
+
+def _validate_folder_patch(folder_id, patch):
+    if isinstance(folder_id, bool) or not isinstance(folder_id, int) or not 2 <= folder_id < 2**31:
+        raise _FolderValidationError(
+            "Error: folder_id must be an existing private folder ID (2..2147483647)."
+        )
+    allowed = (
+        set(_FOLDER_FLAGS) | set(_PEER_FIELDS) | {"title", "title_entities", "emoticon", "color"}
+    )
+    if not isinstance(patch, dict) or set(patch) - allowed:
+        raise _FolderValidationError("Error: patch contains unsupported folder fields.")
+    if "title" in patch:
+        title = patch["title"]
+        if (
+            not isinstance(title, str)
+            or not title.strip()
+            or len(title.encode("utf-16-le")) // 2 > _TITLE_LIMIT_UTF16
+        ):
+            raise _FolderValidationError(
+                "Error: title must be nonempty and at most 12 UTF-16 units."
+            )
+    for name in _FOLDER_FLAGS:
+        if name in patch and patch[name] is not None and not isinstance(patch[name], bool):
+            raise _FolderValidationError("Error: folder rules must be boolean or null.")
+    if "color" in patch and patch["color"] is not None:
+        value = patch["color"]
+        if isinstance(value, bool) or not isinstance(value, int) or not -1 <= value <= 6:
+            raise _FolderValidationError("Error: folder color must be -1..6 or null.")
+    if (
+        "emoticon" in patch
+        and patch["emoticon"] is not None
+        and not isinstance(patch["emoticon"], str)
+    ):
+        raise _FolderValidationError("Error: emoticon must be text or null.")
+    for name in _PEER_FIELDS:
+        if name not in patch:
+            continue
+        ids = patch[name]
+        if (
+            not isinstance(ids, list)
+            or any(
+                isinstance(i, bool)
+                or not isinstance(i, int)
+                or i == 0
+                or not -(2**63) <= i < 2**63
+                for i in ids
+            )
+            or len(set(ids)) != len(ids)
+        ):
+            raise _FolderValidationError(
+                "Error: peer lists require unique, nonzero marked integer chat IDs."
+            )
+
+
+def _title_entities(data, text):
+    if not isinstance(data, list):
+        raise _FolderValidationError("Error: title_entities must be a list.")
+    result = []
+    units = len(text.encode("utf-16-le")) // 2
+    for item in data:
+        if not isinstance(item, dict):
+            raise _FolderValidationError("Error: invalid title entity.")
+        name = item.get("_")
+        cls = (
+            getattr(types, name, None)
+            if isinstance(name, str) and name.startswith("MessageEntity")
+            else None
+        )
+        values = {k: v for k, v in item.items() if k != "_"}
+        if cls is None or any(isinstance(v, (dict, list)) for v in values.values()):
+            raise _FolderValidationError("Error: unsupported title entity.")
+        offset, length = values.get("offset"), values.get("length")
+        if (
+            any(isinstance(v, bool) or not isinstance(v, int) for v in (offset, length))
+            or offset < 0
+            or length <= 0
+            or offset + length > units
+        ):
+            raise _FolderValidationError("Error: title entity is outside the UTF-16 text range.")
+        try:
+            result.append(cls(**values))
+        except (TypeError, ValueError):
+            raise _FolderValidationError("Error: invalid title entity fields.")
+    return result
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Update Folder", openWorldHint=True, destructiveHint=True, idempotentHint=True
+    )
+)
+@with_account(readonly=False)
+async def update_folder(
+    folder_id: int,
+    patch: Dict[str, Any],
+    expected_revision: Optional[str] = None,
+    account: str = None,
+) -> str:
+    """Patch an existing PRIVATE folder by ID, preserving every omitted field.
+
+    patch fields: title, title_entities (TL entity dictionaries), emoticon, color,
+    title_noanimate, contacts, non_contacts, groups, broadcasts, bots, exclude_muted,
+    exclude_read, exclude_archived, include_chat_ids, pinned_chat_ids, exclude_chat_ids.
+    Peer lists REPLACE that list; [] clears it. Use exact marked integer peer IDs.
+    null clears optional display/flag fields. exclude_archived=false includes archived
+    dialogs by folder rules; it does not unarchive any chat. title changes clear entities
+    unless title_entities is supplied. Shared/system folders are refused. No chat joins,
+    leaves, messages, deletions, archive, mute, read-state or global pin mutations occur.
+    Save get_folder_snapshot first; its private definition is a reversible patch. Optional
+    expected_revision rejects a stale snapshot. A second read detects intervening changes,
+    but Telegram offers no atomic compare-and-swap; avoid concurrent folder editors.
+    """
+    try:
+        _validate_folder_patch(folder_id, patch)
+        if "title_entities" in patch:
+            # Validate structure before any peer lookup. Text bounds checked below.
+            if not isinstance(patch["title_entities"], list):
+                raise _FolderValidationError("Error: title_entities must be a list.")
+        if is_chat_allowlist_enabled():
+            return "Error: complete folder updates are unavailable with a chat allowlist."
+        cl = get_client(account)
+        result = await cl(functions.messages.GetDialogFiltersRequest())
+        target = next((f for f in result.filters if getattr(f, "id", None) == folder_id), None)
+        if target is None:
+            return f"Error: folder {folder_id} not found."
+        if not isinstance(target, DialogFilter):
+            return "Error: shared folders cannot be edited by update_folder."
+        self_id = await _snapshot_self_id(cl, [target])
+        before = _folder_state(target, self_id)
+        if expected_revision is not None and expected_revision != before["revision"]:
+            return "Error: folder changed since the snapshot; read a fresh snapshot first."
+        updated = copy.deepcopy(target)
+        if "title" in patch:
+            updated.title = TextWithEntities(patch["title"], [])
+        if "title_entities" in patch:
+            updated.title = TextWithEntities(
+                updated.title.text, _title_entities(patch["title_entities"], updated.title.text)
+            )
+        for name in set(_FOLDER_FLAGS) | {"emoticon", "color"}:
+            if name in patch:
+                setattr(updated, name, patch[name])
+        known = {
+            _stable_peer_id(peer, self_id): peer
+            for field in _PEER_FIELDS.values()
+            for peer in getattr(target, field)
+        }
+        for name, field in _PEER_FIELDS.items():
+            if name not in patch:
+                continue
+            peers = []
+            for peer_id in patch[name]:
+                peer = known.get(peer_id)
+                if peer is None:
+                    peer = await resolve_input_entity(peer_id, cl)
+                if _stable_peer_id(peer, self_id) != peer_id:
+                    raise _FolderValidationError(
+                        "Error: resolved peer identity differs from requested ID."
+                    )
+                peers.append(peer)
+            setattr(updated, field, peers)
+        if not (
+            updated.include_peers
+            or updated.pinned_peers
+            or any(
+                getattr(updated, name)
+                for name in ("contacts", "non_contacts", "groups", "broadcasts", "bots")
+            )
+        ):
+            return "Error: folder needs at least one included peer or inclusion rule."
+        limits = (await _read_folder_limits(cl))["limits"]
+        included = {
+            _stable_peer_id(p, self_id) for p in updated.include_peers + updated.pinned_peers
+        }
+        excluded = {_stable_peer_id(p, self_id) for p in updated.exclude_peers}
+        if included & excluded:
+            return "Error: included/pinned and excluded peer lists must not overlap."
+        chats_limit = limits["chats_per_folder"]
+        if chats_limit is not None and (
+            len(included) > chats_limit or len(excluded) > chats_limit
+        ):
+            return f"Error: explicit peer count exceeds the configured per-folder limit ({chats_limit})."
+        pin_limit = limits["pinned_per_folder"]
+        if pin_limit is not None and len(updated.pinned_peers) > pin_limit:
+            return (
+                f"Error: pinned peer count exceeds the configured per-folder limit ({pin_limit})."
+            )
+        after = _folder_state(updated, self_id)
+        if before["revision"] == after["revision"]:
+            return json.dumps(
+                {
+                    "success": True,
+                    "folder_id": folder_id,
+                    "changed": False,
+                    "revision": before["revision"],
+                }
+            )
+        latest = await cl(functions.messages.GetDialogFiltersRequest())
+        current = next((f for f in latest.filters if getattr(f, "id", None) == folder_id), None)
+        if (
+            not isinstance(current, DialogFilter)
+            or _folder_state(current, self_id)["revision"] != before["revision"]
+        ):
+            return "Error: folder changed while preparing the update; read a fresh snapshot first."
+        await cl(functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=updated))
+        return json.dumps(
+            {
+                "success": True,
+                "folder_id": folder_id,
+                "changed": True,
+                "revision": after["revision"],
+            }
+        )
+    except _FolderValidationError as e:
+        return log_and_format_error("update_folder", e, ErrorCategory.FOLDER, user_message=str(e))
+    except Exception as e:
+        return log_and_format_error("update_folder", e, ErrorCategory.FOLDER, folder_id=folder_id)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List Folders", openWorldHint=True, readOnlyHint=True))
@@ -631,6 +1011,9 @@ async def reorder_folders(folder_ids: List[int], account: str = None) -> str:
 
 
 __all__ = [
+    "get_folder_limits",
+    "get_folder_snapshot",
+    "update_folder",
     "list_folders",
     "get_folder",
     "create_folder",
