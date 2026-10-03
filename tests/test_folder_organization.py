@@ -304,7 +304,6 @@ async def test_explicit_peer_limit_counts_pinned_union(client, premium, count, a
 @pytest.mark.asyncio
 async def test_pinned_overlap_not_double_counted_and_exclusions_limited_separately(client):
     assert parsed(await folders.update_folder(2, {"include_chat_ids": [1, 2, 3]}))["success"]
-    client.updates.clear()  # property is computed; requests cleared below
     client.requests.clear()
     assert "limit" in await folders.update_folder(2, {"exclude_chat_ids": [4, 5, 6, 7]})
     assert not client.updates
@@ -461,3 +460,16 @@ async def test_multi_account_reads_and_writes_route_selected_client(client, monk
     assert parsed(await folders.get_folder_limits(account="second"))["premium"] is True
     assert parsed(await folders.update_folder(2, {"title": "Second"}, account="second"))["success"]
     assert not client.updates and len(second.updates) == 1
+
+
+@pytest.mark.asyncio
+async def test_saved_messages_can_be_added_by_stable_account_id(client, monkeypatch):
+    async def saved_messages(*args):
+        return types.InputPeerSelf()
+
+    monkeypatch.setattr(folders, "resolve_input_entity", saved_messages)
+    result = parsed(await folders.update_folder(2, {"include_chat_ids": [99]}))
+    assert result["success"] is True
+    assert isinstance(client.updates[0].filter.include_peers[0], types.InputPeerSelf)
+    snapshot = parsed(await folders.get_folder_snapshot())
+    assert snapshot["folders"][1]["definition"]["include_chat_ids"] == [99]

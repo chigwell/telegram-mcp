@@ -352,6 +352,11 @@ async def update_folder(
                 peer = known.get(peer_id)
                 if peer is None:
                     peer = await resolve_input_entity(peer_id, cl)
+                if isinstance(peer, types.InputPeerSelf) and self_id is None:
+                    me = await cl.get_me()
+                    if me is None:
+                        raise _FolderValidationError("Error: account identity is unavailable.")
+                    self_id = me.id
                 if _stable_peer_id(peer, self_id) != peer_id:
                     raise _FolderValidationError(
                         "Error: resolved peer identity differs from requested ID."
