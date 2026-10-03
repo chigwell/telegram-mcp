@@ -1,0 +1,32 @@
+# Secrets and local state must never end up in the bundle
+.env
+.env.*
+*.session
+*.session-journal
+*.log
+data/
+
+# Environments and caches
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+*.egg-info/
+build/
+dist/
+
+# Not needed at runtime
+.git/
+.github/
+tests/
+screenshots/
+skills/
+Dockerfile
+docker-compose.yml
+poetry.lock
+requirements.txt
+.pre-commit-config.yaml
+*.mcpb
