@@ -3,6 +3,39 @@
 from telegram_mcp.runtime import *
 
 
+async def _configured_folder_limit(cl) -> Optional[tuple[int, bool]]:
+    """Read the current account tier and its limit; unknown data defers to Telegram."""
+    try:
+        me = await cl.get_me()
+        if me is None or not hasattr(me, "premium"):
+            return None
+        premium = bool(me.premium)
+        key = "dialog_filters_limit_premium" if premium else "dialog_filters_limit_default"
+        # No cached config: hash=0 requests the full current configuration.
+        result = await cl(functions.help.GetAppConfigRequest(hash=0))
+        if not isinstance(result, types.help.AppConfig) or not isinstance(
+            result.config, types.JsonObject
+        ):
+            return None
+        for entry in result.config.value:
+            if entry.key != key:
+                continue
+            if not isinstance(entry.value, types.JsonNumber):
+                return None
+            value = entry.value.value
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            limit = int(value)
+            if limit > 0 and limit == value:
+                return limit, premium
+            return None
+    except Exception:
+        # Config/account lookup is best-effort. The mutation's RPC error remains
+        # authoritative if these reads fail or the returned limit is unusable.
+        return None
+    return None
+
+
 @mcp.tool(annotations=ToolAnnotations(title="List Folders", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
 async def list_folders(account: str = None) -> str:
@@ -218,9 +251,22 @@ async def create_folder(
         result = await cl(functions.messages.GetDialogFiltersRequest())
 
         existing_ids = set()
+        folder_count = 0
         for f in result.filters:
             if isinstance(f, (DialogFilter, DialogFilterChatlist)):
                 existing_ids.add(f.id)
+                folder_count += 1
+
+        configured_limit = await _configured_folder_limit(cl)
+        if configured_limit is not None:
+            limit, premium = configured_limit
+            if folder_count >= limit:
+                tier = "Premium" if premium else "regular"
+                return (
+                    f"Cannot create folder: you've reached Telegram's folder limit "
+                    f"of {limit} for your {tier} account ({folder_count} folders). "
+                    "Delete a folder first."
+                )
 
         # Find next available ID (IDs 0 and 1 are reserved for system)
         new_id = 2
@@ -256,17 +302,14 @@ async def create_folder(
             exclude_archived=exclude_archived,
         )
 
-        # Don't pre-emptively cap folder count client-side: Telegram's actual
-        # limit differs by account (10 for regular accounts, 20 for Premium)
-        # and may change server-side. Let the API call be the source of
-        # truth and surface the real error if the account is at its limit.
+        # Retain server rejection handling for races and unavailable app config.
         try:
             await cl(functions.messages.UpdateDialogFilterRequest(id=new_id, filter=new_filter))
         except telethon.errors.rpcerrorlist.BadRequestError as e:
             if "DIALOG_FILTERS_TOO_MUCH" in (getattr(e, "message", None) or str(e)):
                 return (
                     "Cannot create folder: you've reached Telegram's folder limit "
-                    "for your account (10 for regular accounts, 20 for Premium). "
+                    "for your account. "
                     "Delete a folder first."
                 )
             raise
