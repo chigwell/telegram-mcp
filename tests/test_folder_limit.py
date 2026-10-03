@@ -149,7 +149,7 @@ async def test_server_rejection_handles_race_or_missing_config(monkeypatch, conf
     result = await folders.create_folder(title="Race")
     assert "Cannot create folder" in result
     assert "folder limit" in result
-    assert "10 for regular accounts, 20 for Premium" not in result
+    assert not any(ch.isdigit() for ch in result)
     assert len(client.updates) == 1
 
 
