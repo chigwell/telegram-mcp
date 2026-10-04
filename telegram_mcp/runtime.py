@@ -68,6 +68,7 @@ from functools import wraps
 import telethon.errors.rpcerrorlist
 from sanitize import sanitize_user_content, sanitize_name, sanitize_dict, format_tool_result
 from telegram_mcp.client_identity import client_identity_kwargs
+from telegram_mcp import serialization as __serialization
 from telegram_mcp import core_types as __core_types
 
 ValidationError = __core_types.ValidationError
@@ -75,12 +76,7 @@ ValidationError = __core_types.ValidationError
 
 def json_serializer(obj):
     """Helper function to convert non-serializable objects for JSON serialization."""
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    if isinstance(obj, bytes):
-        return obj.decode("utf-8", errors="replace")
-    # Add other non-serializable types as needed
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+    return __serialization.json_default(obj, datetime_type=datetime)
 
 
 def get_entity_type(entity: Any) -> str:

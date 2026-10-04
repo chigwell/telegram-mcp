@@ -103,6 +103,7 @@ source = [
     "sanitize",
     "telegram_mcp.runtime",
     "telegram_mcp.core_types",
+    "telegram_mcp.serialization",
 ]
 
 [tool.coverage.report]
