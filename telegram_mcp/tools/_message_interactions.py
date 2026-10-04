@@ -356,7 +356,7 @@ async def create_poll(
             close_date=close_date_obj,
         )
 
-        result = await cl(
+        await cl(
             functions.messages.SendMediaRequest(
                 peer=entity,
                 media=InputMediaPoll(poll=poll),

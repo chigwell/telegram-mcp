@@ -73,7 +73,6 @@ async def export_unread_messages(
             # Retrieve all unread messages in pages of 100
             exported_msgs: list = []
             collected = 0
-            offset_id = 0  # 0 means newest first; we paginate backwards
 
             while True:
                 batch = await cl.get_messages(

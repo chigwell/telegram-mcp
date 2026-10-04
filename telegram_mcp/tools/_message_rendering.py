@@ -6,14 +6,6 @@ from typing import Optional
 
 
 def get_media_label(msg) -> str:
-    """Short label of attached media for a message, or "" if none.
-
-    The media object is already present on the fetched message (msg.media /
-    msg.photo / msg.document etc.) — no extra API call needed. Surfacing it in
-    listings prevents the classic miss where a photo/file WITH a caption shows
-    up looking like a plain text message (Telethon puts the caption in
-    msg.message but the media stays in msg.media).
-    """
     try:
         # Link web preview is NOT an attachment. Check it FIRST: for a message with a
         # link, Telethon returns the preview image via msg.photo; otherwise it would
@@ -63,7 +55,6 @@ def get_media_label(msg) -> str:
 
 
 def _inline_button_texts(msg):
-    """Inline button texts of the message (flat list), [] if none."""
     out = []
     try:
         for row in getattr(msg, "buttons", None) or []:
@@ -77,7 +68,6 @@ def _inline_button_texts(msg):
 
 
 def _link_urls(msg):
-    """Explicit URLs from entities (links hidden behind text), [] if none."""
     out = []
     try:
         for e in getattr(msg, "entities", None) or []:
@@ -92,12 +82,6 @@ def _link_urls(msg):
 def get_custom_emoji_metadata(
     msg, *, _rich_custom_emojis, sanitize_user_content, types, utils
 ) -> dict:
-    """Reusable custom emoji variants, deduplicated by their string document ID.
-
-    Extract from the original text: sanitizing it first would shift Telegram's
-    UTF-16 offsets. Telethon handles those offsets without another API request.
-    Block-format messages carry TextCustomEmoji nodes in rich_message instead.
-    """
     entities = [
         entity
         for entity in getattr(msg, "entities", None) or []
@@ -119,15 +103,6 @@ def get_custom_emoji_metadata(
 
 
 def get_reply_quote(msg, *, sanitize_user_content) -> Optional[dict]:
-    """Quoted fragment when a reply targets only *part* of the replied-to message.
-
-    Telegram lets you select a span of another message and reply to just that
-    span. Telethon exposes it on msg.reply_to as quote_text (the selected text)
-    and quote_offset (its UTF-16 character offset inside the original message).
-    Returns {"text": ..., "offset": ...} for such a partial-quote reply, or None
-    for a plain whole-message reply (or no reply at all). Independent of
-    reply_to_msg_id so a cross-chat quote reply still surfaces its quote.
-    """
     reply = getattr(msg, "reply_to", None)
     if reply is None:
         return None
@@ -159,17 +134,6 @@ def message_to_dict(
     sanitize_user_content,
     transcription,
 ) -> dict:
-    """API-complete but compact Telethon message view (omit empty fields).
-
-    The goal is for the MCP output to match the API object in completeness, rather
-    than losing data such as media, albums, forwards, edits, buttons, reactions,
-    and so on. All these fields are already present in the message object returned
-    by the same get_messages request.
-
-    chat_id (the numeric chat this message belongs to) enables voice/video-note
-    transcript enrichment via the cache - omit it to get the old text-only
-    behavior (used by existing tests with bare fake messages).
-    """
     d = {"id": msg.id, "sender": get_sender_name(msg), "date": msg.date}
 
     sender_id = getattr(msg, "sender_id", None)
@@ -360,11 +324,6 @@ def format_message_line(
     sanitize_user_content,
     transcription,
 ) -> str:
-    """Single-line human-readable message representation with ALL key flags.
-
-    chat_id enables voice/video-note transcript enrichment via the cache -
-    see message_to_dict for why it's optional.
-    """
     parts = [f"ID: {msg.id}", get_sender_info(msg), f"Date: {msg.date}"]
 
     reply_to_id = (
