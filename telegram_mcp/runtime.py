@@ -68,12 +68,9 @@ from functools import wraps
 import telethon.errors.rpcerrorlist
 from sanitize import sanitize_user_content, sanitize_name, sanitize_dict, format_tool_result
 from telegram_mcp.client_identity import client_identity_kwargs
+from telegram_mcp import core_types as __core_types
 
-
-class ValidationError(Exception):
-    """Custom exception for validation errors."""
-
-    pass
+ValidationError = __core_types.ValidationError
 
 
 def json_serializer(obj):
@@ -1075,23 +1072,10 @@ def check_chat_access(chat_identifier: Any, entity: Any = None) -> Optional[str]
 
 
 # Error code prefix mapping for better error tracing
-class ErrorCategory(str, Enum):
-    CHAT = "CHAT"
-    MSG = "MSG"
-    CONTACT = "CONTACT"
-    GROUP = "GROUP"
-    MEDIA = "MEDIA"
-    PROFILE = "PROFILE"
-    AUTH = "AUTH"
-    ADMIN = "ADMIN"
-    FOLDER = "FOLDER"
-    PRIVACY = "PRIVACY"
+ErrorCategory = __core_types.ErrorCategory
 
 
-class ChatAccessDeniedError(Exception):
-    """Exception raised when access to a chat is restricted by privacy policy."""
-
-    pass
+ChatAccessDeniedError = __core_types.ChatAccessDeniedError
 
 
 def _is_flood_wait(error: Exception) -> bool:
@@ -1551,8 +1535,7 @@ def save_aliases(aliases: Dict[str, Any]) -> None:
         raise
 
 
-class AliasStoreUnreadable(Exception):
-    """The alias file exists but could not be read, so writing would destroy it."""
+AliasStoreUnreadable = __core_types.AliasStoreUnreadable
 
 
 @contextmanager
@@ -1689,18 +1672,7 @@ def apply_alias(identifier: Union[int, str]) -> Union[int, str]:
     return record["id"] if record else identifier
 
 
-class AliasID(int):
-    """An int that remembers the wording it was resolved from.
-
-    @validate_id substitutes the stored id before a tool body runs, so without this
-    a resolver could only report an opaque number and never tell the user which of
-    their nicknames has gone stale.
-    """
-
-    def __new__(cls, value: int, wording: str):
-        obj = super().__new__(cls, value)
-        obj.wording = wording
-        return obj
+AliasID = __core_types.AliasID
 
 
 def alias_wording(value: Any) -> Optional[str]:
@@ -1724,16 +1696,7 @@ _PEER_ERRORS = (
 )
 
 
-class AliasNeedsUser(Exception):
-    """Carries an agent-facing instruction to ask the human which contact is meant.
-
-    Deliberately NOT a ValueError: several tools wrap resolution in
-    `except ValueError` and would mangle the instruction into their own message.
-    """
-
-    def __init__(self, payload: str):
-        super().__init__(payload)
-        self.payload = payload
+AliasNeedsUser = __core_types.AliasNeedsUser
 
 
 def alias_ask_payload(reference: str, kind: str = "unknown", stored_id: Optional[int] = None):
