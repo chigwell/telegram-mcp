@@ -108,6 +108,7 @@ source = [
     "telegram_mcp.validation",
     "telegram_mcp.error_formatting",
     "telegram_mcp.file_policy",
+    "telegram_mcp.access_policy",
 ]
 
 [tool.coverage.report]

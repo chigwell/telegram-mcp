@@ -74,6 +74,7 @@ from telegram_mcp import validation as __validation
 from telegram_mcp import formatting as __formatting
 from telegram_mcp import error_formatting as __error_formatting
 from telegram_mcp import file_policy as __file_policy
+from telegram_mcp import access_policy as __access_policy
 
 ValidationError = __core_types.ValidationError
 
@@ -890,51 +891,18 @@ def _parse_allowed_chat_ids(
     Also automatically indexes marked variants for bare integers and vice versa
     so that both marked IDs (-100...) and bare positive IDs match.
     """
-    if raw is None:
-        return None
-    if isinstance(raw, str):
-        raw = raw.strip()
-        if not raw:
-            return None
-        tokens = [t.strip() for t in raw.split(",") if t.strip()]
-    elif isinstance(raw, (list, tuple, set)):
-        tokens = [str(t).strip() for t in raw if str(t).strip()]
-    else:
-        return None
-
-    if not tokens:
-        return None
-
-    allowed: set[Union[int, str]] = set()
-    for token in tokens:
-        try:
-            val = int(token)
-            allowed.add(val)
-            # If negative supergroup: -100XXXXXXXXXX
-            if str(val).startswith("-100") and len(str(val)) > 4:
-                try:
-                    channel_id = int(str(val)[4:])
-                    allowed.add(channel_id)
-                except ValueError:
-                    pass
-            # If positive bare ID: add supergroup (-100...) and group (-) variants
-            elif val > 0:
-                allowed.add(-1000000000000 - val)
-                allowed.add(-val)
-            elif val < 0:
-                # Basic group negative ID: -XXXXXX
-                allowed.add(-val)
-        except ValueError:
-            clean_handle = token.lstrip("@").strip().lower()
-            if clean_handle:
-                allowed.add(clean_handle)
-
-    return allowed if allowed else None
+    return __access_policy._parse_allowed_chat_ids(
+        raw=raw,
+        Union=Union,
+    )
 
 
 def _load_allowed_chat_ids() -> Optional[set[Union[int, str]]]:
     """Load ALLOWED_CHAT_IDS from the TELEGRAM_ALLOWED_CHAT_IDS environment variable."""
-    return _parse_allowed_chat_ids(os.getenv("TELEGRAM_ALLOWED_CHAT_IDS"))
+    return __access_policy._load_allowed_chat_ids(
+        _parse_allowed_chat_ids=_parse_allowed_chat_ids,
+        os=os,
+    )
 
 
 # Initial load from environment
@@ -943,15 +911,18 @@ ALLOWED_CHAT_IDS = _load_allowed_chat_ids()
 
 def get_effective_allowed_chat_ids() -> Optional[set[Union[int, str]]]:
     """Return the currently effective set of allowed chat IDs, or None if allowlist is disabled."""
-    env_raw = os.getenv("TELEGRAM_ALLOWED_CHAT_IDS")
-    if env_raw is not None:
-        return _parse_allowed_chat_ids(env_raw)
-    return ALLOWED_CHAT_IDS
+    return __access_policy.get_effective_allowed_chat_ids(
+        ALLOWED_CHAT_IDS=ALLOWED_CHAT_IDS,
+        _parse_allowed_chat_ids=_parse_allowed_chat_ids,
+        os=os,
+    )
 
 
 def is_chat_allowlist_enabled() -> bool:
     """Return True if chat allowlist filtering is active."""
-    return get_effective_allowed_chat_ids() is not None
+    return __access_policy.is_chat_allowlist_enabled(
+        get_effective_allowed_chat_ids=get_effective_allowed_chat_ids,
+    )
 
 
 def is_chat_allowed(chat_identifier: Any, entity: Any = None) -> bool:
@@ -959,51 +930,21 @@ def is_chat_allowed(chat_identifier: Any, entity: Any = None) -> bool:
 
     If allowlist is not enabled, always returns True.
     """
-    allowed = get_effective_allowed_chat_ids()
-    if allowed is None:
-        return True
-
-    if chat_identifier is not None:
-        if isinstance(chat_identifier, int):
-            if chat_identifier in allowed:
-                return True
-        elif isinstance(chat_identifier, str):
-            try:
-                int_id = int(chat_identifier)
-                if int_id in allowed:
-                    return True
-            except ValueError:
-                clean = chat_identifier.lstrip("@").strip().lower()
-                if clean and clean in allowed:
-                    return True
-
-    if entity is not None:
-        try:
-            marked_id = get_marked_id(entity)
-            if marked_id in allowed:
-                return True
-        except Exception:
-            pass
-
-        bare_id = getattr(entity, "id", None)
-        if isinstance(bare_id, int) and bare_id in allowed:
-            return True
-
-        username = getattr(entity, "username", None)
-        if username and str(username).lower() in allowed:
-            return True
-
-    return False
+    return __access_policy.is_chat_allowed(
+        chat_identifier=chat_identifier,
+        entity=entity,
+        get_effective_allowed_chat_ids=get_effective_allowed_chat_ids,
+        get_marked_id=get_marked_id,
+    )
 
 
 def check_chat_access(chat_identifier: Any, entity: Any = None) -> Optional[str]:
     """Return an error message if chat access is restricted, or None if allowed."""
-    if not is_chat_allowed(chat_identifier, entity):
-        return (
-            f"Access to chat '{chat_identifier}' is restricted by privacy policy "
-            "(TELEGRAM_ALLOWED_CHAT_IDS)."
-        )
-    return None
+    return __access_policy.check_chat_access(
+        chat_identifier=chat_identifier,
+        entity=entity,
+        is_chat_allowed=is_chat_allowed,
+    )
 
 
 # Error code prefix mapping for better error tracing
