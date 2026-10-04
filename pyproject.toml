@@ -112,6 +112,7 @@ source = [
     "telegram_mcp.alias_store",
     "telegram_mcp.account_config",
     "telegram_mcp.connections",
+    "telegram_mcp.mcp_policy",
 ]
 
 [tool.coverage.report]
