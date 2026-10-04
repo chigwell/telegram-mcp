@@ -1,6 +1,48 @@
 """Contacts MCP tools."""
 
-from telegram_mcp.runtime import *
+import json
+from typing import (
+    Any,
+    Dict,
+    Union,
+)
+from telethon import (
+    functions,
+)
+from telethon.errors import (
+    BotMethodInvalidError,
+)
+from telethon.tl.types import (
+    User,
+)
+from mcp.types import (
+    ToolAnnotations,
+)
+from sanitize import (
+    format_tool_result,
+    sanitize_name,
+    sanitize_user_content,
+)
+from telegram_mcp.runtime import (
+    AliasNeedsUser,
+    AliasStoreUnreadable,
+    alias_key,
+    apply_alias,
+    ensure_connected,
+    format_entity,
+    get_client,
+    get_entity_type,
+    get_marked_id,
+    is_handle_like,
+    load_aliases,
+    log_and_format_error,
+    match_aliases,
+    mcp,
+    resolve_entity,
+    update_aliases,
+    validate_id,
+    with_account,
+)
 from typing import Optional
 
 

@@ -1,6 +1,37 @@
 """Profile MCP tools."""
 
-from telegram_mcp.runtime import *
+import json
+from typing import (
+    List,
+    Optional,
+    Union,
+)
+from telethon import (
+    functions,
+)
+from mcp.server.fastmcp import (
+    Context,
+)
+from mcp.types import (
+    ToolAnnotations,
+)
+from sanitize import (
+    sanitize_name,
+    sanitize_user_content,
+)
+from telegram_mcp.runtime import (
+    _resolve_readable_file_path,
+    ensure_connected,
+    format_entity,
+    get_client,
+    get_marked_id,
+    log_and_format_error,
+    logger,
+    mcp,
+    resolve_entity,
+    validate_id,
+    with_account,
+)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Me", openWorldHint=True, readOnlyHint=True))

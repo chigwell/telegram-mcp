@@ -1,6 +1,15 @@
 """Accounts MCP tools."""
 
-from telegram_mcp.runtime import *
+from mcp.types import (
+    ToolAnnotations,
+)
+from sanitize import (
+    sanitize_name,
+)
+from telegram_mcp.runtime import (
+    clients,
+    mcp,
+)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List Accounts", readOnlyHint=True))

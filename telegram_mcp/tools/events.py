@@ -19,7 +19,25 @@ from typing import Any, Dict, Optional, Tuple, Union
 from telethon import events as _events
 from telethon import utils
 
-from telegram_mcp.runtime import *  # mcp, clients, ToolAnnotations, log_and_format_error
+from mcp.types import (
+    ToolAnnotations,
+)
+from sanitize import (
+    sanitize_name,
+)
+from telegram_mcp.runtime import (
+    _parse_bool_env,
+    apply_alias,
+    clients,
+    get_client,
+    get_marked_id,
+    is_chat_allowed,
+    is_chat_allowlist_enabled,
+    log_and_format_error,
+    mcp,
+    resolve_entity,
+    validate_id,
+)
 
 # chat_id -> {first_ts, last_ts, count, first_id, last_id, name, username}
 _pending_msgs: Dict[int, Dict[str, Any]] = {}

@@ -6,7 +6,56 @@ import struct
 from telethon.errors import BotMethodInvalidError
 from telethon.tl.tlobject import TLObject, TLRequest
 
-from telegram_mcp.runtime import *
+import json
+import time
+from datetime import (
+    datetime,
+)
+from typing import (
+    Optional,
+    Union,
+)
+from telethon import (
+    functions,
+    types,
+    utils,
+)
+import telethon.errors.rpcerrorlist
+from telethon.tl.types import (
+    Channel,
+    Chat,
+    InputPeerChat,
+    User,
+)
+from mcp.types import (
+    ToolAnnotations,
+)
+from sanitize import (
+    format_tool_result,
+    sanitize_name,
+    sanitize_user_content,
+)
+from telegram_mcp.runtime import (
+    ChatAccessDeniedError,
+    ErrorCategory,
+    check_chat_access,
+    ensure_connected,
+    format_entity,
+    get_client,
+    get_entity_filter_type,
+    get_entity_type,
+    get_marked_id,
+    is_chat_allowed,
+    is_chat_allowlist_enabled,
+    json_serializer,
+    log_and_format_error,
+    logger,
+    mcp,
+    resolve_entity,
+    resolve_input_entity,
+    validate_id,
+    with_account,
+)
 
 
 class GetForumTopicsRequest(TLRequest):

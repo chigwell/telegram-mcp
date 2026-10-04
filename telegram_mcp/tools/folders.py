@@ -1,6 +1,43 @@
 """Folders MCP tools."""
 
-from telegram_mcp.runtime import *
+import json
+from typing import (
+    List,
+    Optional,
+    Union,
+)
+from telethon import (
+    functions,
+    types,
+    utils,
+)
+import telethon.errors.rpcerrorlist
+from telethon.tl.types import (
+    DialogFilter,
+    DialogFilterChatlist,
+    DialogFilterDefault,
+    TextWithEntities,
+)
+from mcp.types import (
+    ToolAnnotations,
+)
+from sanitize import (
+    sanitize_name,
+)
+from telegram_mcp.runtime import (
+    ErrorCategory,
+    ensure_connected,
+    get_client,
+    get_entity_type,
+    get_marked_id,
+    json_serializer,
+    log_and_format_error,
+    mcp,
+    resolve_entity,
+    resolve_input_entity,
+    validate_id,
+    with_account,
+)
 
 
 async def _configured_folder_limit(cl) -> Optional[tuple[int, bool]]:
