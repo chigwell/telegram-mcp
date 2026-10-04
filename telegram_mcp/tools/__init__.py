@@ -1,13 +1,149 @@
 """Import tool modules so their MCP decorators register with the shared server."""
 
-from telegram_mcp.tools.accounts import *
-from telegram_mcp.tools.contacts import *
-from telegram_mcp.tools.chats import *
-from telegram_mcp.tools.messages import *
-from telegram_mcp.tools.groups import *
-from telegram_mcp.tools.media import *
-from telegram_mcp.tools.profile import *
-from telegram_mcp.tools.folders import *
-from telegram_mcp.tools.events import *
+from telegram_mcp.tools.accounts import (
+    list_accounts,
+)
+from telegram_mcp.tools.contacts import (
+    list_contacts,
+    search_contacts,
+    get_contact_ids,
+    get_direct_chat_by_contact,
+    get_contact_chats,
+    get_last_interaction,
+    add_contact,
+    delete_contact,
+    block_user,
+    unblock_user,
+    import_contacts,
+    export_contacts,
+    get_blocked_users,
+    send_contact,
+    set_contact_alias,
+    list_contact_aliases,
+    delete_contact_alias,
+)
+from telegram_mcp.tools.chats import (
+    get_chats,
+    list_topics,
+    enable_forum_topics,
+    create_forum_topic,
+    list_chats,
+    get_chat,
+    subscribe_public_channel,
+    search_public_chats,
+    resolve_username,
+    get_full_chat,
+    mute_chat,
+    unmute_chat,
+    archive_chat,
+    unarchive_chat,
+    get_common_chats,
+    get_message_read_by,
+    get_message_link,
+)
+from telegram_mcp.tools.messages import (
+    get_messages,
+    send_message,
+    send_scheduled_message,
+    get_scheduled_messages,
+    delete_scheduled_message,
+    list_inline_buttons,
+    press_inline_button,
+    list_messages,
+    get_message_context,
+    forward_message,
+    edit_message,
+    delete_message,
+    delete_chat_history,
+    delete_messages_bulk,
+    pin_message,
+    unpin_message,
+    unpin_all_messages,
+    mark_as_read,
+    reply_to_message,
+    search_messages,
+    search_global,
+    get_history,
+    get_pinned_messages,
+    create_poll,
+    send_reaction,
+    remove_reaction,
+    get_message_reactions,
+    save_draft,
+    get_drafts,
+    clear_draft,
+    export_unread_messages,
+)
+from telegram_mcp.tools.groups import (
+    create_group,
+    invite_to_group,
+    leave_chat,
+    get_participants,
+    create_channel,
+    edit_chat_title,
+    edit_chat_photo,
+    edit_chat_about,
+    delete_chat_photo,
+    promote_admin,
+    demote_admin,
+    ban_user,
+    unban_user,
+    set_default_chat_permissions,
+    toggle_slow_mode,
+    edit_admin_rights,
+    get_admins,
+    get_member_admin_status,
+    get_banned_users,
+    get_invite_link,
+    join_chat_by_link,
+    export_chat_invite,
+    import_chat_invite,
+    get_recent_actions,
+)
+from telegram_mcp.tools.media import (
+    send_file,
+    send_album,
+    download_media,
+    list_photos,
+    open_photo,
+    get_photo_sheet,
+    send_voice,
+    upload_file,
+    get_media_info,
+    get_sticker_sets,
+    send_sticker,
+    get_gif_search,
+    send_gif,
+)
+from telegram_mcp.tools.profile import (
+    get_me,
+    update_profile,
+    set_profile_photo,
+    delete_profile_photo,
+    get_privacy_settings,
+    set_privacy_settings,
+    get_full_user,
+    get_user_photos,
+    get_user_status,
+    get_bot_info,
+    set_bot_commands,
+)
+from telegram_mcp.tools.folders import (
+    list_folders,
+    get_folder,
+    create_folder,
+    add_chat_to_folder,
+    remove_chat_from_folder,
+    delete_folder,
+    reorder_folders,
+)
+from telegram_mcp.tools.events import (
+    wait_for_new_message,
+    wait_for_settled_message,
+    register_incoming_handlers,
+    enable_incoming_feed,
+    disable_incoming_feed,
+    incoming_feed_status,
+)
 
 __all__ = [name for name in globals() if not name.startswith("_")]
