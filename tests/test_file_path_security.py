@@ -100,6 +100,87 @@ async def test_readable_path_rejects_outside_root(tmp_path, monkeypatch):
     assert error == "Path is outside allowed roots."
 
 
+def _symlink(link, target, *, directory=False):
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks are not available here: {exc}")
+
+
+def _symlinked_layout(tmp_path):
+    """An allowed root with symlinks pointing out of it, plus an outside dir."""
+    root = (tmp_path / "root").resolve()
+    outside = (tmp_path / "outside").resolve()
+    root.mkdir()
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret")
+    _symlink(root / "secret_link.txt", outside / "secret.txt")
+    _symlink(root / "outside_dir", outside, directory=True)
+    _symlink(root / "dangling.bin", outside / "created.bin")
+    return root, outside
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_path", ["secret_link.txt", "outside_dir/secret.txt"])
+async def test_readable_path_rejects_symlink_escape(tmp_path, monkeypatch, raw_path):
+    root, _outside = _symlinked_layout(tmp_path)
+    monkeypatch.setattr(main, "SERVER_ALLOWED_ROOTS", [root])
+
+    for path in (raw_path, str(root / raw_path)):
+        resolved, error = await main._resolve_readable_file_path(
+            raw_path=path, ctx=None, tool_name="send_file"
+        )
+        assert resolved is None
+        assert error == "Path is outside allowed roots."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_path",
+    ["dangling.bin", "outside_dir/new.bin", "outside_dir/nested/new.bin"],
+)
+async def test_writable_path_rejects_symlink_escape(tmp_path, monkeypatch, raw_path):
+    root, outside = _symlinked_layout(tmp_path)
+    monkeypatch.setattr(main, "SERVER_ALLOWED_ROOTS", [root])
+
+    resolved, error = await main._resolve_writable_file_path(
+        raw_path=raw_path,
+        default_filename="ignored.bin",
+        ctx=None,
+        tool_name="download_media",
+    )
+
+    assert resolved is None
+    assert error == "Path is outside allowed roots."
+    # Rejection happens before any directory is created on the target side.
+    assert sorted(p.name for p in outside.iterdir()) == ["secret.txt"]
+
+
+@pytest.mark.asyncio
+async def test_symlinks_that_stay_inside_root_resolve_to_their_target(tmp_path, monkeypatch):
+    root = (tmp_path / "root").resolve()
+    (root / "real").mkdir(parents=True)
+    target = root / "real" / "file.txt"
+    target.write_text("ok")
+    _symlink(root / "linked", root / "real", directory=True)
+    monkeypatch.setattr(main, "SERVER_ALLOWED_ROOTS", [root])
+
+    readable, error = await main._resolve_readable_file_path(
+        raw_path="linked/file.txt", ctx=None, tool_name="send_file"
+    )
+    assert error is None
+    assert readable == target
+
+    writable, error = await main._resolve_writable_file_path(
+        raw_path="linked/new.bin",
+        default_filename="ignored.bin",
+        ctx=None,
+        tool_name="download_media",
+    )
+    assert error is None
+    assert writable == root / "real" / "new.bin"
+
+
 @pytest.mark.asyncio
 async def test_client_roots_replace_server_allowlist(tmp_path, monkeypatch):
     server_root = (tmp_path / "server_root").resolve()
