@@ -858,7 +858,7 @@ async def ensure_connected(cl: TelegramClient = None):
             timeout=5.0,
         )
         _last_conn_verified[key] = now
-    except (ConnectionError, OSError, asyncio.TimeoutError, Exception):
+    except Exception:
         await _force_reconnect(cl)
 
 
@@ -1841,7 +1841,7 @@ async def _resolve_with_retries(
             last_error = error
             try:
                 await client.get_dialogs()
-            except (BotMethodInvalidError, Exception):
+            except Exception:
                 pass
             try:
                 return await get(identifier)
@@ -1855,7 +1855,7 @@ async def _resolve_with_retries(
             last_error = error
             try:
                 await client.get_dialogs()
-            except (BotMethodInvalidError, Exception):
+            except Exception:
                 pass
             try:
                 return await get(identifier)
@@ -2383,7 +2383,6 @@ async def _resolve_writable_file_path(
 
 
 # Global variables to store CLI-parsed configuration for runner.py
-global _CLI_TRANSPORT, _CLI_HOST, _CLI_PORT
 _CLI_TRANSPORT = None
 _CLI_HOST = None
 _CLI_PORT = None
