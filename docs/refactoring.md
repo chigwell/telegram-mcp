@@ -149,3 +149,27 @@ A preexisting initialization defect also needs its own functional fix: a malform
 or negative `TELEGRAM_FLOOD_SLEEP_THRESHOLD` can reference logging before the
 logger is initialized during account construction. This refactor preserves the
 existing initialization order and does not correct that failure path.
+
+## Delivery validation
+
+The final production tree passed 881 offline tests on Python 3.13.11, with
+92.86% branch coverage across the unchanged deterministic-core surface and its
+extracted implementations. Black checked all 102 tracked Python files; the
+blocking Flake8 check and whitespace check passed. Every added Python file also
+parsed with Python 3.10 syntax rules. This syntax check does not substitute for
+running the supported Python versions in CI.
+
+An isolated wheel build included all 50 packaged Python files. Noneditable
+installation from an explicit source path preserved all 132 tool definitions,
+three exposure modes, 732 compatibility exports and three console entrypoints.
+Both session utilities passed their real help invocation. The server entrypoint
+reached its configuration boundary with the event loop mocked; no Telegram
+startup or network access was attempted. Direct raw-wheel installation retains
+the existing provenance guard's rejection of the server entrypoint.
+
+Compose configuration validated using `.env.example`. The local Docker engine
+timed out, so container image builds must be verified through the existing
+`Docker Build & Compose Validation` workflow; live container execution remains a
+separate smoke check. Independent review also compared 95 relocated tool
+functions with the original AST, including public signatures, decorator order,
+docstrings and dependencies, and found no unexplained behavior changes.
