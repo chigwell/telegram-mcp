@@ -545,13 +545,40 @@ class _ConnectivityClient:
 
 @pytest.mark.asyncio
 async def test_ensure_connected_reconnects_disconnected_client(monkeypatch):
-    client = _ConnectivityClient(connected=False, authorized=False)
+    client = _ConnectivityClient(connected=False, authorized=True)
     monkeypatch.setattr(runtime, "_last_conn_verified", {})
 
     await runtime.ensure_connected(client)
 
-    assert client.calls == ["is_connected", "disconnect", "connect", "is_user_authorized", "start"]
+    assert client.calls == ["is_connected", "disconnect", "connect", "is_user_authorized"]
     assert runtime._last_conn_verified[id(client)] > 0
+
+
+@pytest.mark.asyncio
+async def test_force_reconnect_never_starts_interactive_login(monkeypatch):
+    client = _ConnectivityClient(connected=False, authorized=False)
+    monkeypatch.setattr(runtime, "_last_conn_verified", {})
+
+    with pytest.raises(RuntimeError, match="not authorized after reconnect") as excinfo:
+        await runtime._force_reconnect(client)
+
+    assert "session_string_generator.py" in str(excinfo.value)
+    assert "start" not in client.calls
+    # The unauthorized connection is dropped so the next tool call reconnects
+    # and reports the same error instead of reusing a half-open session.
+    assert client.calls == ["disconnect", "connect", "is_user_authorized", "disconnect"]
+    assert id(client) not in runtime._last_conn_verified
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_surfaces_revoked_session(monkeypatch):
+    client = _ConnectivityClient(connected=False, authorized=False)
+    monkeypatch.setattr(runtime, "_last_conn_verified", {})
+
+    with pytest.raises(RuntimeError, match="Interactive login is disabled"):
+        await runtime.ensure_connected(client)
+
+    assert "start" not in client.calls
 
 
 @pytest.mark.asyncio
