@@ -642,14 +642,9 @@ Security behavior:
   `TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK=1` to fall back to the server CLI roots
   in that case (opt-in; the default stays deny-all). The same opt-in also applies
   when `list_roots` fails unexpectedly and no client paths could be recovered.
-- The `roots/list` request to the client times out after
-  `TELEGRAM_ROOTS_TIMEOUT_SECONDS` (default 10; `0` waits forever). Some
-  clients advertise Roots support but never answer it, so every file-path tool
-  call would wait for that timeout. If you configure server roots and want
-  them to be authoritative, set `TELEGRAM_SERVER_ROOTS_ONLY=1`: the server then
-  uses its own roots directly and never sends `roots/list`, and client Roots
-  are ignored. Without server roots the setting has no effect and client Roots
-  keep working.
+- `roots/list` times out after `TELEGRAM_ROOTS_TIMEOUT_SECONDS` (default 10).
+  With server roots configured, `TELEGRAM_SERVER_ROOTS_ONLY=1` uses them directly
+  and skips `roots/list`; client Roots are then ignored.
 - Paths are resolved through real paths and must stay inside an allowed root.
 - Traversal, wildcard-like, shell-like, and null-byte path patterns are rejected.
 - Relative paths resolve under the first allowed root.
@@ -852,7 +847,7 @@ Telegram messages, display names, chat titles, and button labels are untrusted c
 - **Database is locked:** make sure no other process is using the same file session.
 - **`AuthKeyDuplicatedError` / "Another telegram-mcp process is already connected with this session":** two processes tried to connect the same Telegram session at once (e.g. an MCP client restarted the connector before the old process exited), which Telegram rejects and can invalidate the session for both. The server now takes an exclusive lock per session before connecting; a second concurrent launch waits briefly (default 20s, override with `TELEGRAM_LOCK_GRACE_SECONDS`) for the first to release it and otherwise exits without ever calling `connect()`, instead of racing into a duplicate connection. Retry once only one instance is running — the refusal names the PID holding the lock. If several instances on this host are meant to share one session (all reaching Telegram from the same IP), set `TELEGRAM_SESSION_LOCK=shared`; see [Sharing one session from one host](#sharing-one-session-from-one-host).
 - **File tools are disabled:** pass allowed roots or configure MCP Roots in your client.
-- **File tools are slow or report that the client never answered `roots/list`:** configure server roots and set `TELEGRAM_SERVER_ROOTS_ONLY=1` so the server skips the client Roots request.
+- **File tools wait for `roots/list`:** configure server roots and set `TELEGRAM_SERVER_ROOTS_ONLY=1`.
 - **Path rejected:** ensure the path is inside an allowed root and does not use traversal or wildcard patterns.
 - **Auth errors after password changes:** regenerate your session string.
 - **Bot-only tool rejected:** regular user accounts cannot manage bot command settings.
