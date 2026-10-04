@@ -7,6 +7,7 @@ refactor test. Registration metadata is captured without calling Telegram.
 import ast
 import copy
 import inspect
+from importlib.util import resolve_name
 import json
 import os
 from pathlib import Path
@@ -142,11 +143,63 @@ def test_no_shadowed_test_functions():
                     seen.add(node.name)
 
 
+def test_extracted_implementations_do_not_import_state_owning_facades():
+    """Keep invocation-time dependency injection from becoming circular imports."""
+    package = Path(runtime.__file__).parent
+    core_modules = (
+        "core_types",
+        "serialization",
+        "formatting",
+        "validation",
+        "error_formatting",
+        "file_policy",
+        "access_policy",
+        "alias_store",
+        "account_config",
+        "connections",
+        "mcp_policy",
+        "startup",
+    )
+    paths = [*(package / f"{name}.py" for name in core_modules)]
+    paths.extend(path for path in (package / "tools").glob("_*.py") if path.stem != "__init__")
+    facades = {"main", "telegram_mcp.runtime", "telegram_mcp.runner", "telegram_mcp.tools"}
+    facades.update(
+        f"telegram_mcp.tools.{path.stem}"
+        for path in (package / "tools").glob("*.py")
+        if not path.stem.startswith("_")
+    )
+    for path in paths:
+        package_name = "telegram_mcp.tools" if path.parent.name == "tools" else "telegram_mcp"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imports = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if node.level:
+                    module = resolve_name("." * node.level + module, package_name)
+                imports.add(module)
+                imports.update(f"{module}.{alias.name}" for alias in node.names)
+        assert not imports & facades, f"{path.name}: {sorted(imports & facades)}"
+
+
+def test_internal_imports_are_explicit():
+    package = Path(runtime.__file__).parent
+    for path in package.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        assert not any(
+            isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names)
+            for node in ast.walk(tree)
+        ), path.relative_to(package)
+
+
 @pytest.mark.parametrize("method", ["connect", "connect_ex"])
-def test_offline_bootstrap_rejects_network_connections(method):
+def test_offline_bootstrap_rejects_network_connections(method, network_guard_probe):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
         with pytest.raises(AssertionError, match="Unexpected network connection"):
             getattr(connection, method)(("127.0.0.1", 9))
+    assert network_guard_probe == [method]
 
 
 def test_bootstrap_uses_dummy_credentials_and_isolated_state(tmp_path):

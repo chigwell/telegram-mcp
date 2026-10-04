@@ -33,17 +33,20 @@ os.environ.update(
 _bootstrap_patch = pytest.MonkeyPatch()
 _socket_connect = socket.socket.connect
 _socket_connect_ex = socket.socket.connect_ex
+_forbidden_network_attempts = []
 
 
 def _offline_connect(self, address):
     if self.family == getattr(socket, "AF_UNIX", None):
         return _socket_connect(self, address)
+    _forbidden_network_attempts.append("connect")
     raise AssertionError("Unexpected network connection in offline tests")
 
 
 def _offline_connect_ex(self, address):
     if self.family == getattr(socket, "AF_UNIX", None):
         return _socket_connect_ex(self, address)
+    _forbidden_network_attempts.append("connect_ex")
     raise AssertionError("Unexpected network connection in offline tests")
 
 
@@ -72,6 +75,29 @@ def pytest_unconfigure(config):
     _bootstrap_patch.undo()
     tempfile.tempdir = _original_tempdir
     _state.cleanup()
+
+
+@pytest.fixture(autouse=True)
+def _assert_no_forbidden_network_attempts():
+    """A broad production exception handler cannot hide attempted network IO."""
+    earlier_attempts = list(_forbidden_network_attempts)
+    _forbidden_network_attempts.clear()
+    assert not earlier_attempts, f"Unexpected network attempts before test: {earlier_attempts}"
+    state = {"intentional_probe": False}
+    try:
+        yield state
+    finally:
+        attempts = list(_forbidden_network_attempts)
+        _forbidden_network_attempts.clear()
+        if not state["intentional_probe"]:
+            assert not attempts, f"Unexpected network attempts during test: {attempts}"
+
+
+@pytest.fixture
+def network_guard_probe(_assert_no_forbidden_network_attempts):
+    """Allow only guard self-tests to deliberately exercise blocked connects."""
+    _assert_no_forbidden_network_attempts["intentional_probe"] = True
+    return _forbidden_network_attempts
 
 
 @pytest.fixture(autouse=True)

@@ -4,7 +4,14 @@ import asyncio
 
 import pytest
 from mcp.server.fastmcp import Image
-from mcp.types import CallToolResult, ImageContent, ServerResult, TextContent
+from mcp.types import (
+    Annotations,
+    CallToolRequest,
+    CallToolResult,
+    ImageContent,
+    ServerResult,
+    TextContent,
+)
 
 from telegram_mcp import runtime
 
@@ -167,3 +174,76 @@ async def test_disabled_tool_timeout_does_not_relabel_handler_timeout(monkeypatc
             await handlers[CallToolRequest](None)
     finally:
         handlers[CallToolRequest] = installed_handler
+
+
+@pytest.mark.asyncio
+async def test_annotation_hook_preserves_explicit_text_and_image_annotations(monkeypatch):
+    explicit = Annotations(audience=["assistant"], priority=0.5)
+    response = ServerResult(
+        CallToolResult(
+            content=[
+                TextContent(type="text", text="caption", annotations=explicit),
+                ImageContent(
+                    type="image", data="Zm9v", mimeType="image/jpeg", annotations=explicit
+                ),
+            ]
+        )
+    )
+    original_blocks = tuple(response.root.content)
+
+    async def original_handler(req):
+        return response
+
+    handlers = runtime.mcp._mcp_server.request_handlers
+    monkeypatch.setitem(handlers, CallToolRequest, original_handler)
+    monkeypatch.setattr(runtime, "_tool_timeout_seconds", lambda: None)
+    runtime._install_annotation_hook()
+
+    actual = await handlers[CallToolRequest](None)
+
+    assert actual is response
+    assert len(actual.root.content) == len(original_blocks)
+    for block, original in zip(actual.root.content, original_blocks):
+        assert block is original
+        assert block.annotations == explicit
+
+
+@pytest.mark.asyncio
+async def test_annotation_hook_reads_current_audience_after_handler_returns(monkeypatch):
+    entered = asyncio.Event()
+    resume = asyncio.Event()
+    response = ServerResult(
+        CallToolResult(
+            content=[
+                TextContent(type="text", text="caption"),
+                ImageContent(type="image", data="Zm9v", mimeType="image/jpeg"),
+            ]
+        )
+    )
+
+    async def original_handler(req):
+        entered.set()
+        await resume.wait()
+        return response
+
+    handlers = runtime.mcp._mcp_server.request_handlers
+    monkeypatch.setitem(handlers, CallToolRequest, original_handler)
+    monkeypatch.setattr(runtime, "_tool_timeout_seconds", lambda: None)
+    monkeypatch.setattr(runtime, "_USER_AUDIENCE", Annotations(audience=["user"]))
+    runtime._install_annotation_hook()
+    task = asyncio.create_task(handlers[CallToolRequest](None))
+    replacement = Annotations(audience=["assistant"], priority=0.75)
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        monkeypatch.setattr(runtime, "_USER_AUDIENCE", replacement)
+        resume.set()
+        actual = await asyncio.wait_for(task, timeout=1)
+    finally:
+        resume.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert actual is response
+    assert len(actual.root.content) == 2
+    assert all(block.annotations == replacement for block in actual.root.content)

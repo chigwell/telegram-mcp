@@ -203,3 +203,35 @@ async def test_resolver_reconnect_warm_and_both_marked_candidates_keep_order(mon
         (getter, -1000000000123),
         (getter, -123),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("getter", ["get_entity", "get_input_entity"])
+async def test_failed_reconnect_does_not_trigger_cache_warming_or_another_lookup(
+    monkeypatch, getter
+):
+    trace = []
+
+    class Client:
+        async def get_dialogs(self):
+            pytest.fail("A failed connection check must not warm the cache")
+
+    async def get(identifier):
+        trace.append((getter, identifier))
+        raise ConnectionError("connection lost")
+
+    async def ensure_connected(client):
+        assert client is selected_client
+        trace.append("ensure_connected")
+        if trace.count("ensure_connected") == 2:
+            raise ValueError("reconnect refused")
+
+    selected_client = Client()
+    setattr(selected_client, getter, get)
+    monkeypatch.setattr(runtime, "ensure_connected", ensure_connected)
+    resolver = runtime.resolve_entity if getter == "get_entity" else runtime.resolve_input_entity
+
+    with pytest.raises(ValueError, match="reconnect refused"):
+        await resolver(123, selected_client)
+
+    assert trace == ["ensure_connected", (getter, 123), "ensure_connected"]
