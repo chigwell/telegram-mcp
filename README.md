@@ -570,30 +570,7 @@ every connect), so set them in the same place as your other credentials.
 
 ## Expected Account Check
 
-Optionally pin each session to the Telegram account it is supposed to belong to.
-When set, the server calls `get_me()` right after connecting and compares the
-account's username (case-insensitive, leading `@` optional, active collectible
-usernames included) with the configured value. On a mismatch, or if the account
-has no username, it disconnects and refuses to start, so a swapped or
-mislabelled session string cannot silently act as the wrong person:
-
-```env
-TELEGRAM_EXPECTED_USERNAME=my_username
-```
-
-In multi-account setups use the same `_<LABEL>` suffix as the session variables;
-a suffixed value overrides the unsuffixed one for that account:
-
-```env
-TELEGRAM_SESSION_STRING_WORK=session_string_for_work
-TELEGRAM_SESSION_STRING_PERSONAL=session_string_for_personal
-TELEGRAM_EXPECTED_USERNAME_WORK=my_work_username
-TELEGRAM_EXPECTED_USERNAME_PERSONAL=my_personal_username
-```
-
-An unsuffixed `TELEGRAM_EXPECTED_USERNAME` applies to every account that has no
-suffixed value. When neither is set (the default) no check is made and no extra
-request is sent.
+Set `TELEGRAM_EXPECTED_USERNAME` (or `TELEGRAM_EXPECTED_USERNAME_<LABEL>` per account) and the server refuses to start when the session belongs to a different account. The comparison is case-insensitive and ignores a leading `@`. Unset means no check.
 
 ## Proxy Support
 
@@ -867,10 +844,8 @@ Telegram messages, display names, chat titles, and button labels are untrusted c
   the MCP server when you can scan from an existing Telegram app, or
   `uv run session_string_generator.py --phone` when you need phone-code login.
   Then set `TELEGRAM_SESSION_STRING` in `.env`. The MCP server does not perform
-  interactive phone-code login over stdio. This also applies when a session is
-  terminated (for example from **Settings > Devices** on another device) while the
-  server is running: the next reconnect fails with "not authorized after reconnect"
-  instead of prompting for a phone number. Re-authorize as above and restart the server.
+  interactive phone-code login over stdio, including after a reconnect: a session
+  terminated while the server runs fails with "not authorized after reconnect".
 - **Invalid API credentials:** verify `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` at [my.telegram.org/apps](https://my.telegram.org/apps).
 - **Database is locked:** make sure no other process is using the same file session.
 - **`AuthKeyDuplicatedError` / "Another telegram-mcp process is already connected with this session":** two processes tried to connect the same Telegram session at once (e.g. an MCP client restarted the connector before the old process exited), which Telegram rejects and can invalidate the session for both. The server now takes an exclusive lock per session before connecting; a second concurrent launch waits briefly (default 20s, override with `TELEGRAM_LOCK_GRACE_SECONDS`) for the first to release it and otherwise exits without ever calling `connect()`, instead of racing into a duplicate connection. Retry once only one instance is running — the refusal names the PID holding the lock. If several instances on this host are meant to share one session (all reaching Telegram from the same IP), set `TELEGRAM_SESSION_LOCK=shared`; see [Sharing one session from one host](#sharing-one-session-from-one-host).

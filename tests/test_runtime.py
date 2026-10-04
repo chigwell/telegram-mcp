@@ -575,7 +575,7 @@ async def test_ensure_connected_surfaces_revoked_session(monkeypatch):
     client = _ConnectivityClient(connected=False, authorized=False)
     monkeypatch.setattr(runtime, "_last_conn_verified", {})
 
-    with pytest.raises(RuntimeError, match="Interactive login is disabled"):
+    with pytest.raises(RuntimeError, match="not authorized after reconnect"):
         await runtime.ensure_connected(client)
 
     assert "start" not in client.calls

@@ -68,11 +68,7 @@ def _normalize_username(value) -> str:
 
 
 def _expected_username(label: str) -> str:
-    """``TELEGRAM_EXPECTED_USERNAME[_<LABEL>]``: the account a session must belong to.
-
-    The per-account ``_<LABEL>`` variable overrides the unsuffixed one, like the
-    ``TELEGRAM_PROXY_*`` variables. Returns ``""`` (no check) when neither is set.
-    """
+    """TELEGRAM_EXPECTED_USERNAME_<LABEL>, else TELEGRAM_EXPECTED_USERNAME; "" if unset."""
     raw = os.getenv(f"TELEGRAM_EXPECTED_USERNAME_{label.upper()}") or os.getenv(
         "TELEGRAM_EXPECTED_USERNAME"
     )
@@ -80,19 +76,13 @@ def _expected_username(label: str) -> str:
 
 
 async def _verify_expected_username(label: str, client) -> None:
-    """Refuse to serve a session that is logged in to a different account.
-
-    Guards against a swapped or mislabelled session string (e.g. the personal
-    account's session configured under the work label), which would otherwise
-    let MCP clients read and send messages as the wrong person.
-    """
+    """Refuse to serve a session logged in to a different account."""
     expected = _expected_username(label)
     if not expected:
         return
 
     me = await client.get_me()
     usernames = {_normalize_username(getattr(me, "username", None))}
-    # Accounts with collectible usernames list the extra ones in `usernames`.
     for entry in getattr(me, "usernames", None) or []:
         if getattr(entry, "active", False):
             usernames.add(_normalize_username(getattr(entry, "username", None)))
@@ -107,9 +97,7 @@ async def _verify_expected_username(label: str, client) -> None:
         pass
     raise RuntimeError(
         f"Telegram client '{label}' is logged in to a different account than "
-        f"TELEGRAM_EXPECTED_USERNAME_{label.upper()} / TELEGRAM_EXPECTED_USERNAME "
-        "expects. Refusing to start; check which session string or session file is "
-        "configured for this account."
+        f"TELEGRAM_EXPECTED_USERNAME_{label.upper()} / TELEGRAM_EXPECTED_USERNAME expects."
     )
 
 

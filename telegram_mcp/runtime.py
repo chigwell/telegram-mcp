@@ -813,23 +813,15 @@ async def _force_reconnect(cl: TelegramClient):
             f"Reconnecting to Telegram timed out after {_RECONNECT_TIMEOUT:.0f}s."
         ) from exc
     if not await cl.is_user_authorized():
-        # The session was revoked or logged out while the server was running.
-        # Never fall back to cl.start(): its phone/code prompts call input()
-        # synchronously, which blocks the event loop (asyncio.wait_for cannot
-        # cancel it) and, over the stdio transport, reads MCP protocol frames
-        # as a phone number. Startup already refuses interactive login for the
-        # same reason (see runner._connect_authorized_client).
+        # cl.start() would prompt via blocking input(): it stalls the event loop
+        # and, over stdio, reads protocol frames as a phone number.
         try:
             await cl.disconnect()
         except Exception:
             pass
         raise RuntimeError(
-            "Telegram session is not authorized after reconnect (it may have been "
-            "terminated from another device or logged out). Interactive login is "
-            "disabled inside the MCP server. Re-authorize outside the server with "
-            "`uv run session_string_generator.py`, update TELEGRAM_SESSION_STRING "
-            "or TELEGRAM_SESSION_STRING_<LABEL> (or log the file session in again), "
-            "then restart the server."
+            "Telegram session is not authorized after reconnect. Re-authorize it "
+            "outside the server (session_string_generator.py) and restart."
         )
     _last_conn_verified[id(cl)] = time.time()
     reconnect_logger.warning("Forced reconnect successful")
