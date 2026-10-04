@@ -1,11 +1,9 @@
 import os
-import sys
 from types import SimpleNamespace
 
 import pytest
 
 from telegram_mcp import runner
-import telegram_mcp.runtime as runtime_module
 
 
 class _FakeSession:
@@ -280,61 +278,6 @@ async def test_shared_and_exclusive_instances_never_overlap(monkeypatch, first_m
 
 
 @pytest.mark.asyncio
-def test_cli_transport_flag_sets_env_var(monkeypatch):
-    monkeypatch.delenv("MCP_TRANSPORT", raising=False)
-    # We need to test that CLI args are set correctly by checking runner's runtime globals
-    import telegram_mcp.runtime as runtime_module
-
-    args = ["--transport", "http"]
-    runtime_module._configure_allowed_roots_from_cli(args)
-
-    assert runtime_module._CLI_TRANSPORT == "http"
-
-
-@pytest.mark.asyncio
-def test_cli_transport_flag_overrides_env_var(monkeypatch):
-    import telegram_mcp.runtime as runtime_module
-
-    args = ["--transport", "stdio"]
-    runtime_module._configure_allowed_roots_from_cli(args)
-
-    # CLI transport should override env var
-    assert runtime_module._CLI_TRANSPORT == "stdio"
-
-
-def test_invalid_transport_exits_with_error(monkeypatch, capsys):
-    """An unknown MCP_TRANSPORT causes the validation in _main to print an error and exit."""
-    monkeypatch.setenv("MCP_TRANSPORT", "ftp")
-
-    with pytest.raises(SystemExit) as excinfo:
-        transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
-        VALID_TRANSPORTS = ("stdio", "http", "sse")
-        if transport not in VALID_TRANSPORTS:
-            accepted = ", ".join(VALID_TRANSPORTS)
-            print(
-                f"Invalid MCP_TRANSPORT '{transport}'. Expected one of: {accepted}.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    assert excinfo.value.code == 1
-    captured = capsys.readouterr()
-    assert "ftp" in captured.err
-    assert "stdio" in captured.err
-
-
-@pytest.mark.asyncio
-def test_cli_host_and_port_flags(monkeypatch):
-    import telegram_mcp.runtime as runtime_module
-
-    args = ["--host", "0.0.0.0", "--port", "9000"]
-    runtime_module._configure_allowed_roots_from_cli(args)
-
-    assert runtime_module._CLI_HOST == "0.0.0.0"
-    assert runtime_module._CLI_PORT == 9000
-
-
-@pytest.mark.asyncio
 async def test_lock_error_names_the_exclusive_holder():
     first = _FakeClient(authorized=True, identity="shared-session")
     second = _FakeClient(authorized=True, identity="shared-session")
@@ -524,30 +467,47 @@ def test_cli_transport_flag_overrides_env_var(monkeypatch):
     assert runtime._CLI_TRANSPORT == "stdio"
 
 
-def test_invalid_transport_env_exits_with_error(monkeypatch, capsys):
-    """_main validates MCP_TRANSPORT before calling _serve; unknown values print an error."""
-    # Directly test the validation branch without standing up the full async stack.
-    # The validation reads os.environ["MCP_TRANSPORT"] and calls sys.exit(1) synchronously
-    # via sys.exit inside the async try block — we verify the message is correct.
-    import io
+@pytest.mark.asyncio
+async def test_invalid_transport_env_exits_with_error(monkeypatch, capsys):
+    """Characterize real startup: connect, reject transport, then clean up."""
+    trace = []
 
-    bad_transport = "ftp"
-    err_buf = io.StringIO()
-    original_stderr = sys.stderr
+    class Client:
+        async def get_dialogs(self):
+            trace.append("warm")
 
-    # Replicate the exact validation from _main() so we can unit-test it in isolation
-    VALID_TRANSPORTS = ("stdio", "http", "sse")
-    transport = bad_transport
-    if transport not in VALID_TRANSPORTS:
-        accepted = ", ".join(VALID_TRANSPORTS)
-        msg = f"Invalid MCP_TRANSPORT '{transport}'. Expected one of: {accepted}."
-        print(msg, file=err_buf)
+        async def disconnect(self):
+            trace.append("disconnect")
 
-    output = err_buf.getvalue()
-    assert bad_transport in output
-    assert "stdio" in output
-    assert "http" in output
-    assert "sse" in output
+    class Lock:
+        def release(self):
+            trace.append("release")
+
+    async def connect(label, client):
+        trace.append(("connect", label))
+        runner._session_locks[label] = Lock()
+
+    async def serve(transport):
+        trace.append(("serve", transport))
+
+    monkeypatch.setenv("MCP_TRANSPORT", "ftp")
+    monkeypatch.setattr(runner, "clients", {"default": Client()})
+    monkeypatch.setattr(runner, "_connect_authorized_client", connect)
+    monkeypatch.setattr(runner, "_serve", serve)
+
+    with pytest.raises(SystemExit) as excinfo:
+        await runner._main()
+
+    assert excinfo.value.code == 1
+    assert trace[0] == ("connect", "default")
+    assert "disconnect" in trace
+    assert trace[-1] == "release"
+    assert not any(isinstance(item, tuple) and item[0] == "serve" for item in trace)
+    assert runner._session_locks == {}
+    assert (
+        "Invalid MCP_TRANSPORT 'ftp'. Expected one of: stdio, http, sse."
+        in capsys.readouterr().err
+    )
 
 
 def test_cli_host_and_port_flags(monkeypatch):
