@@ -110,6 +110,7 @@ source = [
     "telegram_mcp.file_policy",
     "telegram_mcp.access_policy",
     "telegram_mcp.alias_store",
+    "telegram_mcp.account_config",
 ]
 
 [tool.coverage.report]
