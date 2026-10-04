@@ -926,6 +926,7 @@ ROOTS_STATUS_NOT_CONFIGURED = "not_configured"
 ROOTS_STATUS_UNSUPPORTED_FALLBACK = "unsupported_fallback"
 ROOTS_STATUS_CLIENT_DENY_ALL = "client_deny_all"
 ROOTS_STATUS_SERVER_FALLBACK = "server_fallback"
+ROOTS_STATUS_SERVER_ONLY = "server_only"
 ROOTS_STATUS_ERROR = "error"
 ROOTS_STATUS_TIMEOUT = "timeout"
 # Some clients accept the server-initiated roots/list request but never answer
@@ -2156,6 +2157,21 @@ def _server_roots_fallback_enabled(value: Optional[str] = None) -> bool:
     return _parse_bool_env(raw_value, False)
 
 
+def _server_roots_only_enabled(value: Optional[str] = None) -> bool:
+    """Whether configured server roots are authoritative over client Roots.
+
+    Opt-in via the ``TELEGRAM_SERVER_ROOTS_ONLY`` environment variable. When it
+    is enabled and server roots are configured (CLI arguments or
+    ``TELEGRAM_ALLOWED_ROOTS``), the server uses them directly and never sends
+    the ``roots/list`` request. Some clients advertise the Roots capability but
+    never answer that request, which otherwise costs every file-path tool call
+    the full ``TELEGRAM_ROOTS_TIMEOUT_SECONDS`` wait. Defaults to ``False`` so
+    client Roots keep replacing server roots.
+    """
+    raw_value = os.getenv("TELEGRAM_SERVER_ROOTS_ONLY") if value is None else value
+    return _parse_bool_env(raw_value, False)
+
+
 def _roots_request_timeout(value: Optional[str] = None) -> Optional[float]:
     """Seconds to wait for the client's ``roots/list`` reply.
 
@@ -2180,6 +2196,10 @@ async def _get_effective_allowed_roots_with_status(
         if fallback_roots:
             return fallback_roots, ROOTS_STATUS_READY
         return [], ROOTS_STATUS_NOT_CONFIGURED
+    if fallback_roots and _server_roots_only_enabled():
+        # Explicit, operator-trusted server roots: skip the bidirectional
+        # roots/list request entirely instead of waiting on the client.
+        return fallback_roots, ROOTS_STATUS_SERVER_ONLY
 
     try:
         timeout = _roots_request_timeout()
@@ -2269,6 +2289,7 @@ async def _ensure_allowed_roots(
                 (
                     f"{tool_name} is disabled because the MCP client never answered the "
                     "roots/list request. Configure server CLI roots and set "
+                    "TELEGRAM_SERVER_ROOTS_ONLY=1 (skip roots/list) or "
                     "TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK=1, or raise "
                     "TELEGRAM_ROOTS_TIMEOUT_SECONDS."
                 ),

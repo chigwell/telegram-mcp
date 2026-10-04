@@ -1205,6 +1205,99 @@ async def test_list_roots_timeout_denies_without_opt_in(tmp_path, monkeypatch):
     )
     assert error is not None
     assert "roots/list" in error
+    assert "TELEGRAM_SERVER_ROOTS_ONLY" in error
+
+
+class _RootsSessionThatMustNotBeCalled:
+    """Client that would hang on roots/list; the server must not ask it."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def list_roots(self):
+        self.calls += 1
+        await asyncio.sleep(3600)
+
+
+def test_server_roots_only_enabled_parsing(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_SERVER_ROOTS_ONLY", raising=False)
+    assert runtime._server_roots_only_enabled() is False
+    assert runtime._server_roots_only_enabled("1") is True
+    assert runtime._server_roots_only_enabled("true") is True
+    assert runtime._server_roots_only_enabled("off") is False
+    monkeypatch.setenv("TELEGRAM_SERVER_ROOTS_ONLY", "yes")
+    assert runtime._server_roots_only_enabled() is True
+
+
+@pytest.mark.asyncio
+async def test_server_roots_only_skips_client_roots_request(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root.resolve()])
+    monkeypatch.setenv("TELEGRAM_SERVER_ROOTS_ONLY", "1")
+    monkeypatch.delenv("TELEGRAM_ALLOW_SERVER_ROOTS_FALLBACK", raising=False)
+    monkeypatch.delenv("TELEGRAM_ROOTS_TIMEOUT_SECONDS", raising=False)
+    session = _RootsSessionThatMustNotBeCalled()
+    ctx = SimpleNamespace(session=session)
+
+    roots, status = await asyncio.wait_for(
+        runtime._get_effective_allowed_roots_with_status(ctx), timeout=1
+    )
+    assert status == runtime.ROOTS_STATUS_SERVER_ONLY
+    assert roots == [root.resolve()]
+
+    resolved, error = await asyncio.wait_for(
+        runtime._ensure_allowed_roots(ctx, "download_media"), timeout=1
+    )
+    assert error is None
+    assert resolved == [root.resolve()]
+    assert session.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_server_roots_only_ignores_client_roots_when_server_roots_set(tmp_path, monkeypatch):
+    server_root = tmp_path / "server"
+    client_root = tmp_path / "client"
+    server_root.mkdir()
+    client_root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [server_root.resolve()])
+    monkeypatch.setenv("TELEGRAM_SERVER_ROOTS_ONLY", "1")
+
+    roots, status = await runtime._get_effective_allowed_roots_with_status(
+        _ctx_with_roots([SimpleNamespace(uri=client_root.as_uri())])
+    )
+    assert status == runtime.ROOTS_STATUS_SERVER_ONLY
+    assert roots == [server_root.resolve()]
+
+
+@pytest.mark.asyncio
+async def test_server_roots_only_keeps_client_roots_without_server_roots(tmp_path, monkeypatch):
+    client_root = tmp_path / "client"
+    client_root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [])
+    monkeypatch.setenv("TELEGRAM_SERVER_ROOTS_ONLY", "1")
+
+    roots, status = await runtime._get_effective_allowed_roots_with_status(
+        _ctx_with_roots([SimpleNamespace(uri=client_root.as_uri())])
+    )
+    assert status == runtime.ROOTS_STATUS_READY
+    assert roots == [client_root.resolve()]
+
+
+@pytest.mark.asyncio
+async def test_client_roots_still_replace_server_roots_by_default(tmp_path, monkeypatch):
+    server_root = tmp_path / "server"
+    client_root = tmp_path / "client"
+    server_root.mkdir()
+    client_root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [server_root.resolve()])
+    monkeypatch.delenv("TELEGRAM_SERVER_ROOTS_ONLY", raising=False)
+
+    roots, status = await runtime._get_effective_allowed_roots_with_status(
+        _ctx_with_roots([SimpleNamespace(uri=client_root.as_uri())])
+    )
+    assert status == runtime.ROOTS_STATUS_READY
+    assert roots == [client_root.resolve()]
 
 
 def test_get_file_extension_overrides_rejects_duplicate_tool_name():
