@@ -65,6 +65,17 @@ identity and signatures are checked instead. Canonical exception/alias/enum
 types also retain their historical `telegram_mcp.runtime` module path for
 import and pickling compatibility.
 
+Python minor versions change raw docstring whitespace and standard-library
+signature displays. `tests/fixtures/refactor_contract_python_versions.json`
+records exact description hashes and export overrides captured from untouched
+baseline source on each supported interpreter. The original Python 3.13
+catalogue remains unchanged. Every description must match its pristine hash
+before its interpreter-specific representation is excluded from the canonical
+comparison; names, schemas, annotations and exposure modes stay fully compared.
+The profiles record source commits, fixture and lockfile hashes, interpreter
+versions and dependency versions. Do not derive expectations from refactored
+source or silently accept an uncaptured interpreter version.
+
 `tests/test_refactor_operations.py` supplies complementary behavioral traces:
 regular/shared folder add/remove requests preserve complete filter metadata,
 return the same text, leave the original object unchanged, and issue no second
@@ -132,7 +143,10 @@ cover their behavior. Keep the repository's
 current Black check, fatal Flake8 gate and CI checks. The existing 80% gate covers
 local deterministic logic and is not a substitute for adapter parity tests.
 
-The supported Python floor remains 3.10; the current test workflow uses 3.11.
+The supported Python floor remains 3.10. The existing test workflow requests
+Python 3.11 during setup, but plain `uv run` follows `.python-version` and runs
+3.13. Correcting that workflow's interpreter selection is a separate CI task;
+explicit `uv run --python <version>` checks avoid relying on its setup label.
 Acceptance includes the supported floor when a new language construct is
 introduced. Lockfiles and dependency versions remain unchanged during this
 campaign. A real Telegram smoke test, if needed, is a separate explicitly
@@ -152,12 +166,15 @@ existing initialization order and does not correct that failure path.
 
 ## Delivery validation
 
-The final production tree passed 881 offline tests on Python 3.13.11, with
-92.86% branch coverage across the unchanged deterministic-core surface and its
+The final tree passed 881 offline tests independently on Python 3.10.19,
+3.11.16, 3.12.3 and 3.13.11, with separate coverage output files. Each run
+reported 92.86% branch coverage across the deterministic-core surface and its
 extracted implementations. Black checked all 102 tracked Python files; the
 blocking Flake8 check and whitespace check passed. Every added Python file also
-parsed with Python 3.10 syntax rules. This syntax check does not substitute for
-running the supported Python versions in CI.
+parsed with Python 3.10 syntax rules. Pristine/refactored contract captures
+matched exactly on each interpreter. Sensitivity checks also verified that the
+portable tests reject description whitespace, schema, annotation and signature
+changes.
 
 An isolated wheel build included all 50 packaged Python files. Noneditable
 installation from an explicit source path preserved all 132 tool definitions,
@@ -168,8 +185,13 @@ startup or network access was attempted. Direct raw-wheel installation retains
 the existing provenance guard's rejection of the server entrypoint.
 
 Compose configuration validated using `.env.example`. The local Docker engine
-timed out, so container image builds must be verified through the existing
-`Docker Build & Compose Validation` workflow; live container execution remains a
-separate smoke check. Independent review also compared 95 relocated tool
+timed out; the existing [Docker Build & Compose Validation workflow](https://github.com/chigwell/telegram-mcp/actions/runs/37236734055)
+successfully built both production and development images, validated Compose
+syntax and built the Compose service. These jobs build images without executing
+pytest or starting the application; live container execution remains a separate
+smoke check. The [tests workflow](https://github.com/chigwell/telegram-mcp/actions/runs/37236722647)
+passed 881 tests with 92.67% coverage on Linux/Python 3.13.16, and the
+[lint/format workflow](https://github.com/chigwell/telegram-mcp/actions/runs/37236727944)
+passed. Independent review also compared 95 relocated tool
 functions with the original AST, including public signatures, decorator order,
 docstrings and dependencies, and found no unexplained behavior changes.

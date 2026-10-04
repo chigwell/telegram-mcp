@@ -6,6 +6,7 @@ refactor test. Registration metadata is captured without calling Telegram.
 
 import ast
 import copy
+import hashlib
 import inspect
 from importlib.util import resolve_name
 import json
@@ -13,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import sys
 
 import pytest
 
@@ -20,6 +22,60 @@ import main
 from telegram_mcp import runtime, tools
 
 FIXTURE = Path(__file__).parent / "fixtures" / "refactor_contract.json"
+PYTHON_FIXTURE = FIXTURE.with_name("refactor_contract_python_versions.json")
+BASELINE_COMMIT = "4b77f38262b761c04b25cae8c992f26ecafb9274"
+PRODUCTION_COMMIT = "e6dd352f286f71464fc19946a8d601bff51d8fd1"
+BASELINE_FIXTURE_SHA256 = "f39938674775709fd3310b11883ddb3c0c5c468043ceac3a8486a11f68c699e9"
+
+
+def contract_for_current_python():
+    """Select exact pristine captures; never normalize descriptions or signatures."""
+    fixture_bytes = FIXTURE.read_bytes()
+    baseline = json.loads(fixture_bytes)
+    versions = json.loads(PYTHON_FIXTURE.read_text(encoding="utf-8"))
+    assert versions["format_version"] == 1
+    assert versions["baseline_commit"] == BASELINE_COMMIT
+    assert versions["production_commit"] == PRODUCTION_COMMIT
+    assert (
+        versions["canonical_fixture_sha256"]
+        == hashlib.sha256(fixture_bytes).hexdigest()
+        == BASELINE_FIXTURE_SHA256
+    )
+    assert (
+        versions["uv_lock_sha256"]
+        == hashlib.sha256(
+            (Path(__file__).resolve().parents[1] / "uv.lock").read_bytes()
+        ).hexdigest()
+    )
+    canonical_capture = versions["canonical_capture"]
+    assert canonical_capture["python_version"].startswith("3.13.")
+    assert canonical_capture["implementation"] == "CPython"
+    tool_names = {tool["name"] for tool in baseline["tools"]}
+    assert len(tool_names) == len(baseline["tools"]) == 132
+    profiles = versions["profiles"]
+    assert set(profiles) == {"3.10", "3.11", "3.12"}
+    for minor, profile in profiles.items():
+        assert profile["python_version"].startswith(f"{minor}.")
+        assert profile["implementation"] == "CPython"
+        assert profile["dependency_versions"] == canonical_capture["dependency_versions"]
+        descriptions = profile["tool_description_sha256"]
+        assert descriptions.keys() == tool_names, minor
+        assert all(re.fullmatch(r"[0-9a-f]{64}", digest) for digest in descriptions.values())
+        for module_name, overrides in profile["export_overrides"].items():
+            assert module_name in baseline["exports"], module_name
+            for name, entry in overrides.items():
+                assert name in baseline["exports"][module_name], f"{module_name}.{name}"
+                # An entire pristine entry also preserves absent signatures,
+                # e.g. typing.Any on Python 3.10. Never add new exports here.
+                assert "kind" in entry and entry.keys() <= {"kind", "signature"}
+                assert all(isinstance(value, str) for value in entry.values())
+                assert entry != baseline["exports"][module_name][name]
+    assert sys.implementation.name == "cpython", "Only CPython pristine captures are available"
+    minor = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if minor == "3.13":
+        return baseline, None
+    assert minor in profiles, f"Capture the pristine baseline contract for Python {minor} first"
+    return baseline, profiles[minor]
 
 
 def public_exports(module):
@@ -93,15 +149,32 @@ _DECLARED_EXPORTS = {
 
 @pytest.mark.asyncio
 async def test_registered_mcp_contract_is_unchanged():
-    baseline = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    assert await tool_catalogue() == baseline["tools"]
+    baseline, profile = contract_for_current_python()
+    actual = await tool_catalogue()
+    expected = copy.deepcopy(baseline["tools"])
+    if profile is not None:
+        assert [tool["name"] for tool in actual] == [tool["name"] for tool in expected]
+        for tool in actual:
+            name = tool["name"]
+            assert (
+                hashlib.sha256(tool["description"].encode("utf-8")).hexdigest()
+                == profile["tool_description_sha256"][name]
+            ), f"{name}: raw description differs from the pristine Python capture"
+            del tool["description"]
+        for tool in expected:
+            del tool["description"]
+    assert actual == expected
     assert exposure_sets() == baseline["exposure"]
 
 
 def test_public_exports_and_signatures_are_unchanged():
-    baseline = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    baseline, profile = contract_for_current_python()
+    expected_exports = copy.deepcopy(baseline["exports"])
+    if profile is not None:
+        for module_name, overrides in profile["export_overrides"].items():
+            expected_exports[module_name].update(overrides)
     actual = _IMPORTED_EXPORTS
-    for module_name, expected in baseline["exports"].items():
+    for module_name, expected in expected_exports.items():
         entries = actual[module_name]
         assert entries.keys() == expected.keys(), module_name
         for name, contract in expected.items():

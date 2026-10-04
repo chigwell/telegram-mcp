@@ -1,0 +1,855 @@
+{
+  "format_version": 1,
+  "canonical_fixture_sha256": "f39938674775709fd3310b11883ddb3c0c5c468043ceac3a8486a11f68c699e9",
+  "baseline_commit": "4b77f38262b761c04b25cae8c992f26ecafb9274",
+  "production_commit": "e6dd352f286f71464fc19946a8d601bff51d8fd1",
+  "uv_lock_sha256": "53f2756ccee69178337d6628fb3587e49f91d797dba830f4b570ffd65ceecc51",
+  "canonical_capture": {
+    "python_version": "3.13.11",
+    "implementation": "CPython",
+    "dependency_versions": {
+      "Telethon": "1.45.0",
+      "mcp": "1.29.0",
+      "pydantic": "2.13.4",
+      "pydantic-settings": "2.15.0",
+      "pytest": "9.1.1",
+      "python-dotenv": "1.2.2"
+    }
+  },
+  "profiles": {
+    "3.10": {
+      "python_version": "3.10.19",
+      "implementation": "CPython",
+      "dependency_versions": {
+        "Telethon": "1.45.0",
+        "mcp": "1.29.0",
+        "pydantic": "2.13.4",
+        "pydantic-settings": "2.15.0",
+        "pytest": "9.1.1",
+        "python-dotenv": "1.2.2"
+      },
+      "tool_description_sha256": {
+        "add_chat_to_folder": "59e9ef83c1e9d7c88b46fe221ed3ab570ca57bc36be1fa66b67ff2f9cee65e4a",
+        "add_contact": "ba406700654cce387d976870d28753531d75612b7a254e5f2c07c04c845e1f7d",
+        "archive_chat": "42ce6e4e9925e52ead4889e2fcb8a1364b7f62ac694ac61f680879fa3bab6fc6",
+        "ban_user": "360f11f5e21df292c432aeb918bf7b038ac25b66966cc621896ef07fc0589a90",
+        "block_user": "8490a42bf06ce84100ff834f208e716a3b31ed36b8f40796d36989b635142da4",
+        "clear_draft": "763eee7feae21d5363385569527a49a5aa34a1e52f37b3fe61111f5d5b6b0d2c",
+        "create_channel": "3b95c3b00e704aed5e659fb1bc6d7aebaa6c27d0d57ce8e42134f538152c00b9",
+        "create_folder": "d4140c639c8d9ac72b4f6752c7e53b26797816157d8a897f95289142e2bfe529",
+        "create_forum_topic": "b1ff829d4def7ad28ff490433c1f2f49eaabdbbdbc80d30ab20f969f2ec5e7f0",
+        "create_group": "9849e29e3e109cd16cab850ee974bd71395e6fc27c16fe56843a98a7071f78c4",
+        "create_poll": "0081cf0b040f9ed211994b5d3e5b2e7c7559138706c8cfa0b8b8bfacf1e00ada",
+        "delete_chat_history": "00f6873b361a912382511c56b615ebae98d53c60f54b96ba3e255a95338a7253",
+        "delete_chat_photo": "cf9f5b907ebed2817e3cb95deca706da2ce86d6ec361219a8f982e1c962f29d1",
+        "delete_contact": "de7b4683a3307693fd31d022fdd64cb57156d856cab4e1bba95c10a14dbbbe13",
+        "delete_contact_alias": "6f09925cb4dd7645e425a992b6fefd203f98b4395e0b473638948b7d87cd57c0",
+        "delete_folder": "4492e74aa00fbe84ef81c945d156e255a2e9afce348a40111532b5e02099c83c",
+        "delete_forum_topic": "48771581d3dd0f5792cd4cd40bd2a098c5240a7f62199bda3d076a7dedf4efa1",
+        "delete_message": "9152d03f36b1326d1ca0eda080c57252e294184e49dc3a5e3ebc8e41a2aca0cb",
+        "delete_messages_bulk": "75443324161addebd566e44c3be1aae5449aef8f52a8964f59dcc3b031646765",
+        "delete_profile_photo": "73f8b40a62c4d8ecd0d5184bd287d6f02a5aef12432da2517994b32490be621d",
+        "delete_scheduled_message": "afd954f69c403ed23f3cdc3332b70bb25bd22b27fca62f3dce3d47cd0e46be6f",
+        "demote_admin": "0afac5b5b6a286ada7b489e606d27b0ab2a975212c611f6e8fca1cdaef2c0a37",
+        "disable_incoming_feed": "f8730b7636f698cd7c27d77c41d446fe32ab328eb80a041f01a4f15151cf248a",
+        "download_media": "6f2118d920915e2eeb3fee78033794b293f9156135b887227112e0badcbba67d",
+        "edit_admin_rights": "963d105b691972bb051f30dbb8d34199bad134e8c76a681fc850504c4b29d17b",
+        "edit_chat_about": "a534f29d0e6e80e018cfe7f93134f90b65f1756aa301a0957633be2e8ba4d152",
+        "edit_chat_photo": "05038d8f63d28d3efe8eab7b48c36fbe97ac3b8388a7d7171b93a4d6e467a09b",
+        "edit_chat_title": "5993cad624615990e36f26c305801c5e49afca3a8e5fda1e7ab6432361a33d10",
+        "edit_forum_topic": "359b6f198ac0e6bf19c52156bfb659d6c3852e105c8a7c34ad2f0c474a36b0f8",
+        "edit_message": "1993bcb6014b3da6f00eae3b4e251fe8c1ef228506aea44bedd0c8d1f741014a",
+        "enable_forum_topics": "f503e7a0e184ee25fa03e65f0814e240bc9e399b6dc72603c5ab9651fc6653e0",
+        "enable_incoming_feed": "e892c9491d10b3d6559d7a37fe4048bda68bcab0db2321a375c671bb7b4d7fc7",
+        "export_chat_invite": "6d7ebcef66607c6c1531ed22b7359be589cd614115550ab2cda0e65efc2cd52a",
+        "export_contacts": "71b65de05fe74b4d871ab7a0b8e0b58e518e2ed969853c4d556019e5f60cfcdf",
+        "export_unread_messages": "d8db34373042c55c2b1f4d9d467d99560d24ef1b18f2e96dbd27032302e5dd9a",
+        "forward_message": "f4d8fe318840b087fbbab271f6f2ba1b3caf94101327f4a7980dc7af9213f00d",
+        "forward_messages": "9cae27ec57bbaab413338b1dfa7aef845f63d25bf288e6c73b58121360253c00",
+        "get_admins": "80413718aad5fcf88ba185cea3f5e5c92d99cb59820d0c0bc08b0d2926fbc96c",
+        "get_banned_users": "44e0e1333ea7b546aeb97690b48eeddbe7f7d4a664a36085a5a51a6c055ee6e1",
+        "get_blocked_users": "e59cd7aa640b98c9ebc0920072280ce6322ee1a8f71b9c2329b5fd7d5dca6ac4",
+        "get_bot_info": "dc24e05d42270b592ae7acf5ab85b5f32c4cfc30addf83f22f36491520b8954e",
+        "get_chat": "b7ec5b42e7fd7cd445e7b85f7e8597c312d3d8cd3879a3d84539cad4099b1edb",
+        "get_chats": "cbfce62be2e0ab308def8186ba19f0e332ff7d3173fd8520cb8428f71cadabf4",
+        "get_common_chats": "685b5bcf7bf445686c827ef3aaa4273ed35841e5ee931ce3f86ccb81e1f4f4c8",
+        "get_contact_chats": "6126a46f8aa03bd5821982f0a154ae9838171e45a5ea7678f6dbce4c07cb41c2",
+        "get_contact_ids": "e4c19c1698ad00cb202c9152e5dbaf8f6e46d75a3e366a50fece98438503a23f",
+        "get_direct_chat_by_contact": "3d534daad826076f8638583232b65ec08d9478f81ab471881ab3aa18840c83eb",
+        "get_drafts": "f78dbb3196b0d62a72812ec22319e2c378fd7e28060c95560ad82686885903bf",
+        "get_folder": "ce62cdd45f546e73b77bf57240a7e61c704bc6657ed663953a1ca5815e8289ed",
+        "get_full_chat": "0727380f8b4ea821c571647c9c573d05586b973527f8c43d7c6872b77e4a3b90",
+        "get_full_user": "f0a8a77498d987e2204751fcb71225dbf927975ea22a85a861727438b75ab3da",
+        "get_gif_search": "05358103f15e3e9dde56781240fcc41b6e03b7f694cafd333853fee7fe9ce09b",
+        "get_history": "f9eba5e5feb6b7f31c9c158516e9e014bade8ebdc836baa484deec93d40dd378",
+        "get_invite_link": "2c919b0c0b879e7a2099050a07701db9b2b82e6b5e07ebfe89e41702cec6e934",
+        "get_last_interaction": "694363b83762e96a9cbfa5aa34d9fe7d602fb739c701df69778470dd5d60d3bb",
+        "get_me": "73be6bfcadb8b9ee30758cd739e2c780f575af1c8f46809a9e1a090789bf9d7e",
+        "get_media_info": "6f16f3b85e0082a509eb011db2a722e2faa3c86c000481670f9616e12abae8c4",
+        "get_member_admin_status": "3f00ec46eb6fbb3e6db142556d52895081ccb723786f27cd4c2ce208831855be",
+        "get_message_context": "713e6e51c04afafe2a0cc0ebc4759b6c6aa6038b9160a98e7d36d4287941484a",
+        "get_message_link": "51211e5618f3d7f27729807294ba270586ac8e5104fa2815a3fb4d4da52408cb",
+        "get_message_reactions": "77b23b37369beed6f3f4aca6ef62c56085c7f3335a584e087f9f483081c69d22",
+        "get_message_read_by": "625221aa83eaf6106958722b6409db729508e5be1fa2779f69cbec3942c4bd08",
+        "get_messages": "f80739a678bd9151bfa8de7272ea7de052b8784d0e31fd2e709b47a5e66f5c00",
+        "get_participants": "6a4045f6ea297d13dae7f033c923184a1ab7363aee108ce0bef2abec188cd835",
+        "get_photo_sheet": "cd7cd833f4b0b0867610a25002317403b51774c114166d39a9c6652df763ab5f",
+        "get_pinned_messages": "315f1e78c2af3787ff7cc1d3f990edf0f892f735e5b0822f6694f294be54a40c",
+        "get_privacy_settings": "a29107fe2cec4d9854066c1c1daf4021274007b06b4bfdc972341b33a7ca3784",
+        "get_recent_actions": "6217f384d06ab209edd493ed3e9d2cab076f27b2c3a1c93b8f0d2d3032d2d478",
+        "get_scheduled_messages": "b59fd1634822ea6470015c39dfe7e08d09b4c19a45e1f6649010736bd3618bcd",
+        "get_send_as": "d58275e7e1b245bb2d1a4cda2a0c9fcc8b7a1c3f8afd7a09f8efa1142c8d6b01",
+        "get_sticker_sets": "aca7df72b3f6a53ae5056263414e4668ed63575dfde79098a72831fe7eaffe59",
+        "get_user_photos": "400c3a48dc98af880caad109647b30e5917daf287092ee0c82656fa63adf8fa7",
+        "get_user_status": "e15661c0875b7bd0e7fa863d75383d006c41647785b30a24433bf7de3d5b5438",
+        "import_chat_invite": "3407a4346a7bf07c566ec65faed670cb75d0bb13878d8ecb78400f679925e921",
+        "import_contacts": "6ab3d9195f7629de18d02f389aeb58379cb5abcab424aa4d01b3af59dd924042",
+        "incoming_feed_status": "1ac6a77db25e280a8385bf0b3a5c70a703f675a2b49958cf6841e067b79ec4eb",
+        "invite_to_group": "c784fd4bb3e09ff6a5e4ad0aa6366f923cde747891427457b55b3c96261de98a",
+        "join_chat_by_link": "c556910ca234e3fc709adf4e3cb0ccbfcdef2e0a5b79a3cd9b353c6c1d595586",
+        "leave_chat": "75f0885f6791a8f3f5accb7074531e404d789e6b2eacb24a25b751cc2c26b1c4",
+        "list_accounts": "db840931810c213846fe786f6b8f53e0083c96ca1b78131f0fc65044dc37103c",
+        "list_chats": "d1c5803599ffda2a7eea96d5545576043d7946d0dd1999367fd4ff19d07361a8",
+        "list_contact_aliases": "737c8a3eca4b1d072d11bcc89517b56e54fd085ae5a192a80014e1c4688a982a",
+        "list_contacts": "53b96ab719e170191537f85a19baeb4b73cd51d6fa8cce6c2d5c832a7bcebbb0",
+        "list_folders": "3e47579a25d330b075ac85d9fc07fd48d74edd26b65c87b2cca5a7f5a801f8f9",
+        "list_inline_buttons": "cc34605ada0975b744282b2e2bea262715178be4ff6119fe869e315d8ae140c2",
+        "list_messages": "66a2bf774143c5a98bad5b8cbcad33ccba8941e7801d9acf50f04620d61521c1",
+        "list_photos": "fb3a936804ce164e72b78cb81f47e51f674088dc413fd15b7e56067ddd2009aa",
+        "list_topics": "b26bf3cef013c87d4b6eb67f3396be72d22e492d8406266d7b820681fa97f793",
+        "mark_as_read": "a93a687267c5edebfdbbd5110447fbed2ad9a30b9be1ae22eaa39b3e2cb89650",
+        "mute_chat": "8d739aebc1ec7afa2a21ac058839b1bdcf0c7a027c23f536efe9877c73b96a8a",
+        "open_photo": "32e3e281efdbc99e71b10c777bb93eb236b46f14253bb7218d12d4b92dc452d0",
+        "pin_message": "b82279899ecf76489592702faa70cf92220b4247851e4837e5f0ef8ef39807bf",
+        "press_inline_button": "6c2e645a555f572c9590784b241ee31b7698d542267728f63f33552e0cb9d673",
+        "promote_admin": "0d80d955c0f3f9c8ff07ef12e4bebb6c594c16e32657b41a8c649a351129a57a",
+        "remove_chat_from_folder": "55c5e623ae232b8d3035bbbd12c8e88f373aba068504870749eba18aef2479f9",
+        "remove_reaction": "b73033b6d3f056f6cb5ba790b8908006a2458eea54f8b1bf94cbac299147aa71",
+        "remove_user": "f1e79869ed47388cadd078bafe89bf1bae7d44631ad39446db4187117b4a97d8",
+        "reorder_folders": "7662402e8e15f265ee9d9bfb85eab971cd114df0c4d7b1d935963a49ed2cb8f6",
+        "reply_to_message": "97aff5c1cf6569d755292568e301dbbe232f9868da68a1a2908c9c57580a936d",
+        "resolve_username": "c9551005126a0415fcfdeb0cba324b68719c6643d148d5e8d74231b9919f5c37",
+        "save_draft": "369ad75c82d68268afc51b39f1b1f6ffba1619ee44495aed47dd784284bfc2c7",
+        "search_contacts": "3a8973b1e1c0762e78ec39e5741a101cbd048eb5da708529f6d0edfd4c846219",
+        "search_global": "a76bc61f3ed379c433e46622119ae8b1b138946c2b70fa3745996a6e87ffebbf",
+        "search_messages": "495f5c971f5edf3e12fe3dd8e9269904a4b282e361d2b99a2cea372f3ddd9d52",
+        "search_public_chats": "0d600e67875822c48bb88d64a95dc6e63ed8bd10ad4201ef64a8e37928507e22",
+        "send_album": "3566d41563e3768e734011f9fd3071d01546da445451fd0a746a396b6e7d36ae",
+        "send_contact": "93374fc231d52562dff880848dfbe451f3633d3b71cf5893426bb1268b0c5562",
+        "send_file": "af5a0c0ed944f2f632dc99f889aa7a24de291c78a105414747bc2e590b79c89d",
+        "send_gif": "71846aa4b613729c53f380ea3330ab83671715167fa5a51e40069d3ece02dca4",
+        "send_message": "10d03ba6403a573e44a78cd2868ac1e24f9f6daad8367eba9b96ec57bade78f3",
+        "send_reaction": "a4dc3746f049046b6ea89a0c02ec82b30a0a1490610446e9d770832bfd1e666e",
+        "send_scheduled_message": "d6d98724ddd5065cdfd626abc1ccaccaa6d55400126ba9e1ab6999c5da81ecf4",
+        "send_sticker": "7a4961b8dc993f1f95096765878c80597b89a870c2378d15ec8f90b405493371",
+        "send_voice": "5769f7db4028210f800419c74dcc287fd3729754cd47dfbc48b5b88f1ca30066",
+        "set_bot_commands": "8d3a77668d9ea13ec187bc01685d34b517b7e9f4c380ec66dc525ce8d2c9a84b",
+        "set_contact_alias": "8d4ca8fc702f69fa30183633bc3dd1fc621c81cb27ba244315ecdfd21f321343",
+        "set_default_chat_permissions": "ed741ececd28c27eed0c46671c3dfabbc47608b434dcb2e5f119eb20a587aef4",
+        "set_privacy_settings": "a5a1cdf2287a648195f46a6c5ce079c525d88998e636857b99c584c628d06c22",
+        "set_profile_photo": "e14d76aa8dbde89a44a1d37caefe672b5817f1c5024427a3cf5d67d0377e3aab",
+        "subscribe_public_channel": "071be59408e99e8558ea9e19f4542ac980ecefeb6761b107706bda4aa69b0580",
+        "toggle_slow_mode": "fd4a8218df69e88b97302a4aab4ab3300579252533391bfa8310299a2dc0d38f",
+        "transcribe_voice": "254a90f652c9d51d555561d6342bba491130426f2c4081a66bf006efc0e2257b",
+        "unarchive_chat": "95afd7b782590787f57183c3a128c2d6b9b960ac7f8fe51e8fb9e4c73ffd4af2",
+        "unban_user": "1b76d47142f749acacd4c5aa76c7b0b8d26b11034b1757b3aeca2613c4670b02",
+        "unblock_user": "5fae73fb6291f660683aad70a8c815c56bd633e933d835026d1d631e7183f2f6",
+        "unmute_chat": "6426b9ea3edcf0249969d2962c5538f539c864ca8807499bd09f78a30b104267",
+        "unpin_all_messages": "6adedbd833e48edbb339978b3846f52943a3f81013003667389212cabd28cf37",
+        "unpin_message": "84c200754e61c231332a572a6bb9a2c1fe5cab3405ce89806cb2807738e34206",
+        "update_profile": "b10aabf803db7c1d4518a87c7690f86d5d14caa40c12193bbe6f0cd4692dc813",
+        "upload_file": "7a288e82f86112290cb0c67428475b0e9c37a277d9eeb2307c9eba43fed30ccd",
+        "wait_for_new_message": "dace0a2954fd007663e3c2915872066a57fe034388d4bad24adcad99a9d2722e",
+        "wait_for_settled_message": "41ca4a35ece17c7bf408785c21f78684a207edc307a05b407df3191465cbeb1a"
+      },
+      "export_overrides": {
+        "main": {
+          "Any": {
+            "kind": "_SpecialForm"
+          },
+          "Enum": {
+            "kind": "EnumMeta",
+            "signature": "(value, names=None, *, module=None, qualname=None, type=None, start=1)"
+          },
+          "ErrorCategory": {
+            "kind": "EnumMeta",
+            "signature": "(value, names=None, *, module=None, qualname=None, type=None, start=1)"
+          },
+          "Image": {
+            "kind": "type",
+            "signature": "(path: str | pathlib.Path | None = None, data: bytes | None = None, format: str | None = None)"
+          },
+          "_alias_lock": {
+            "kind": "function",
+            "signature": "(path: pathlib.Path)"
+          },
+          "_coerce_paths_from_list_roots_validation_error": {
+            "kind": "function",
+            "signature": "(error: Exception) -> List[pathlib.Path]"
+          },
+          "_coerce_root_uri_to_path": {
+            "kind": "function",
+            "signature": "(uri: str) -> pathlib.Path"
+          },
+          "_dedupe_paths": {
+            "kind": "function",
+            "signature": "(paths: List[pathlib.Path]) -> List[pathlib.Path]"
+          },
+          "_ensure_extension_allowed": {
+            "kind": "function",
+            "signature": "(tool_name: str, candidate: pathlib.Path) -> Optional[str]"
+          },
+          "_ensure_size_within_limit": {
+            "kind": "function",
+            "signature": "(tool_name: str, candidate: pathlib.Path) -> Optional[str]"
+          },
+          "_first_resolution_root": {
+            "kind": "function",
+            "signature": "(roots: List[pathlib.Path]) -> pathlib.Path"
+          },
+          "_path_is_within_any_root": {
+            "kind": "function",
+            "signature": "(candidate: pathlib.Path, roots: List[pathlib.Path]) -> bool"
+          },
+          "_path_is_within_root": {
+            "kind": "function",
+            "signature": "(candidate: pathlib.Path, root: pathlib.Path) -> bool"
+          },
+          "aliases_file_path": {
+            "kind": "function",
+            "signature": "() -> pathlib.Path"
+          },
+          "wraps": {
+            "kind": "function",
+            "signature": "(wrapped, assigned=('__module__', '__name__', '__qualname__', '__doc__', '__annotations__'), updated=('__dict__',))"
+          }
+        },
+        "telegram_mcp.runtime": {
+          "Any": {
+            "kind": "_SpecialForm"
+          },
+          "Enum": {
+            "kind": "EnumMeta",
+            "signature": "(value, names=None, *, module=None, qualname=None, type=None, start=1)"
+          },
+          "ErrorCategory": {
+            "kind": "EnumMeta",
+            "signature": "(value, names=None, *, module=None, qualname=None, type=None, start=1)"
+          },
+          "Image": {
+            "kind": "type",
+            "signature": "(path: str | pathlib.Path | None = None, data: bytes | None = None, format: str | None = None)"
+          },
+          "_alias_lock": {
+            "kind": "function",
+            "signature": "(path: pathlib.Path)"
+          },
+          "_coerce_paths_from_list_roots_validation_error": {
+            "kind": "function",
+            "signature": "(error: Exception) -> List[pathlib.Path]"
+          },
+          "_coerce_root_uri_to_path": {
+            "kind": "function",
+            "signature": "(uri: str) -> pathlib.Path"
+          },
+          "_dedupe_paths": {
+            "kind": "function",
+            "signature": "(paths: List[pathlib.Path]) -> List[pathlib.Path]"
+          },
+          "_ensure_allowed_roots": {
+            "kind": "function",
+            "signature": "(ctx: Optional[mcp.server.fastmcp.server.Context], tool_name: str) -> tuple[typing.List[pathlib.Path], typing.Optional[str]]"
+          },
+          "_ensure_extension_allowed": {
+            "kind": "function",
+            "signature": "(tool_name: str, candidate: pathlib.Path) -> Optional[str]"
+          },
+          "_ensure_size_within_limit": {
+            "kind": "function",
+            "signature": "(tool_name: str, candidate: pathlib.Path) -> Optional[str]"
+          },
+          "_first_resolution_root": {
+            "kind": "function",
+            "signature": "(roots: List[pathlib.Path]) -> pathlib.Path"
+          },
+          "_get_effective_allowed_roots": {
+            "kind": "function",
+            "signature": "(ctx: Optional[mcp.server.fastmcp.server.Context]) -> List[pathlib.Path]"
+          },
+          "_get_effective_allowed_roots_with_status": {
+            "kind": "function",
+            "signature": "(ctx: Optional[mcp.server.fastmcp.server.Context]) -> tuple[typing.List[pathlib.Path], str]"
+          },
+          "_path_is_within_any_root": {
+            "kind": "function",
+            "signature": "(candidate: pathlib.Path, roots: List[pathlib.Path]) -> bool"
+          },
+          "_path_is_within_root": {
+            "kind": "function",
+            "signature": "(candidate: pathlib.Path, root: pathlib.Path) -> bool"
+          },
+          "_resolve_readable_file_path": {
+            "kind": "function",
+            "signature": "(*, raw_path: str, ctx: Optional[mcp.server.fastmcp.server.Context], tool_name: str) -> tuple[typing.Optional[pathlib.Path], typing.Optional[str]]"
+          },
+          "_resolve_writable_file_path": {
+            "kind": "function",
+            "signature": "(*, raw_path: Optional[str], default_filename: str, ctx: Optional[mcp.server.fastmcp.server.Context], tool_name: str) -> tuple[typing.Optional[pathlib.Path], typing.Optional[str]]"
+          },
+          "aliases_file_path": {
+            "kind": "function",
+            "signature": "() -> pathlib.Path"
+          },
+          "wraps": {
+            "kind": "function",
+            "signature": "(wrapped, assigned=('__module__', '__name__', '__qualname__', '__doc__', '__annotations__'), updated=('__dict__',))"
+          }
+        }
+      }
+    },
+    "3.11": {
+      "python_version": "3.11.16",
+      "implementation": "CPython",
+      "dependency_versions": {
+        "Telethon": "1.45.0",
+        "mcp": "1.29.0",
+        "pydantic": "2.13.4",
+        "pydantic-settings": "2.15.0",
+        "pytest": "9.1.1",
+        "python-dotenv": "1.2.2"
+      },
+      "tool_description_sha256": {
+        "add_chat_to_folder": "59e9ef83c1e9d7c88b46fe221ed3ab570ca57bc36be1fa66b67ff2f9cee65e4a",
+        "add_contact": "ba406700654cce387d976870d28753531d75612b7a254e5f2c07c04c845e1f7d",
+        "archive_chat": "42ce6e4e9925e52ead4889e2fcb8a1364b7f62ac694ac61f680879fa3bab6fc6",
+        "ban_user": "360f11f5e21df292c432aeb918bf7b038ac25b66966cc621896ef07fc0589a90",
+        "block_user": "8490a42bf06ce84100ff834f208e716a3b31ed36b8f40796d36989b635142da4",
+        "clear_draft": "763eee7feae21d5363385569527a49a5aa34a1e52f37b3fe61111f5d5b6b0d2c",
+        "create_channel": "3b95c3b00e704aed5e659fb1bc6d7aebaa6c27d0d57ce8e42134f538152c00b9",
+        "create_folder": "d4140c639c8d9ac72b4f6752c7e53b26797816157d8a897f95289142e2bfe529",
+        "create_forum_topic": "b1ff829d4def7ad28ff490433c1f2f49eaabdbbdbc80d30ab20f969f2ec5e7f0",
+        "create_group": "9849e29e3e109cd16cab850ee974bd71395e6fc27c16fe56843a98a7071f78c4",
+        "create_poll": "0081cf0b040f9ed211994b5d3e5b2e7c7559138706c8cfa0b8b8bfacf1e00ada",
+        "delete_chat_history": "00f6873b361a912382511c56b615ebae98d53c60f54b96ba3e255a95338a7253",
+        "delete_chat_photo": "cf9f5b907ebed2817e3cb95deca706da2ce86d6ec361219a8f982e1c962f29d1",
+        "delete_contact": "de7b4683a3307693fd31d022fdd64cb57156d856cab4e1bba95c10a14dbbbe13",
+        "delete_contact_alias": "6f09925cb4dd7645e425a992b6fefd203f98b4395e0b473638948b7d87cd57c0",
+        "delete_folder": "4492e74aa00fbe84ef81c945d156e255a2e9afce348a40111532b5e02099c83c",
+        "delete_forum_topic": "48771581d3dd0f5792cd4cd40bd2a098c5240a7f62199bda3d076a7dedf4efa1",
+        "delete_message": "9152d03f36b1326d1ca0eda080c57252e294184e49dc3a5e3ebc8e41a2aca0cb",
+        "delete_messages_bulk": "75443324161addebd566e44c3be1aae5449aef8f52a8964f59dcc3b031646765",
+        "delete_profile_photo": "73f8b40a62c4d8ecd0d5184bd287d6f02a5aef12432da2517994b32490be621d",
+        "delete_scheduled_message": "afd954f69c403ed23f3cdc3332b70bb25bd22b27fca62f3dce3d47cd0e46be6f",
+        "demote_admin": "0afac5b5b6a286ada7b489e606d27b0ab2a975212c611f6e8fca1cdaef2c0a37",
+        "disable_incoming_feed": "f8730b7636f698cd7c27d77c41d446fe32ab328eb80a041f01a4f15151cf248a",
+        "download_media": "6f2118d920915e2eeb3fee78033794b293f9156135b887227112e0badcbba67d",
+        "edit_admin_rights": "963d105b691972bb051f30dbb8d34199bad134e8c76a681fc850504c4b29d17b",
+        "edit_chat_about": "a534f29d0e6e80e018cfe7f93134f90b65f1756aa301a0957633be2e8ba4d152",
+        "edit_chat_photo": "05038d8f63d28d3efe8eab7b48c36fbe97ac3b8388a7d7171b93a4d6e467a09b",
+        "edit_chat_title": "5993cad624615990e36f26c305801c5e49afca3a8e5fda1e7ab6432361a33d10",
+        "edit_forum_topic": "359b6f198ac0e6bf19c52156bfb659d6c3852e105c8a7c34ad2f0c474a36b0f8",
+        "edit_message": "1993bcb6014b3da6f00eae3b4e251fe8c1ef228506aea44bedd0c8d1f741014a",
+        "enable_forum_topics": "f503e7a0e184ee25fa03e65f0814e240bc9e399b6dc72603c5ab9651fc6653e0",
+        "enable_incoming_feed": "e892c9491d10b3d6559d7a37fe4048bda68bcab0db2321a375c671bb7b4d7fc7",
+        "export_chat_invite": "6d7ebcef66607c6c1531ed22b7359be589cd614115550ab2cda0e65efc2cd52a",
+        "export_contacts": "71b65de05fe74b4d871ab7a0b8e0b58e518e2ed969853c4d556019e5f60cfcdf",
+        "export_unread_messages": "d8db34373042c55c2b1f4d9d467d99560d24ef1b18f2e96dbd27032302e5dd9a",
+        "forward_message": "f4d8fe318840b087fbbab271f6f2ba1b3caf94101327f4a7980dc7af9213f00d",
+        "forward_messages": "9cae27ec57bbaab413338b1dfa7aef845f63d25bf288e6c73b58121360253c00",
+        "get_admins": "80413718aad5fcf88ba185cea3f5e5c92d99cb59820d0c0bc08b0d2926fbc96c",
+        "get_banned_users": "44e0e1333ea7b546aeb97690b48eeddbe7f7d4a664a36085a5a51a6c055ee6e1",
+        "get_blocked_users": "e59cd7aa640b98c9ebc0920072280ce6322ee1a8f71b9c2329b5fd7d5dca6ac4",
+        "get_bot_info": "dc24e05d42270b592ae7acf5ab85b5f32c4cfc30addf83f22f36491520b8954e",
+        "get_chat": "b7ec5b42e7fd7cd445e7b85f7e8597c312d3d8cd3879a3d84539cad4099b1edb",
+        "get_chats": "cbfce62be2e0ab308def8186ba19f0e332ff7d3173fd8520cb8428f71cadabf4",
+        "get_common_chats": "685b5bcf7bf445686c827ef3aaa4273ed35841e5ee931ce3f86ccb81e1f4f4c8",
+        "get_contact_chats": "6126a46f8aa03bd5821982f0a154ae9838171e45a5ea7678f6dbce4c07cb41c2",
+        "get_contact_ids": "e4c19c1698ad00cb202c9152e5dbaf8f6e46d75a3e366a50fece98438503a23f",
+        "get_direct_chat_by_contact": "3d534daad826076f8638583232b65ec08d9478f81ab471881ab3aa18840c83eb",
+        "get_drafts": "f78dbb3196b0d62a72812ec22319e2c378fd7e28060c95560ad82686885903bf",
+        "get_folder": "ce62cdd45f546e73b77bf57240a7e61c704bc6657ed663953a1ca5815e8289ed",
+        "get_full_chat": "0727380f8b4ea821c571647c9c573d05586b973527f8c43d7c6872b77e4a3b90",
+        "get_full_user": "f0a8a77498d987e2204751fcb71225dbf927975ea22a85a861727438b75ab3da",
+        "get_gif_search": "05358103f15e3e9dde56781240fcc41b6e03b7f694cafd333853fee7fe9ce09b",
+        "get_history": "f9eba5e5feb6b7f31c9c158516e9e014bade8ebdc836baa484deec93d40dd378",
+        "get_invite_link": "2c919b0c0b879e7a2099050a07701db9b2b82e6b5e07ebfe89e41702cec6e934",
+        "get_last_interaction": "694363b83762e96a9cbfa5aa34d9fe7d602fb739c701df69778470dd5d60d3bb",
+        "get_me": "73be6bfcadb8b9ee30758cd739e2c780f575af1c8f46809a9e1a090789bf9d7e",
+        "get_media_info": "6f16f3b85e0082a509eb011db2a722e2faa3c86c000481670f9616e12abae8c4",
+        "get_member_admin_status": "3f00ec46eb6fbb3e6db142556d52895081ccb723786f27cd4c2ce208831855be",
+        "get_message_context": "713e6e51c04afafe2a0cc0ebc4759b6c6aa6038b9160a98e7d36d4287941484a",
+        "get_message_link": "51211e5618f3d7f27729807294ba270586ac8e5104fa2815a3fb4d4da52408cb",
+        "get_message_reactions": "77b23b37369beed6f3f4aca6ef62c56085c7f3335a584e087f9f483081c69d22",
+        "get_message_read_by": "625221aa83eaf6106958722b6409db729508e5be1fa2779f69cbec3942c4bd08",
+        "get_messages": "f80739a678bd9151bfa8de7272ea7de052b8784d0e31fd2e709b47a5e66f5c00",
+        "get_participants": "6a4045f6ea297d13dae7f033c923184a1ab7363aee108ce0bef2abec188cd835",
+        "get_photo_sheet": "cd7cd833f4b0b0867610a25002317403b51774c114166d39a9c6652df763ab5f",
+        "get_pinned_messages": "315f1e78c2af3787ff7cc1d3f990edf0f892f735e5b0822f6694f294be54a40c",
+        "get_privacy_settings": "a29107fe2cec4d9854066c1c1daf4021274007b06b4bfdc972341b33a7ca3784",
+        "get_recent_actions": "6217f384d06ab209edd493ed3e9d2cab076f27b2c3a1c93b8f0d2d3032d2d478",
+        "get_scheduled_messages": "b59fd1634822ea6470015c39dfe7e08d09b4c19a45e1f6649010736bd3618bcd",
+        "get_send_as": "d58275e7e1b245bb2d1a4cda2a0c9fcc8b7a1c3f8afd7a09f8efa1142c8d6b01",
+        "get_sticker_sets": "aca7df72b3f6a53ae5056263414e4668ed63575dfde79098a72831fe7eaffe59",
+        "get_user_photos": "400c3a48dc98af880caad109647b30e5917daf287092ee0c82656fa63adf8fa7",
+        "get_user_status": "e15661c0875b7bd0e7fa863d75383d006c41647785b30a24433bf7de3d5b5438",
+        "import_chat_invite": "3407a4346a7bf07c566ec65faed670cb75d0bb13878d8ecb78400f679925e921",
+        "import_contacts": "6ab3d9195f7629de18d02f389aeb58379cb5abcab424aa4d01b3af59dd924042",
+        "incoming_feed_status": "1ac6a77db25e280a8385bf0b3a5c70a703f675a2b49958cf6841e067b79ec4eb",
+        "invite_to_group": "c784fd4bb3e09ff6a5e4ad0aa6366f923cde747891427457b55b3c96261de98a",
+        "join_chat_by_link": "c556910ca234e3fc709adf4e3cb0ccbfcdef2e0a5b79a3cd9b353c6c1d595586",
+        "leave_chat": "75f0885f6791a8f3f5accb7074531e404d789e6b2eacb24a25b751cc2c26b1c4",
+        "list_accounts": "db840931810c213846fe786f6b8f53e0083c96ca1b78131f0fc65044dc37103c",
+        "list_chats": "d1c5803599ffda2a7eea96d5545576043d7946d0dd1999367fd4ff19d07361a8",
+        "list_contact_aliases": "737c8a3eca4b1d072d11bcc89517b56e54fd085ae5a192a80014e1c4688a982a",
+        "list_contacts": "53b96ab719e170191537f85a19baeb4b73cd51d6fa8cce6c2d5c832a7bcebbb0",
+        "list_folders": "3e47579a25d330b075ac85d9fc07fd48d74edd26b65c87b2cca5a7f5a801f8f9",
+        "list_inline_buttons": "cc34605ada0975b744282b2e2bea262715178be4ff6119fe869e315d8ae140c2",
+        "list_messages": "66a2bf774143c5a98bad5b8cbcad33ccba8941e7801d9acf50f04620d61521c1",
+        "list_photos": "fb3a936804ce164e72b78cb81f47e51f674088dc413fd15b7e56067ddd2009aa",
+        "list_topics": "b26bf3cef013c87d4b6eb67f3396be72d22e492d8406266d7b820681fa97f793",
+        "mark_as_read": "a93a687267c5edebfdbbd5110447fbed2ad9a30b9be1ae22eaa39b3e2cb89650",
+        "mute_chat": "8d739aebc1ec7afa2a21ac058839b1bdcf0c7a027c23f536efe9877c73b96a8a",
+        "open_photo": "32e3e281efdbc99e71b10c777bb93eb236b46f14253bb7218d12d4b92dc452d0",
+        "pin_message": "b82279899ecf76489592702faa70cf92220b4247851e4837e5f0ef8ef39807bf",
+        "press_inline_button": "6c2e645a555f572c9590784b241ee31b7698d542267728f63f33552e0cb9d673",
+        "promote_admin": "0d80d955c0f3f9c8ff07ef12e4bebb6c594c16e32657b41a8c649a351129a57a",
+        "remove_chat_from_folder": "55c5e623ae232b8d3035bbbd12c8e88f373aba068504870749eba18aef2479f9",
+        "remove_reaction": "b73033b6d3f056f6cb5ba790b8908006a2458eea54f8b1bf94cbac299147aa71",
+        "remove_user": "f1e79869ed47388cadd078bafe89bf1bae7d44631ad39446db4187117b4a97d8",
+        "reorder_folders": "7662402e8e15f265ee9d9bfb85eab971cd114df0c4d7b1d935963a49ed2cb8f6",
+        "reply_to_message": "97aff5c1cf6569d755292568e301dbbe232f9868da68a1a2908c9c57580a936d",
+        "resolve_username": "c9551005126a0415fcfdeb0cba324b68719c6643d148d5e8d74231b9919f5c37",
+        "save_draft": "369ad75c82d68268afc51b39f1b1f6ffba1619ee44495aed47dd784284bfc2c7",
+        "search_contacts": "3a8973b1e1c0762e78ec39e5741a101cbd048eb5da708529f6d0edfd4c846219",
+        "search_global": "a76bc61f3ed379c433e46622119ae8b1b138946c2b70fa3745996a6e87ffebbf",
+        "search_messages": "495f5c971f5edf3e12fe3dd8e9269904a4b282e361d2b99a2cea372f3ddd9d52",
+        "search_public_chats": "0d600e67875822c48bb88d64a95dc6e63ed8bd10ad4201ef64a8e37928507e22",
+        "send_album": "3566d41563e3768e734011f9fd3071d01546da445451fd0a746a396b6e7d36ae",
+        "send_contact": "93374fc231d52562dff880848dfbe451f3633d3b71cf5893426bb1268b0c5562",
+        "send_file": "af5a0c0ed944f2f632dc99f889aa7a24de291c78a105414747bc2e590b79c89d",
+        "send_gif": "71846aa4b613729c53f380ea3330ab83671715167fa5a51e40069d3ece02dca4",
+        "send_message": "10d03ba6403a573e44a78cd2868ac1e24f9f6daad8367eba9b96ec57bade78f3",
+        "send_reaction": "a4dc3746f049046b6ea89a0c02ec82b30a0a1490610446e9d770832bfd1e666e",
+        "send_scheduled_message": "d6d98724ddd5065cdfd626abc1ccaccaa6d55400126ba9e1ab6999c5da81ecf4",
+        "send_sticker": "7a4961b8dc993f1f95096765878c80597b89a870c2378d15ec8f90b405493371",
+        "send_voice": "5769f7db4028210f800419c74dcc287fd3729754cd47dfbc48b5b88f1ca30066",
+        "set_bot_commands": "8d3a77668d9ea13ec187bc01685d34b517b7e9f4c380ec66dc525ce8d2c9a84b",
+        "set_contact_alias": "8d4ca8fc702f69fa30183633bc3dd1fc621c81cb27ba244315ecdfd21f321343",
+        "set_default_chat_permissions": "ed741ececd28c27eed0c46671c3dfabbc47608b434dcb2e5f119eb20a587aef4",
+        "set_privacy_settings": "a5a1cdf2287a648195f46a6c5ce079c525d88998e636857b99c584c628d06c22",
+        "set_profile_photo": "e14d76aa8dbde89a44a1d37caefe672b5817f1c5024427a3cf5d67d0377e3aab",
+        "subscribe_public_channel": "071be59408e99e8558ea9e19f4542ac980ecefeb6761b107706bda4aa69b0580",
+        "toggle_slow_mode": "fd4a8218df69e88b97302a4aab4ab3300579252533391bfa8310299a2dc0d38f",
+        "transcribe_voice": "254a90f652c9d51d555561d6342bba491130426f2c4081a66bf006efc0e2257b",
+        "unarchive_chat": "95afd7b782590787f57183c3a128c2d6b9b960ac7f8fe51e8fb9e4c73ffd4af2",
+        "unban_user": "1b76d47142f749acacd4c5aa76c7b0b8d26b11034b1757b3aeca2613c4670b02",
+        "unblock_user": "5fae73fb6291f660683aad70a8c815c56bd633e933d835026d1d631e7183f2f6",
+        "unmute_chat": "6426b9ea3edcf0249969d2962c5538f539c864ca8807499bd09f78a30b104267",
+        "unpin_all_messages": "6adedbd833e48edbb339978b3846f52943a3f81013003667389212cabd28cf37",
+        "unpin_message": "84c200754e61c231332a572a6bb9a2c1fe5cab3405ce89806cb2807738e34206",
+        "update_profile": "b10aabf803db7c1d4518a87c7690f86d5d14caa40c12193bbe6f0cd4692dc813",
+        "upload_file": "7a288e82f86112290cb0c67428475b0e9c37a277d9eeb2307c9eba43fed30ccd",
+        "wait_for_new_message": "dace0a2954fd007663e3c2915872066a57fe034388d4bad24adcad99a9d2722e",
+        "wait_for_settled_message": "41ca4a35ece17c7bf408785c21f78684a207edc307a05b407df3191465cbeb1a"
+      },
+      "export_overrides": {
+        "main": {
+          "Enum": {
+            "kind": "EnumType",
+            "signature": "(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)"
+          },
+          "ErrorCategory": {
+            "kind": "EnumType",
+            "signature": "(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)"
+          },
+          "Image": {
+            "kind": "type",
+            "signature": "(path: str | pathlib.Path | None = None, data: bytes | None = None, format: str | None = None)"
+          },
+          "_alias_lock": {
+            "kind": "function",
+            "signature": "(path: pathlib.Path)"
+          },
+          "_coerce_paths_from_list_roots_validation_error": {
+            "kind": "function",
+            "signature": "(error: Exception) -> List[pathlib.Path]"
+          },
+          "_coerce_root_uri_to_path": {
+            "kind": "function",
+            "signature": "(uri: str) -> pathlib.Path"
+          },
+          "_dedupe_paths": {
+            "kind": "function",
+            "signature": "(paths: List[pathlib.Path]) -> List[pathlib.Path]"
+          },
+          "_ensure_extension_allowed": {
+            "kind": "function",
+            "signature": "(tool_name: str, candidate: pathlib.Path) -> Optional[str]"
+          },
+          "_ensure_size_within_limit": {
+            "kind": "function",
+            "signature": "(tool_name: str, candidate: pathlib.Path) -> Optional[str]"
+          },
+          "_first_resolution_root": {
+            "kind": "function",
+            "signature": "(roots: List[pathlib.Path]) -> pathlib.Path"
+          },
+          "_path_is_within_any_root": {
+            "kind": "function",
+            "signature": "(candidate: pathlib.Path, roots: List[pathlib.Path]) -> bool"
+          },
+          "_path_is_within_root": {
+            "kind": "function",
+            "signature": "(candidate: pathlib.Path, root: pathlib.Path) -> bool"
+          },
+          "aliases_file_path": {
+            "kind": "function",
+            "signature": "() -> pathlib.Path"
+          },
+          "wraps": {
+            "kind": "function",
+            "signature": "(wrapped, assigned=('__module__', '__name__', '__qualname__', '__doc__', '__annotations__'), updated=('__dict__',))"
+          }
+        },
+        "telegram_mcp.runtime": {
+          "Enum": {
+            "kind": "EnumType",
+            "signature": "(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)"
+          },
+          "ErrorCategory": {
+            "kind": "EnumType",
+            "signature": "(value, names=None, *, module=None, qualname=None, type=None, start=1, boundary=None)"
+          },
+          "Image": {
+            "kind": "type",
+            "signature": "(path: str | pathlib.Path | None = None, data: bytes | None = None, format: str | None = None)"
+          },
+          "_alias_lock": {
+            "kind": "function",
+            "signature": "(path: pathlib.Path)"
+          },
+          "_coerce_paths_from_list_roots_validation_error": {
+            "kind": "function",
+            "signature": "(error: Exception) -> List[pathlib.Path]"
+          },
+          "_coerce_root_uri_to_path": {
+            "kind": "function",
+            "signature": "(uri: str) -> pathlib.Path"
+          },
+          "_dedupe_paths": {
+            "kind": "function",
+            "signature": "(paths: List[pathlib.Path]) -> List[pathlib.Path]"
+          },
+          "_ensure_allowed_roots": {
+            "kind": "function",
+            "signature": "(ctx: Optional[mcp.server.fastmcp.server.Context], tool_name: str) -> tuple[typing.List[pathlib.Path], typing.Optional[str]]"
+          },
+          "_ensure_extension_allowed": {
+            "kind": "function",
+            "signature": "(tool_name: str, candidate: pathlib.Path) -> Optional[str]"
+          },
+          "_ensure_size_within_limit": {
+            "kind": "function",
+            "signature": "(tool_name: str, candidate: pathlib.Path) -> Optional[str]"
+          },
+          "_first_resolution_root": {
+            "kind": "function",
+            "signature": "(roots: List[pathlib.Path]) -> pathlib.Path"
+          },
+          "_get_effective_allowed_roots": {
+            "kind": "function",
+            "signature": "(ctx: Optional[mcp.server.fastmcp.server.Context]) -> List[pathlib.Path]"
+          },
+          "_get_effective_allowed_roots_with_status": {
+            "kind": "function",
+            "signature": "(ctx: Optional[mcp.server.fastmcp.server.Context]) -> tuple[typing.List[pathlib.Path], str]"
+          },
+          "_path_is_within_any_root": {
+            "kind": "function",
+            "signature": "(candidate: pathlib.Path, roots: List[pathlib.Path]) -> bool"
+          },
+          "_path_is_within_root": {
+            "kind": "function",
+            "signature": "(candidate: pathlib.Path, root: pathlib.Path) -> bool"
+          },
+          "_resolve_readable_file_path": {
+            "kind": "function",
+            "signature": "(*, raw_path: str, ctx: Optional[mcp.server.fastmcp.server.Context], tool_name: str) -> tuple[typing.Optional[pathlib.Path], typing.Optional[str]]"
+          },
+          "_resolve_writable_file_path": {
+            "kind": "function",
+            "signature": "(*, raw_path: Optional[str], default_filename: str, ctx: Optional[mcp.server.fastmcp.server.Context], tool_name: str) -> tuple[typing.Optional[pathlib.Path], typing.Optional[str]]"
+          },
+          "aliases_file_path": {
+            "kind": "function",
+            "signature": "() -> pathlib.Path"
+          },
+          "wraps": {
+            "kind": "function",
+            "signature": "(wrapped, assigned=('__module__', '__name__', '__qualname__', '__doc__', '__annotations__'), updated=('__dict__',))"
+          }
+        }
+      }
+    },
+    "3.12": {
+      "python_version": "3.12.3",
+      "implementation": "CPython",
+      "dependency_versions": {
+        "Telethon": "1.45.0",
+        "mcp": "1.29.0",
+        "pydantic": "2.13.4",
+        "pydantic-settings": "2.15.0",
+        "pytest": "9.1.1",
+        "python-dotenv": "1.2.2"
+      },
+      "tool_description_sha256": {
+        "add_chat_to_folder": "59e9ef83c1e9d7c88b46fe221ed3ab570ca57bc36be1fa66b67ff2f9cee65e4a",
+        "add_contact": "ba406700654cce387d976870d28753531d75612b7a254e5f2c07c04c845e1f7d",
+        "archive_chat": "42ce6e4e9925e52ead4889e2fcb8a1364b7f62ac694ac61f680879fa3bab6fc6",
+        "ban_user": "360f11f5e21df292c432aeb918bf7b038ac25b66966cc621896ef07fc0589a90",
+        "block_user": "8490a42bf06ce84100ff834f208e716a3b31ed36b8f40796d36989b635142da4",
+        "clear_draft": "763eee7feae21d5363385569527a49a5aa34a1e52f37b3fe61111f5d5b6b0d2c",
+        "create_channel": "3b95c3b00e704aed5e659fb1bc6d7aebaa6c27d0d57ce8e42134f538152c00b9",
+        "create_folder": "d4140c639c8d9ac72b4f6752c7e53b26797816157d8a897f95289142e2bfe529",
+        "create_forum_topic": "b1ff829d4def7ad28ff490433c1f2f49eaabdbbdbc80d30ab20f969f2ec5e7f0",
+        "create_group": "9849e29e3e109cd16cab850ee974bd71395e6fc27c16fe56843a98a7071f78c4",
+        "create_poll": "0081cf0b040f9ed211994b5d3e5b2e7c7559138706c8cfa0b8b8bfacf1e00ada",
+        "delete_chat_history": "00f6873b361a912382511c56b615ebae98d53c60f54b96ba3e255a95338a7253",
+        "delete_chat_photo": "cf9f5b907ebed2817e3cb95deca706da2ce86d6ec361219a8f982e1c962f29d1",
+        "delete_contact": "de7b4683a3307693fd31d022fdd64cb57156d856cab4e1bba95c10a14dbbbe13",
+        "delete_contact_alias": "6f09925cb4dd7645e425a992b6fefd203f98b4395e0b473638948b7d87cd57c0",
+        "delete_folder": "4492e74aa00fbe84ef81c945d156e255a2e9afce348a40111532b5e02099c83c",
+        "delete_forum_topic": "48771581d3dd0f5792cd4cd40bd2a098c5240a7f62199bda3d076a7dedf4efa1",
+        "delete_message": "9152d03f36b1326d1ca0eda080c57252e294184e49dc3a5e3ebc8e41a2aca0cb",
+        "delete_messages_bulk": "75443324161addebd566e44c3be1aae5449aef8f52a8964f59dcc3b031646765",
+        "delete_profile_photo": "73f8b40a62c4d8ecd0d5184bd287d6f02a5aef12432da2517994b32490be621d",
+        "delete_scheduled_message": "afd954f69c403ed23f3cdc3332b70bb25bd22b27fca62f3dce3d47cd0e46be6f",
+        "demote_admin": "0afac5b5b6a286ada7b489e606d27b0ab2a975212c611f6e8fca1cdaef2c0a37",
+        "disable_incoming_feed": "f8730b7636f698cd7c27d77c41d446fe32ab328eb80a041f01a4f15151cf248a",
+        "download_media": "6f2118d920915e2eeb3fee78033794b293f9156135b887227112e0badcbba67d",
+        "edit_admin_rights": "963d105b691972bb051f30dbb8d34199bad134e8c76a681fc850504c4b29d17b",
+        "edit_chat_about": "a534f29d0e6e80e018cfe7f93134f90b65f1756aa301a0957633be2e8ba4d152",
+        "edit_chat_photo": "05038d8f63d28d3efe8eab7b48c36fbe97ac3b8388a7d7171b93a4d6e467a09b",
+        "edit_chat_title": "5993cad624615990e36f26c305801c5e49afca3a8e5fda1e7ab6432361a33d10",
+        "edit_forum_topic": "359b6f198ac0e6bf19c52156bfb659d6c3852e105c8a7c34ad2f0c474a36b0f8",
+        "edit_message": "1993bcb6014b3da6f00eae3b4e251fe8c1ef228506aea44bedd0c8d1f741014a",
+        "enable_forum_topics": "f503e7a0e184ee25fa03e65f0814e240bc9e399b6dc72603c5ab9651fc6653e0",
+        "enable_incoming_feed": "e892c9491d10b3d6559d7a37fe4048bda68bcab0db2321a375c671bb7b4d7fc7",
+        "export_chat_invite": "6d7ebcef66607c6c1531ed22b7359be589cd614115550ab2cda0e65efc2cd52a",
+        "export_contacts": "71b65de05fe74b4d871ab7a0b8e0b58e518e2ed969853c4d556019e5f60cfcdf",
+        "export_unread_messages": "d8db34373042c55c2b1f4d9d467d99560d24ef1b18f2e96dbd27032302e5dd9a",
+        "forward_message": "f4d8fe318840b087fbbab271f6f2ba1b3caf94101327f4a7980dc7af9213f00d",
+        "forward_messages": "9cae27ec57bbaab413338b1dfa7aef845f63d25bf288e6c73b58121360253c00",
+        "get_admins": "80413718aad5fcf88ba185cea3f5e5c92d99cb59820d0c0bc08b0d2926fbc96c",
+        "get_banned_users": "44e0e1333ea7b546aeb97690b48eeddbe7f7d4a664a36085a5a51a6c055ee6e1",
+        "get_blocked_users": "e59cd7aa640b98c9ebc0920072280ce6322ee1a8f71b9c2329b5fd7d5dca6ac4",
+        "get_bot_info": "dc24e05d42270b592ae7acf5ab85b5f32c4cfc30addf83f22f36491520b8954e",
+        "get_chat": "b7ec5b42e7fd7cd445e7b85f7e8597c312d3d8cd3879a3d84539cad4099b1edb",
+        "get_chats": "cbfce62be2e0ab308def8186ba19f0e332ff7d3173fd8520cb8428f71cadabf4",
+        "get_common_chats": "685b5bcf7bf445686c827ef3aaa4273ed35841e5ee931ce3f86ccb81e1f4f4c8",
+        "get_contact_chats": "6126a46f8aa03bd5821982f0a154ae9838171e45a5ea7678f6dbce4c07cb41c2",
+        "get_contact_ids": "e4c19c1698ad00cb202c9152e5dbaf8f6e46d75a3e366a50fece98438503a23f",
+        "get_direct_chat_by_contact": "3d534daad826076f8638583232b65ec08d9478f81ab471881ab3aa18840c83eb",
+        "get_drafts": "f78dbb3196b0d62a72812ec22319e2c378fd7e28060c95560ad82686885903bf",
+        "get_folder": "ce62cdd45f546e73b77bf57240a7e61c704bc6657ed663953a1ca5815e8289ed",
+        "get_full_chat": "0727380f8b4ea821c571647c9c573d05586b973527f8c43d7c6872b77e4a3b90",
+        "get_full_user": "f0a8a77498d987e2204751fcb71225dbf927975ea22a85a861727438b75ab3da",
+        "get_gif_search": "05358103f15e3e9dde56781240fcc41b6e03b7f694cafd333853fee7fe9ce09b",
+        "get_history": "f9eba5e5feb6b7f31c9c158516e9e014bade8ebdc836baa484deec93d40dd378",
+        "get_invite_link": "2c919b0c0b879e7a2099050a07701db9b2b82e6b5e07ebfe89e41702cec6e934",
+        "get_last_interaction": "694363b83762e96a9cbfa5aa34d9fe7d602fb739c701df69778470dd5d60d3bb",
+        "get_me": "73be6bfcadb8b9ee30758cd739e2c780f575af1c8f46809a9e1a090789bf9d7e",
+        "get_media_info": "6f16f3b85e0082a509eb011db2a722e2faa3c86c000481670f9616e12abae8c4",
+        "get_member_admin_status": "3f00ec46eb6fbb3e6db142556d52895081ccb723786f27cd4c2ce208831855be",
+        "get_message_context": "713e6e51c04afafe2a0cc0ebc4759b6c6aa6038b9160a98e7d36d4287941484a",
+        "get_message_link": "51211e5618f3d7f27729807294ba270586ac8e5104fa2815a3fb4d4da52408cb",
+        "get_message_reactions": "77b23b37369beed6f3f4aca6ef62c56085c7f3335a584e087f9f483081c69d22",
+        "get_message_read_by": "625221aa83eaf6106958722b6409db729508e5be1fa2779f69cbec3942c4bd08",
+        "get_messages": "f80739a678bd9151bfa8de7272ea7de052b8784d0e31fd2e709b47a5e66f5c00",
+        "get_participants": "6a4045f6ea297d13dae7f033c923184a1ab7363aee108ce0bef2abec188cd835",
+        "get_photo_sheet": "cd7cd833f4b0b0867610a25002317403b51774c114166d39a9c6652df763ab5f",
+        "get_pinned_messages": "315f1e78c2af3787ff7cc1d3f990edf0f892f735e5b0822f6694f294be54a40c",
+        "get_privacy_settings": "a29107fe2cec4d9854066c1c1daf4021274007b06b4bfdc972341b33a7ca3784",
+        "get_recent_actions": "6217f384d06ab209edd493ed3e9d2cab076f27b2c3a1c93b8f0d2d3032d2d478",
+        "get_scheduled_messages": "b59fd1634822ea6470015c39dfe7e08d09b4c19a45e1f6649010736bd3618bcd",
+        "get_send_as": "d58275e7e1b245bb2d1a4cda2a0c9fcc8b7a1c3f8afd7a09f8efa1142c8d6b01",
+        "get_sticker_sets": "aca7df72b3f6a53ae5056263414e4668ed63575dfde79098a72831fe7eaffe59",
+        "get_user_photos": "400c3a48dc98af880caad109647b30e5917daf287092ee0c82656fa63adf8fa7",
+        "get_user_status": "e15661c0875b7bd0e7fa863d75383d006c41647785b30a24433bf7de3d5b5438",
+        "import_chat_invite": "3407a4346a7bf07c566ec65faed670cb75d0bb13878d8ecb78400f679925e921",
+        "import_contacts": "6ab3d9195f7629de18d02f389aeb58379cb5abcab424aa4d01b3af59dd924042",
+        "incoming_feed_status": "1ac6a77db25e280a8385bf0b3a5c70a703f675a2b49958cf6841e067b79ec4eb",
+        "invite_to_group": "c784fd4bb3e09ff6a5e4ad0aa6366f923cde747891427457b55b3c96261de98a",
+        "join_chat_by_link": "c556910ca234e3fc709adf4e3cb0ccbfcdef2e0a5b79a3cd9b353c6c1d595586",
+        "leave_chat": "75f0885f6791a8f3f5accb7074531e404d789e6b2eacb24a25b751cc2c26b1c4",
+        "list_accounts": "db840931810c213846fe786f6b8f53e0083c96ca1b78131f0fc65044dc37103c",
+        "list_chats": "d1c5803599ffda2a7eea96d5545576043d7946d0dd1999367fd4ff19d07361a8",
+        "list_contact_aliases": "737c8a3eca4b1d072d11bcc89517b56e54fd085ae5a192a80014e1c4688a982a",
+        "list_contacts": "53b96ab719e170191537f85a19baeb4b73cd51d6fa8cce6c2d5c832a7bcebbb0",
+        "list_folders": "3e47579a25d330b075ac85d9fc07fd48d74edd26b65c87b2cca5a7f5a801f8f9",
+        "list_inline_buttons": "cc34605ada0975b744282b2e2bea262715178be4ff6119fe869e315d8ae140c2",
+        "list_messages": "66a2bf774143c5a98bad5b8cbcad33ccba8941e7801d9acf50f04620d61521c1",
+        "list_photos": "fb3a936804ce164e72b78cb81f47e51f674088dc413fd15b7e56067ddd2009aa",
+        "list_topics": "b26bf3cef013c87d4b6eb67f3396be72d22e492d8406266d7b820681fa97f793",
+        "mark_as_read": "a93a687267c5edebfdbbd5110447fbed2ad9a30b9be1ae22eaa39b3e2cb89650",
+        "mute_chat": "8d739aebc1ec7afa2a21ac058839b1bdcf0c7a027c23f536efe9877c73b96a8a",
+        "open_photo": "32e3e281efdbc99e71b10c777bb93eb236b46f14253bb7218d12d4b92dc452d0",
+        "pin_message": "b82279899ecf76489592702faa70cf92220b4247851e4837e5f0ef8ef39807bf",
+        "press_inline_button": "6c2e645a555f572c9590784b241ee31b7698d542267728f63f33552e0cb9d673",
+        "promote_admin": "0d80d955c0f3f9c8ff07ef12e4bebb6c594c16e32657b41a8c649a351129a57a",
+        "remove_chat_from_folder": "55c5e623ae232b8d3035bbbd12c8e88f373aba068504870749eba18aef2479f9",
+        "remove_reaction": "b73033b6d3f056f6cb5ba790b8908006a2458eea54f8b1bf94cbac299147aa71",
+        "remove_user": "f1e79869ed47388cadd078bafe89bf1bae7d44631ad39446db4187117b4a97d8",
+        "reorder_folders": "7662402e8e15f265ee9d9bfb85eab971cd114df0c4d7b1d935963a49ed2cb8f6",
+        "reply_to_message": "97aff5c1cf6569d755292568e301dbbe232f9868da68a1a2908c9c57580a936d",
+        "resolve_username": "c9551005126a0415fcfdeb0cba324b68719c6643d148d5e8d74231b9919f5c37",
+        "save_draft": "369ad75c82d68268afc51b39f1b1f6ffba1619ee44495aed47dd784284bfc2c7",
+        "search_contacts": "3a8973b1e1c0762e78ec39e5741a101cbd048eb5da708529f6d0edfd4c846219",
+        "search_global": "a76bc61f3ed379c433e46622119ae8b1b138946c2b70fa3745996a6e87ffebbf",
+        "search_messages": "495f5c971f5edf3e12fe3dd8e9269904a4b282e361d2b99a2cea372f3ddd9d52",
+        "search_public_chats": "0d600e67875822c48bb88d64a95dc6e63ed8bd10ad4201ef64a8e37928507e22",
+        "send_album": "3566d41563e3768e734011f9fd3071d01546da445451fd0a746a396b6e7d36ae",
+        "send_contact": "93374fc231d52562dff880848dfbe451f3633d3b71cf5893426bb1268b0c5562",
+        "send_file": "af5a0c0ed944f2f632dc99f889aa7a24de291c78a105414747bc2e590b79c89d",
+        "send_gif": "71846aa4b613729c53f380ea3330ab83671715167fa5a51e40069d3ece02dca4",
+        "send_message": "10d03ba6403a573e44a78cd2868ac1e24f9f6daad8367eba9b96ec57bade78f3",
+        "send_reaction": "a4dc3746f049046b6ea89a0c02ec82b30a0a1490610446e9d770832bfd1e666e",
+        "send_scheduled_message": "d6d98724ddd5065cdfd626abc1ccaccaa6d55400126ba9e1ab6999c5da81ecf4",
+        "send_sticker": "7a4961b8dc993f1f95096765878c80597b89a870c2378d15ec8f90b405493371",
+        "send_voice": "5769f7db4028210f800419c74dcc287fd3729754cd47dfbc48b5b88f1ca30066",
+        "set_bot_commands": "8d3a77668d9ea13ec187bc01685d34b517b7e9f4c380ec66dc525ce8d2c9a84b",
+        "set_contact_alias": "8d4ca8fc702f69fa30183633bc3dd1fc621c81cb27ba244315ecdfd21f321343",
+        "set_default_chat_permissions": "ed741ececd28c27eed0c46671c3dfabbc47608b434dcb2e5f119eb20a587aef4",
+        "set_privacy_settings": "a5a1cdf2287a648195f46a6c5ce079c525d88998e636857b99c584c628d06c22",
+        "set_profile_photo": "e14d76aa8dbde89a44a1d37caefe672b5817f1c5024427a3cf5d67d0377e3aab",
+        "subscribe_public_channel": "071be59408e99e8558ea9e19f4542ac980ecefeb6761b107706bda4aa69b0580",
+        "toggle_slow_mode": "fd4a8218df69e88b97302a4aab4ab3300579252533391bfa8310299a2dc0d38f",
+        "transcribe_voice": "254a90f652c9d51d555561d6342bba491130426f2c4081a66bf006efc0e2257b",
+        "unarchive_chat": "95afd7b782590787f57183c3a128c2d6b9b960ac7f8fe51e8fb9e4c73ffd4af2",
+        "unban_user": "1b76d47142f749acacd4c5aa76c7b0b8d26b11034b1757b3aeca2613c4670b02",
+        "unblock_user": "5fae73fb6291f660683aad70a8c815c56bd633e933d835026d1d631e7183f2f6",
+        "unmute_chat": "6426b9ea3edcf0249969d2962c5538f539c864ca8807499bd09f78a30b104267",
+        "unpin_all_messages": "6adedbd833e48edbb339978b3846f52943a3f81013003667389212cabd28cf37",
+        "unpin_message": "84c200754e61c231332a572a6bb9a2c1fe5cab3405ce89806cb2807738e34206",
+        "update_profile": "b10aabf803db7c1d4518a87c7690f86d5d14caa40c12193bbe6f0cd4692dc813",
+        "upload_file": "7a288e82f86112290cb0c67428475b0e9c37a277d9eeb2307c9eba43fed30ccd",
+        "wait_for_new_message": "dace0a2954fd007663e3c2915872066a57fe034388d4bad24adcad99a9d2722e",
+        "wait_for_settled_message": "41ca4a35ece17c7bf408785c21f78684a207edc307a05b407df3191465cbeb1a"
+      },
+      "export_overrides": {
+        "main": {
+          "Image": {
+            "kind": "type",
+            "signature": "(path: str | pathlib.Path | None = None, data: bytes | None = None, format: str | None = None)"
+          },
+          "_alias_lock": {
+            "kind": "function",
+            "signature": "(path: pathlib.Path)"
+          },
+          "_coerce_paths_from_list_roots_validation_error": {
+            "kind": "function",
+            "signature": "(error: Exception) -> List[pathlib.Path]"
+          },
+          "_coerce_root_uri_to_path": {
+            "kind": "function",
+            "signature": "(uri: str) -> pathlib.Path"
+          },
+          "_dedupe_paths": {
+            "kind": "function",
+            "signature": "(paths: List[pathlib.Path]) -> List[pathlib.Path]"
+          },
+          "_ensure_extension_allowed": {
+            "kind": "function",
+            "signature": "(tool_name: str, candidate: pathlib.Path) -> Optional[str]"
+          },
+          "_ensure_size_within_limit": {
+            "kind": "function",
+            "signature": "(tool_name: str, candidate: pathlib.Path) -> Optional[str]"
+          },
+          "_first_resolution_root": {
+            "kind": "function",
+            "signature": "(roots: List[pathlib.Path]) -> pathlib.Path"
+          },
+          "_path_is_within_any_root": {
+            "kind": "function",
+            "signature": "(candidate: pathlib.Path, roots: List[pathlib.Path]) -> bool"
+          },
+          "_path_is_within_root": {
+            "kind": "function",
+            "signature": "(candidate: pathlib.Path, root: pathlib.Path) -> bool"
+          },
+          "aliases_file_path": {
+            "kind": "function",
+            "signature": "() -> pathlib.Path"
+          }
+        },
+        "telegram_mcp.runtime": {
+          "Image": {
+            "kind": "type",
+            "signature": "(path: str | pathlib.Path | None = None, data: bytes | None = None, format: str | None = None)"
+          },
+          "_alias_lock": {
+            "kind": "function",
+            "signature": "(path: pathlib.Path)"
+          },
+          "_coerce_paths_from_list_roots_validation_error": {
+            "kind": "function",
+            "signature": "(error: Exception) -> List[pathlib.Path]"
+          },
+          "_coerce_root_uri_to_path": {
+            "kind": "function",
+            "signature": "(uri: str) -> pathlib.Path"
+          },
+          "_dedupe_paths": {
+            "kind": "function",
+            "signature": "(paths: List[pathlib.Path]) -> List[pathlib.Path]"
+          },
+          "_ensure_allowed_roots": {
+            "kind": "function",
+            "signature": "(ctx: Optional[mcp.server.fastmcp.server.Context], tool_name: str) -> tuple[typing.List[pathlib.Path], typing.Optional[str]]"
+          },
+          "_ensure_extension_allowed": {
+            "kind": "function",
+            "signature": "(tool_name: str, candidate: pathlib.Path) -> Optional[str]"
+          },
+          "_ensure_size_within_limit": {
+            "kind": "function",
+            "signature": "(tool_name: str, candidate: pathlib.Path) -> Optional[str]"
+          },
+          "_first_resolution_root": {
+            "kind": "function",
+            "signature": "(roots: List[pathlib.Path]) -> pathlib.Path"
+          },
+          "_get_effective_allowed_roots": {
+            "kind": "function",
+            "signature": "(ctx: Optional[mcp.server.fastmcp.server.Context]) -> List[pathlib.Path]"
+          },
+          "_get_effective_allowed_roots_with_status": {
+            "kind": "function",
+            "signature": "(ctx: Optional[mcp.server.fastmcp.server.Context]) -> tuple[typing.List[pathlib.Path], str]"
+          },
+          "_path_is_within_any_root": {
+            "kind": "function",
+            "signature": "(candidate: pathlib.Path, roots: List[pathlib.Path]) -> bool"
+          },
+          "_path_is_within_root": {
+            "kind": "function",
+            "signature": "(candidate: pathlib.Path, root: pathlib.Path) -> bool"
+          },
+          "_resolve_readable_file_path": {
+            "kind": "function",
+            "signature": "(*, raw_path: str, ctx: Optional[mcp.server.fastmcp.server.Context], tool_name: str) -> tuple[typing.Optional[pathlib.Path], typing.Optional[str]]"
+          },
+          "_resolve_writable_file_path": {
+            "kind": "function",
+            "signature": "(*, raw_path: Optional[str], default_filename: str, ctx: Optional[mcp.server.fastmcp.server.Context], tool_name: str) -> tuple[typing.Optional[pathlib.Path], typing.Optional[str]]"
+          },
+          "aliases_file_path": {
+            "kind": "function",
+            "signature": "() -> pathlib.Path"
+          }
+        }
+      }
+    }
+  }
+}
