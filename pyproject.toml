@@ -113,6 +113,7 @@ source = [
     "telegram_mcp.account_config",
     "telegram_mcp.connections",
     "telegram_mcp.mcp_policy",
+    "telegram_mcp.startup",
 ]
 
 [tool.coverage.report]

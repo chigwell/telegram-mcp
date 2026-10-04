@@ -10,12 +10,10 @@ import logging
 import mimetypes
 import unicodedata
 
-# Ensure sys.stderr is reconfigured for UTF-8 on Windows where possible
-if hasattr(sys.stderr, "reconfigure"):
-    try:
-        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
-    except Exception:
-        pass
+from telegram_mcp import startup as __startup
+
+# Preserve the existing import-time stream configuration.
+__startup.configure_stderr(sys.stderr)
 from contextlib import contextmanager
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta, timezone
