@@ -109,6 +109,7 @@ source = [
     "telegram_mcp.error_formatting",
     "telegram_mcp.file_policy",
     "telegram_mcp.access_policy",
+    "telegram_mcp.alias_store",
 ]
 
 [tool.coverage.report]
