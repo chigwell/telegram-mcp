@@ -67,6 +67,7 @@ from telegram_mcp.tools import _message_rendering as __message_rendering
 from telegram_mcp.tools import _message_reads as __message_reads
 from telegram_mcp.tools import _message_sending as __message_sending
 from telegram_mcp.tools import _message_forwarding as __message_forwarding
+from telegram_mcp.tools import _message_mutations as __message_mutations
 
 # Domain used to build message permalinks. Overridable because the default is a
 # single point of failure: on 2026-07-13 the .me registry put t.me on serverHold
@@ -444,22 +445,17 @@ async def delete_scheduled_message(
         chat_id: The ID or username of the chat.
         message_ids: List of scheduled message IDs to delete.
     """
-    try:
-        cl = get_client(account)
-        await ensure_connected(cl)
-        if not message_ids:
-            return "message_ids must be a non-empty list."
-        entity = await resolve_entity(chat_id, cl)
-        await cl(functions.messages.DeleteScheduledMessagesRequest(peer=entity, id=message_ids))
-        return f"Deleted {len(message_ids)} scheduled message(s) from chat {chat_id}."
-    except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
-        return log_and_format_error(
-            "delete_scheduled_message", e, chat_id=chat_id, message_ids=message_ids
-        )
-    except Exception as e:
-        return log_and_format_error(
-            "delete_scheduled_message", e, chat_id=chat_id, message_ids=message_ids
-        )
+    return await __message_mutations.delete_scheduled_message(
+        chat_id=chat_id,
+        message_ids=message_ids,
+        account=account,
+        ensure_connected=ensure_connected,
+        functions=functions,
+        get_client=get_client,
+        log_and_format_error=log_and_format_error,
+        resolve_entity=resolve_entity,
+        telethon=telethon,
+    )
 
 
 @mcp.tool(
@@ -1056,13 +1052,14 @@ async def delete_message(chat_id: Union[int, str], message_id: int, account: str
     """
     Delete a message by ID.
     """
-    try:
-        cl = get_client(account)
-        entity = await resolve_entity(chat_id, cl)
-        await cl.delete_messages(entity, message_id)
-        return f"Message {message_id} deleted."
-    except Exception as e:
-        return log_and_format_error("delete_message", e, chat_id=chat_id, message_id=message_id)
+    return await __message_mutations.delete_message(
+        chat_id=chat_id,
+        message_id=message_id,
+        account=account,
+        get_client=get_client,
+        log_and_format_error=log_and_format_error,
+        resolve_entity=resolve_entity,
+    )
 
 
 @mcp.tool(
@@ -1086,30 +1083,18 @@ async def delete_chat_history(
         max_id: Delete messages up to this ID; 0 deletes all messages (default).
         revoke: If True, delete for both parties (default False = only for you).
     """
-    try:
-        cl = get_client(account)
-        await ensure_connected(cl)
-        entity = await resolve_entity(chat_id, cl)
-        result = await cl(
-            functions.messages.DeleteHistoryRequest(peer=entity, max_id=max_id, revoke=revoke)
-        )
-        pts_count = getattr(result, "pts_count", 0)
-        offset = getattr(result, "offset", 0)
-        scope = "for both parties" if revoke else "for you"
-        return (
-            f"Chat {chat_id} history cleared {scope}: "
-            f"{pts_count} messages deleted (offset={offset})."
-        )
-    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
-        return "Cannot delete chat history: admin privileges are required."
-    except Exception as e:
-        return log_and_format_error(
-            "delete_chat_history",
-            e,
-            chat_id=chat_id,
-            max_id=max_id,
-            revoke=revoke,
-        )
+    return await __message_mutations.delete_chat_history(
+        chat_id=chat_id,
+        max_id=max_id,
+        revoke=revoke,
+        account=account,
+        ensure_connected=ensure_connected,
+        functions=functions,
+        get_client=get_client,
+        log_and_format_error=log_and_format_error,
+        resolve_entity=resolve_entity,
+        telethon=telethon,
+    )
 
 
 @mcp.tool(
@@ -1136,32 +1121,19 @@ async def delete_messages_bulk(
         message_ids: List of message IDs to delete.
         revoke: If True, delete for both parties (default True). Ignored for channels.
     """
-    try:
-        cl = get_client(account)
-        await ensure_connected(cl)
-        entity = await resolve_entity(chat_id, cl)
-        if isinstance(entity, Channel):
-            result = await cl(
-                functions.channels.DeleteMessagesRequest(channel=entity, id=message_ids)
-            )
-        else:
-            result = await cl(
-                functions.messages.DeleteMessagesRequest(id=message_ids, revoke=revoke)
-            )
-        pts_count = getattr(result, "pts_count", 0)
-        return f"Deleted {pts_count} of {len(message_ids)} messages from chat {chat_id}."
-    except telethon.errors.rpcerrorlist.MessageIdInvalidError:
-        return "Cannot delete messages: one or more message IDs are invalid."
-    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
-        return "Cannot delete messages: admin privileges are required."
-    except Exception as e:
-        return log_and_format_error(
-            "delete_messages_bulk",
-            e,
-            chat_id=chat_id,
-            message_ids=message_ids,
-            revoke=revoke,
-        )
+    return await __message_mutations.delete_messages_bulk(
+        chat_id=chat_id,
+        message_ids=message_ids,
+        revoke=revoke,
+        account=account,
+        Channel=Channel,
+        ensure_connected=ensure_connected,
+        functions=functions,
+        get_client=get_client,
+        log_and_format_error=log_and_format_error,
+        resolve_entity=resolve_entity,
+        telethon=telethon,
+    )
 
 
 @mcp.tool(
@@ -1175,13 +1147,14 @@ async def pin_message(chat_id: Union[int, str], message_id: int, account: str = 
     """
     Pin a message in a chat.
     """
-    try:
-        cl = get_client(account)
-        entity = await resolve_entity(chat_id, cl)
-        await cl.pin_message(entity, message_id)
-        return f"Message {message_id} pinned in chat {chat_id}."
-    except Exception as e:
-        return log_and_format_error("pin_message", e, chat_id=chat_id, message_id=message_id)
+    return await __message_mutations.pin_message(
+        chat_id=chat_id,
+        message_id=message_id,
+        account=account,
+        get_client=get_client,
+        log_and_format_error=log_and_format_error,
+        resolve_entity=resolve_entity,
+    )
 
 
 @mcp.tool(
@@ -1195,13 +1168,14 @@ async def unpin_message(chat_id: Union[int, str], message_id: int, account: str 
     """
     Unpin a message in a chat.
     """
-    try:
-        cl = get_client(account)
-        entity = await resolve_entity(chat_id, cl)
-        await cl.unpin_message(entity, message_id)
-        return f"Message {message_id} unpinned in chat {chat_id}."
-    except Exception as e:
-        return log_and_format_error("unpin_message", e, chat_id=chat_id, message_id=message_id)
+    return await __message_mutations.unpin_message(
+        chat_id=chat_id,
+        message_id=message_id,
+        account=account,
+        get_client=get_client,
+        log_and_format_error=log_and_format_error,
+        resolve_entity=resolve_entity,
+    )
 
 
 @mcp.tool(
@@ -1221,16 +1195,16 @@ async def unpin_all_messages(chat_id: Union[int, str], account: str = None) -> s
     Args:
         chat_id: Chat ID or username.
     """
-    try:
-        cl = get_client(account)
-        await ensure_connected(cl)
-        entity = await resolve_entity(chat_id, cl)
-        await cl(functions.messages.UnpinAllMessagesRequest(peer=entity))
-        return f"All messages unpinned in chat {chat_id}."
-    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
-        return "Cannot unpin messages: admin privileges are required."
-    except Exception as e:
-        return log_and_format_error("unpin_all_messages", e, chat_id=chat_id)
+    return await __message_mutations.unpin_all_messages(
+        chat_id=chat_id,
+        account=account,
+        ensure_connected=ensure_connected,
+        functions=functions,
+        get_client=get_client,
+        log_and_format_error=log_and_format_error,
+        resolve_entity=resolve_entity,
+        telethon=telethon,
+    )
 
 
 @mcp.tool(
@@ -1244,13 +1218,13 @@ async def mark_as_read(chat_id: Union[int, str], account: str = None) -> str:
     """
     Mark all messages as read in a chat.
     """
-    try:
-        cl = get_client(account)
-        entity = await resolve_entity(chat_id, cl)
-        await cl.send_read_acknowledge(entity)
-        return f"Marked all messages as read in chat {chat_id}."
-    except Exception as e:
-        return log_and_format_error("mark_as_read", e, chat_id=chat_id)
+    return await __message_mutations.mark_as_read(
+        chat_id=chat_id,
+        account=account,
+        get_client=get_client,
+        log_and_format_error=log_and_format_error,
+        resolve_entity=resolve_entity,
+    )
 
 
 @mcp.tool(
@@ -1766,29 +1740,17 @@ async def save_draft(
         reply_to_msg_id: Optional message ID to reply to
         no_webpage: If True, disable link preview in the draft
     """
-    try:
-        cl = get_client(account)
-        peer = await resolve_input_entity(chat_id, cl)
-
-        # Build reply_to parameter if provided
-        reply_to = None
-        if reply_to_msg_id:
-            from telethon.tl.types import InputReplyToMessage
-
-            reply_to = InputReplyToMessage(reply_to_msg_id=reply_to_msg_id)
-
-        await cl(
-            functions.messages.SaveDraftRequest(
-                peer=peer,
-                message=message,
-                no_webpage=no_webpage,
-                reply_to=reply_to,
-            )
-        )
-
-        return f"Draft saved to chat {chat_id}. Open the chat in Telegram to see and send it."
-    except Exception as e:
-        return log_and_format_error("save_draft", e, chat_id=chat_id)
+    return await __message_mutations.save_draft(
+        chat_id=chat_id,
+        message=message,
+        reply_to_msg_id=reply_to_msg_id,
+        no_webpage=no_webpage,
+        account=account,
+        functions=functions,
+        get_client=get_client,
+        log_and_format_error=log_and_format_error,
+        resolve_input_entity=resolve_input_entity,
+    )
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Drafts", openWorldHint=True, readOnlyHint=True))
@@ -1831,21 +1793,14 @@ async def clear_draft(chat_id: Union[int, str], account: str = None) -> str:
     Args:
         chat_id: The chat ID or username to clear the draft from
     """
-    try:
-        cl = get_client(account)
-        peer = await resolve_input_entity(chat_id, cl)
-
-        # Saving an empty message clears the draft
-        await cl(
-            functions.messages.SaveDraftRequest(
-                peer=peer,
-                message="",
-            )
-        )
-
-        return f"Draft cleared from chat {chat_id}."
-    except Exception as e:
-        return log_and_format_error("clear_draft", e, chat_id=chat_id)
+    return await __message_mutations.clear_draft(
+        chat_id=chat_id,
+        account=account,
+        functions=functions,
+        get_client=get_client,
+        log_and_format_error=log_and_format_error,
+        resolve_input_entity=resolve_input_entity,
+    )
 
 
 @mcp.tool(
