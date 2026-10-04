@@ -560,7 +560,7 @@ def _parse_allowed_roots_env(value: Optional[str], *, re) -> List[str]:
 
 def _configure_allowed_roots_from_cli(
     argv: Optional[List[str]], *, List, Path, _dedupe_paths, _parse_allowed_roots_env, argparse, os
-) -> None:
+) -> tuple[list[Path], str, Optional[str], Optional[int]]:
     parser = argparse.ArgumentParser(
         prog="telegram-mcp",
         add_help=False,
