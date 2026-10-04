@@ -32,6 +32,7 @@ Message sent successfully:
 - [MCP Client Configuration](#mcp-client-configuration)
 - [Multi-Account Setup](#multi-account-setup)
 - [Device Identity](#device-identity)
+- [Expected Account Check](#expected-account-check)
 - [Proxy Support](#proxy-support)
 - [File Path Security](#file-path-security)
 - [Chat Access Privacy (Allowlist)](#chat-access-privacy-allowlist)
@@ -566,6 +567,33 @@ would otherwise overwrite the name chosen during login on each reconnect, so
 set them to keep a stable, recognisable device name. The same variables are
 read both by the session string generator (at login) and by the server (on
 every connect), so set them in the same place as your other credentials.
+
+## Expected Account Check
+
+Optionally pin each session to the Telegram account it is supposed to belong to.
+When set, the server calls `get_me()` right after connecting and compares the
+account's username (case-insensitive, leading `@` optional, active collectible
+usernames included) with the configured value. On a mismatch, or if the account
+has no username, it disconnects and refuses to start, so a swapped or
+mislabelled session string cannot silently act as the wrong person:
+
+```env
+TELEGRAM_EXPECTED_USERNAME=my_username
+```
+
+In multi-account setups use the same `_<LABEL>` suffix as the session variables;
+a suffixed value overrides the unsuffixed one for that account:
+
+```env
+TELEGRAM_SESSION_STRING_WORK=session_string_for_work
+TELEGRAM_SESSION_STRING_PERSONAL=session_string_for_personal
+TELEGRAM_EXPECTED_USERNAME_WORK=my_work_username
+TELEGRAM_EXPECTED_USERNAME_PERSONAL=my_personal_username
+```
+
+An unsuffixed `TELEGRAM_EXPECTED_USERNAME` applies to every account that has no
+suffixed value. When neither is set (the default) no check is made and no extra
+request is sent.
 
 ## Proxy Support
 

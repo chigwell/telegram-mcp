@@ -63,6 +63,56 @@ def _session_lock_shared() -> bool:
     return raw == "shared"
 
 
+def _normalize_username(value) -> str:
+    return (value or "").strip().lstrip("@").casefold()
+
+
+def _expected_username(label: str) -> str:
+    """``TELEGRAM_EXPECTED_USERNAME[_<LABEL>]``: the account a session must belong to.
+
+    The per-account ``_<LABEL>`` variable overrides the unsuffixed one, like the
+    ``TELEGRAM_PROXY_*`` variables. Returns ``""`` (no check) when neither is set.
+    """
+    raw = os.getenv(f"TELEGRAM_EXPECTED_USERNAME_{label.upper()}") or os.getenv(
+        "TELEGRAM_EXPECTED_USERNAME"
+    )
+    return _normalize_username(raw)
+
+
+async def _verify_expected_username(label: str, client) -> None:
+    """Refuse to serve a session that is logged in to a different account.
+
+    Guards against a swapped or mislabelled session string (e.g. the personal
+    account's session configured under the work label), which would otherwise
+    let MCP clients read and send messages as the wrong person.
+    """
+    expected = _expected_username(label)
+    if not expected:
+        return
+
+    me = await client.get_me()
+    usernames = {_normalize_username(getattr(me, "username", None))}
+    # Accounts with collectible usernames list the extra ones in `usernames`.
+    for entry in getattr(me, "usernames", None) or []:
+        if getattr(entry, "active", False):
+            usernames.add(_normalize_username(getattr(entry, "username", None)))
+    usernames.discard("")
+
+    if expected in usernames:
+        return
+
+    try:
+        await client.disconnect()
+    except Exception:
+        pass
+    raise RuntimeError(
+        f"Telegram client '{label}' is logged in to a different account than "
+        f"TELEGRAM_EXPECTED_USERNAME_{label.upper()} / TELEGRAM_EXPECTED_USERNAME "
+        "expects. Refusing to start; check which session string or session file is "
+        "configured for this account."
+    )
+
+
 async def _connect_authorized_client(label, client) -> None:
     # First, prevent our own duplicate-spawn case outright: a per-session lock
     # means a second instance of this server never even attempts to connect
@@ -106,6 +156,7 @@ async def _connect_authorized_client(label, client) -> None:
             await asyncio.sleep(delay)
 
     if await client.is_user_authorized():
+        await _verify_expected_username(label, client)
         return
 
     raise RuntimeError(
