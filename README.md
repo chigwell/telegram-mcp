@@ -32,6 +32,7 @@ Message sent successfully:
 - [MCP Client Configuration](#mcp-client-configuration)
 - [Multi-Account Setup](#multi-account-setup)
 - [Device Identity](#device-identity)
+- [Expected Account Check](#expected-account-check)
 - [Proxy Support](#proxy-support)
 - [File Path Security](#file-path-security)
 - [Chat Access Privacy (Allowlist)](#chat-access-privacy-allowlist)
@@ -567,6 +568,10 @@ set them to keep a stable, recognisable device name. The same variables are
 read both by the session string generator (at login) and by the server (on
 every connect), so set them in the same place as your other credentials.
 
+## Expected Account Check
+
+Set `TELEGRAM_EXPECTED_USERNAME` (or `TELEGRAM_EXPECTED_USERNAME_<LABEL>` per account) and the server refuses to start when the session belongs to a different account. The comparison is case-insensitive and ignores a leading `@`. Unset means no check.
+
 ## Proxy Support
 
 Route Telegram traffic through a proxy by setting the `TELEGRAM_PROXY_*`
@@ -842,7 +847,8 @@ Telegram messages, display names, chat titles, and button labels are untrusted c
   the MCP server when you can scan from an existing Telegram app, or
   `uv run session_string_generator.py --phone` when you need phone-code login.
   Then set `TELEGRAM_SESSION_STRING` in `.env`. The MCP server does not perform
-  interactive phone-code login over stdio.
+  interactive phone-code login over stdio, including after a reconnect: a session
+  terminated while the server runs fails with "not authorized after reconnect".
 - **Invalid API credentials:** verify `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` at [my.telegram.org/apps](https://my.telegram.org/apps).
 - **Database is locked:** make sure no other process is using the same file session.
 - **`AuthKeyDuplicatedError` / "Another telegram-mcp process is already connected with this session":** two processes tried to connect the same Telegram session at once (e.g. an MCP client restarted the connector before the old process exited), which Telegram rejects and can invalidate the session for both. The server now takes an exclusive lock per session before connecting; a second concurrent launch waits briefly (default 20s, override with `TELEGRAM_LOCK_GRACE_SECONDS`) for the first to release it and otherwise exits without ever calling `connect()`, instead of racing into a duplicate connection. Retry once only one instance is running — the refusal names the PID holding the lock. If several instances on this host are meant to share one session (all reaching Telegram from the same IP), set `TELEGRAM_SESSION_LOCK=shared`; see [Sharing one session from one host](#sharing-one-session-from-one-host).

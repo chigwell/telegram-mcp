@@ -1,5 +1,6 @@
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,17 +17,35 @@ class _FakeSession:
 
 
 class _FakeClient:
-    def __init__(self, *, authorized: bool, identity: str = "test-identity"):
+    def __init__(
+        self,
+        *,
+        authorized: bool,
+        identity: str = "test-identity",
+        username: str | None = "work_account",
+        usernames: list | None = None,
+    ):
         self.authorized = authorized
         self.connected = False
+        self.disconnected = False
         self.started = False
+        self.get_me_calls = 0
+        self.username = username
+        self.usernames = usernames
         self.session = _FakeSession(identity)
 
     async def connect(self):
         self.connected = True
 
+    async def disconnect(self):
+        self.disconnected = True
+
     async def is_user_authorized(self):
         return self.authorized
+
+    async def get_me(self):
+        self.get_me_calls += 1
+        return SimpleNamespace(username=self.username, usernames=self.usernames)
 
     async def start(self):
         self.started = True
@@ -73,6 +92,110 @@ async def test_connect_authorized_client_rejects_unauthorized_session():
 
     assert client.connected is True
     assert client.started is False
+
+
+@pytest.mark.asyncio
+async def test_connect_authorized_client_skips_identity_check_when_unset():
+    client = _FakeClient(authorized=True, username="anyone")
+
+    await runner._connect_authorized_client("default", client)
+
+    assert client.get_me_calls == 0
+    assert client.disconnected is False
+
+
+@pytest.mark.asyncio
+async def test_connect_authorized_client_accepts_expected_username(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_EXPECTED_USERNAME", " @Work_Account ")
+    client = _FakeClient(authorized=True, username="work_account")
+
+    await runner._connect_authorized_client("default", client)
+
+    assert client.get_me_calls == 1
+    assert client.disconnected is False
+
+
+@pytest.mark.asyncio
+async def test_connect_authorized_client_rejects_wrong_account(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_EXPECTED_USERNAME", "work_account")
+    client = _FakeClient(authorized=True, username="personal_account")
+
+    with pytest.raises(RuntimeError, match="different account") as excinfo:
+        await runner._connect_authorized_client("default", client)
+
+    assert "TELEGRAM_EXPECTED_USERNAME" in str(excinfo.value)
+    # The other account's username is not echoed into logs.
+    assert "personal_account" not in str(excinfo.value)
+    assert client.disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_connect_authorized_client_rejects_account_without_username(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_EXPECTED_USERNAME", "work_account")
+    client = _FakeClient(authorized=True, username=None)
+
+    with pytest.raises(RuntimeError, match="different account"):
+        await runner._connect_authorized_client("default", client)
+
+    assert client.disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_connect_authorized_client_accepts_active_collectible_username(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_EXPECTED_USERNAME", "collectible")
+    client = _FakeClient(
+        authorized=True,
+        username=None,
+        usernames=[
+            SimpleNamespace(username="inactive", active=False),
+            SimpleNamespace(username="Collectible", active=True),
+        ],
+    )
+
+    await runner._connect_authorized_client("default", client)
+
+    assert client.disconnected is False
+
+
+@pytest.mark.asyncio
+async def test_connect_authorized_client_ignores_inactive_collectible_username(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_EXPECTED_USERNAME", "inactive")
+    client = _FakeClient(
+        authorized=True,
+        username="primary",
+        usernames=[SimpleNamespace(username="inactive", active=False)],
+    )
+
+    with pytest.raises(RuntimeError, match="different account"):
+        await runner._connect_authorized_client("default", client)
+
+
+@pytest.mark.asyncio
+async def test_connect_authorized_client_per_label_expected_username(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_EXPECTED_USERNAME", "personal_account")
+    monkeypatch.setenv("TELEGRAM_EXPECTED_USERNAME_WORK", "work_account")
+    work = _FakeClient(authorized=True, identity="session-work", username="work_account")
+    personal = _FakeClient(
+        authorized=True, identity="session-personal", username="personal_account"
+    )
+
+    await runner._connect_authorized_client("work", work)
+    await runner._connect_authorized_client("personal", personal)
+
+    assert work.disconnected is False
+    assert personal.disconnected is False
+
+
+@pytest.mark.asyncio
+async def test_connect_authorized_client_per_label_mismatch_names_label(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_EXPECTED_USERNAME_WORK", "work_account")
+    client = _FakeClient(authorized=True, username="personal_account")
+
+    with pytest.raises(RuntimeError, match="TELEGRAM_EXPECTED_USERNAME_WORK") as excinfo:
+        await runner._connect_authorized_client("work", client)
+
+    assert "'work'" in str(excinfo.value)
+    assert client.disconnected is True
 
 
 @pytest.mark.asyncio

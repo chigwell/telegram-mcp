@@ -813,8 +813,16 @@ async def _force_reconnect(cl: TelegramClient):
             f"Reconnecting to Telegram timed out after {_RECONNECT_TIMEOUT:.0f}s."
         ) from exc
     if not await cl.is_user_authorized():
-        reconnect_logger.warning("Client not authorized after reconnect, calling start()...")
-        await asyncio.wait_for(cl.start(), timeout=_RECONNECT_TIMEOUT)
+        # cl.start() would prompt via blocking input(): it stalls the event loop
+        # and, over stdio, reads protocol frames as a phone number.
+        try:
+            await cl.disconnect()
+        except Exception:
+            pass
+        raise RuntimeError(
+            "Telegram session is not authorized after reconnect. Re-authorize it "
+            "outside the server (session_string_generator.py) and restart."
+        )
     _last_conn_verified[id(cl)] = time.time()
     reconnect_logger.warning("Forced reconnect successful")
 
