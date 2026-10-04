@@ -7,6 +7,9 @@ try:
 except UnsafeInstallationError as exc:
     raise SystemExit(str(exc)) from None
 
+import asyncio
+import os
+import sqlite3
 import sys
 from telethon.errors import AuthKeyDuplicatedError, BotMethodInvalidError
 
@@ -19,7 +22,12 @@ if hasattr(sys.stderr, "reconfigure"):
 
 from telegram_mcp import runtime as _runtime
 from telegram_mcp import transcription as _transcription
-from telegram_mcp.runtime import *
+from telegram_mcp.runtime import (
+    TelegramClient,
+    _configure_allowed_roots_from_cli,
+    clients,
+    mcp,
+)
 from telegram_mcp.singleton import (
     DEFAULT_GRACE_SECONDS,
     SessionLock,
