@@ -72,6 +72,7 @@ from telegram_mcp import serialization as __serialization
 from telegram_mcp import core_types as __core_types
 from telegram_mcp import validation as __validation
 from telegram_mcp import formatting as __formatting
+from telegram_mcp import error_formatting as __error_formatting
 
 ValidationError = __core_types.ValidationError
 
@@ -1058,19 +1059,17 @@ ChatAccessDeniedError = __core_types.ChatAccessDeniedError
 
 def _is_flood_wait(error: Exception) -> bool:
     """True for Telethon FloodWaitError."""
-    try:
-        return isinstance(error, FloodWaitError)
-    except Exception:  # telethon missing or moved — not this helper's problem
-        return False
+    return __error_formatting._is_flood_wait(
+        error=error,
+        FloodWaitError=FloodWaitError,
+    )
 
 
 def _is_schema_drift(error: Exception) -> bool:
     """True for TypeNotFoundError — the installed TL schema is older than what the server sends."""
-    try:
-        from telethon.errors.common import TypeNotFoundError
-    except Exception:  # telethon missing or moved — not this helper's problem
-        return False
-    return isinstance(error, TypeNotFoundError)
+    return __error_formatting._is_schema_drift(
+        error=error,
+    )
 
 
 def log_and_format_error(
@@ -1096,64 +1095,18 @@ def log_and_format_error(
     Returns:
         A user-friendly error message with an error code.
     """
-    # An ask-the-user instruction is normal control flow, not a failure: return it
-    # verbatim and never log the user's nickname at ERROR level.
-    if isinstance(error, AliasNeedsUser):
-        return error.payload
-
-    # Generate a consistent error code
-    if isinstance(prefix, str) and prefix == "VALIDATION-001":
-        # Special case for validation errors
-        error_code = prefix
-    else:
-        if prefix is None:
-            # Try to derive prefix from function name
-            for category in ErrorCategory:
-                if category.name.lower() in function_name.lower():
-                    prefix = category
-                    break
-
-        prefix_str = prefix.value if isinstance(prefix, ErrorCategory) else (prefix or "GEN")
-        error_code = f"{prefix_str}-ERR-{abs(hash(function_name)) % 1000:03d}"
-
-    # Telegram FloodWait (Rate Limiting) must be explicitly formatted for LLM agents.
-    # LLMs will blindly retry generic errors, escalating the flood penalty and risking bans.
-    # Log only a categorical warning; the user-facing response below carries the
-    # actionable wait duration. The persistent error-file handler intentionally
-    # does not store WARNING records.
-    if _is_flood_wait(error):
-        seconds = getattr(error, "seconds", None) or 0
-        logger.warning("Telegram FloodWait; retry only after the reported delay.")
-        if user_message:
-            return user_message
-        wait_clause = f"{seconds} seconds" if seconds > 0 else "an unknown duration"
-        return (
-            f"Rate limit exceeded (FloodWait): Telegram requires waiting {wait_clause} "
-            f"before repeating this operation. Do NOT retry immediately (code: {error_code})."
-        )
-
-    # Keep persistent logs useful without recording exception text, tracebacks,
-    # identifiers, user content, provider payloads, or local paths.
-    logger.error("Telegram MCP operation failed; see the returned stable error code.")
-
-    # Return a user-friendly message
-    if user_message:
-        return user_message
-
-    # MTProto schema drift must not hide behind the generic code. Telethon releases lag
-    # behind production Telegram, and when the server sends an object whose constructor
-    # the installed schema does not know, the read buffer desynchronises: some tools fail
-    # while their neighbours keep working. Reported as a generic error, that pattern is
-    # indistinguishable from "no such user/chat" and sends debugging the wrong way.
-    if _is_schema_drift(error):
-        return (
-            f"MTProto schema mismatch: the installed Telethon does not know an object the "
-            f"server sent. This is NOT a missing user or chat — the data arrived, "
-            f"parsing it failed. Upgrade Telethon; if it is already the latest release, its "
-            f"schema is behind the current layer (code: {error_code})."
-        )
-
-    return f"An error occurred (code: {error_code})."
+    return __error_formatting.log_and_format_error(
+        function_name=function_name,
+        error=error,
+        prefix=prefix,
+        user_message=user_message,
+        AliasNeedsUser=AliasNeedsUser,
+        ErrorCategory=ErrorCategory,
+        _is_flood_wait=_is_flood_wait,
+        _is_schema_drift=_is_schema_drift,
+        logger=logger,
+        **kwargs,
+    )
 
 
 def validate_id(*param_names_to_validate):

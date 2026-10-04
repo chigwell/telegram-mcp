@@ -106,6 +106,7 @@ source = [
     "telegram_mcp.serialization",
     "telegram_mcp.formatting",
     "telegram_mcp.validation",
+    "telegram_mcp.error_formatting",
 ]
 
 [tool.coverage.report]
