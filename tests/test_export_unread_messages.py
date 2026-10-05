@@ -80,7 +80,8 @@ def _dialog(chat_id, unread_count):
     )
 
 
-def _patch_export(monkeypatch, client):
+def _patch_export(monkeypatch, client, root):
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root.resolve()])
     monkeypatch.setattr(runtime, "clients", {"default": client})
     monkeypatch.setattr(messages, "get_client", lambda account=None: client)
     monkeypatch.setattr(messages, "is_chat_allowlist_enabled", lambda: False)
@@ -107,7 +108,7 @@ async def test_export_creates_output_file_with_messages(tmp_path, monkeypatch):
         dialogs=[_dialog(chat_id, unread_count=2)],
         messages_by_chat={chat_id: msgs},
     )
-    _patch_export(monkeypatch, client)
+    _patch_export(monkeypatch, client, tmp_path)
 
     out = tmp_path / "out.json"
     result = await messages.export_unread_messages(chat_ids=[chat_id], output_path=str(out))
@@ -151,7 +152,7 @@ async def test_export_resume_skips_already_exported_chats(tmp_path, monkeypatch)
             new_chat: [_fake_message(10, "new-chat-msg")],
         },
     )
-    _patch_export(monkeypatch, client)
+    _patch_export(monkeypatch, client, tmp_path)
 
     result = await messages.export_unread_messages(
         chat_ids=[existing_chat, new_chat],
@@ -199,7 +200,7 @@ async def test_export_no_resume_overwrites(tmp_path, monkeypatch):
         dialogs=[_dialog(chat_id, unread_count=2)],
         messages_by_chat={chat_id: [_fake_message(1, "fresh-one"), _fake_message(2, "fresh-two")]},
     )
-    _patch_export(monkeypatch, client)
+    _patch_export(monkeypatch, client, tmp_path)
 
     result = await messages.export_unread_messages(
         chat_ids=[chat_id],
@@ -231,7 +232,7 @@ async def test_export_returns_json_summary(tmp_path, monkeypatch):
             chat_id: [_fake_message(1, "a"), _fake_message(2, "b")],
         },
     )
-    _patch_export(monkeypatch, client)
+    _patch_export(monkeypatch, client, tmp_path)
 
     out = tmp_path / "out.json"
     result = await messages.export_unread_messages(chat_ids=[chat_id], output_path=str(out))
@@ -253,7 +254,7 @@ async def test_export_creates_parent_directories(tmp_path, monkeypatch):
         dialogs=[_dialog(chat_id, unread_count=1)],
         messages_by_chat={chat_id: [_fake_message(1, "nested")]},
     )
-    _patch_export(monkeypatch, client)
+    _patch_export(monkeypatch, client, tmp_path)
 
     out = tmp_path / "nested" / "dir" / "out.json"
     assert not out.parent.exists()
@@ -266,4 +267,49 @@ async def test_export_creates_parent_directories(tmp_path, monkeypatch):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert str(chat_id) in data["chats"]
     assert summary["status"] == "ok"
+    assert summary["output_path"] == str(out.resolve())
+
+
+@pytest.mark.asyncio
+async def test_export_rejects_path_outside_allowed_roots(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    client = FakeExportClient()
+    _patch_export(monkeypatch, client, root)
+
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"marker": "fixture"}', encoding="utf-8")
+
+    result = await messages.export_unread_messages(
+        chat_ids=[], output_path=str(outside), resume=True
+    )
+
+    assert result == "Path is outside allowed roots."
+    assert outside.read_text(encoding="utf-8") == '{"marker": "fixture"}'
+    assert client.get_messages_calls == []
+
+
+@pytest.mark.asyncio
+async def test_export_disabled_without_allowed_roots(tmp_path, monkeypatch):
+    client = FakeExportClient()
+    _patch_export(monkeypatch, client, tmp_path)
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [])
+
+    out = tmp_path / "out.json"
+    result = await messages.export_unread_messages(chat_ids=[], output_path=str(out))
+
+    assert "disabled until allowed roots are configured" in result
+    assert not out.exists()
+
+
+@pytest.mark.asyncio
+async def test_export_relative_path_resolves_under_first_root(tmp_path, monkeypatch):
+    client = FakeExportClient()
+    _patch_export(monkeypatch, client, tmp_path)
+
+    result = await messages.export_unread_messages(chat_ids=[], output_path="exports/out.json")
+    summary = _summary(result)
+
+    out = tmp_path / "exports" / "out.json"
+    assert out.exists()
     assert summary["output_path"] == str(out.resolve())
