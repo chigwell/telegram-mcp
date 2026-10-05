@@ -156,7 +156,7 @@ class CreateForumTopicRequest(TLRequest):
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chats", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
-async def get_chats(account: str = None, page: int = 1, page_size: int = 20) -> str:
+async def get_chats(account: Optional[str] = None, page: int = 1, page_size: int = 20) -> str:
     """
     Get a paginated list of chats.
     Args:
@@ -204,7 +204,7 @@ async def get_chats(account: str = None, page: int = 1, page_size: int = 20) -> 
 )
 @with_account(readonly=False)
 @validate_id("channel")
-async def subscribe_public_channel(channel: Union[int, str], account: str = None) -> str:
+async def subscribe_public_channel(channel: Union[int, str], account: Optional[str] = None) -> str:
     """
     Subscribe (join) to a public channel or supergroup by username or ID.
 
@@ -236,8 +236,8 @@ async def list_topics(
     chat_id: Union[int, str],
     limit: int = 200,
     offset_topic: int = 0,
-    search_query: str = None,
-    account: str = None,
+    search_query: Optional[str] = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Retrieve forum topics from a supergroup with the forum feature enabled.
@@ -329,7 +329,7 @@ async def list_topics(
 @with_account(readonly=False)
 @validate_id("chat_id")
 async def enable_forum_topics(
-    chat_id: Union[int, str], tabs: bool = True, account: str = None
+    chat_id: Union[int, str], tabs: bool = True, account: Optional[str] = None
 ) -> str:
     """
     Enable Telegram forum topics for a supergroup.
@@ -374,9 +374,9 @@ async def enable_forum_topics(
 async def create_forum_topic(
     chat_id: Union[int, str],
     title: str,
-    icon_color: int = None,
-    icon_emoji_id: int = None,
-    account: str = None,
+    icon_color: Optional[int] = None,
+    icon_emoji_id: Optional[int] = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Create a Telegram forum topic in a forum-enabled supergroup.
@@ -479,11 +479,11 @@ def _forum_supergroup_error(entity) -> Optional[str]:
 async def edit_forum_topic(
     chat_id: Union[int, str],
     topic_id: int,
-    title: str = None,
-    icon_emoji_id: int = None,
-    closed: bool = None,
-    hidden: bool = None,
-    account: str = None,
+    title: Optional[str] = None,
+    icon_emoji_id: Optional[int] = None,
+    closed: Optional[bool] = None,
+    hidden: Optional[bool] = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Edit a forum topic in a forum-enabled supergroup. Pass only the fields to change.
@@ -556,7 +556,7 @@ _DELETE_TOPIC_MAX_BATCHES = 100
 async def delete_forum_topic(
     chat_id: Union[int, str],
     topic_id: int,
-    account: str = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Delete a forum topic together with all of its messages. This cannot be undone.
@@ -605,13 +605,13 @@ async def delete_forum_topic(
 @mcp.tool(annotations=ToolAnnotations(title="List Chats", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
 async def list_chats(
-    chat_type: str = None,
+    chat_type: Optional[str] = None,
     limit: int = 20,
     unread_only: bool = False,
     unmuted_only: bool = False,
-    archived: bool = None,
+    archived: Optional[bool] = None,
     with_about: bool = False,
-    account: str = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     List available chats with metadata.
@@ -754,7 +754,7 @@ async def list_chats(
 @mcp.tool(annotations=ToolAnnotations(title="Get Chat", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
 @validate_id("chat_id")
-async def get_chat(chat_id: Union[int, str], account: str = None) -> str:
+async def get_chat(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Get detailed information about a specific chat.
 
@@ -867,7 +867,7 @@ async def get_chat(chat_id: Union[int, str], account: str = None) -> str:
     annotations=ToolAnnotations(title="Search Public Chats", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
-async def search_public_chats(query: str, limit: int = 20, account: str = None) -> str:
+async def search_public_chats(query: str, limit: int = 20, account: Optional[str] = None) -> str:
     """
     Search for public chats, channels, or bots by username or title.
     """
@@ -888,7 +888,7 @@ async def search_public_chats(query: str, limit: int = 20, account: str = None) 
     annotations=ToolAnnotations(title="Resolve Username", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
-async def resolve_username(username: str, account: str = None) -> str:
+async def resolve_username(username: str, account: Optional[str] = None) -> str:
     """
     Resolve a username to a user or chat ID.
     """
@@ -906,7 +906,7 @@ async def resolve_username(username: str, account: str = None) -> str:
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
-async def get_full_chat(chat_id: Union[int, str], account: str = None) -> str:
+async def get_full_chat(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Get full info of a channel or group including description/about text.
 
@@ -974,7 +974,7 @@ async def get_full_chat(chat_id: Union[int, str], account: str = None) -> str:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
-async def mute_chat(chat_id: Union[int, str], account: str = None) -> str:
+async def mute_chat(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Mute notifications for a chat.
     """
@@ -1017,7 +1017,7 @@ async def mute_chat(chat_id: Union[int, str], account: str = None) -> str:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
-async def unmute_chat(chat_id: Union[int, str], account: str = None) -> str:
+async def unmute_chat(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Unmute notifications for a chat.
     """
@@ -1060,7 +1060,7 @@ async def unmute_chat(chat_id: Union[int, str], account: str = None) -> str:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
-async def archive_chat(chat_id: Union[int, str], account: str = None) -> str:
+async def archive_chat(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Archive a chat.
     """
@@ -1085,7 +1085,7 @@ async def archive_chat(chat_id: Union[int, str], account: str = None) -> str:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
-async def unarchive_chat(chat_id: Union[int, str], account: str = None) -> str:
+async def unarchive_chat(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Unarchive a chat.
     """
@@ -1109,7 +1109,7 @@ async def unarchive_chat(chat_id: Union[int, str], account: str = None) -> str:
 @with_account(readonly=True)
 @validate_id("user_id")
 async def get_common_chats(
-    user_id: Union[int, str], limit: int = 100, max_id: int = 0, account: str = None
+    user_id: Union[int, str], limit: int = 100, max_id: int = 0, account: Optional[str] = None
 ) -> str:
     """
     List chats shared with a specific user.
@@ -1163,7 +1163,7 @@ async def get_common_chats(
 @with_account(readonly=True)
 @validate_id("chat_id")
 async def get_message_read_by(
-    chat_id: Union[int, str], message_id: int, account: str = None
+    chat_id: Union[int, str], message_id: int, account: Optional[str] = None
 ) -> str:
     """
     List user IDs who have read a specific message.
@@ -1251,7 +1251,7 @@ async def get_message_read_by(
 @with_account(readonly=True)
 @validate_id("chat_id")
 async def get_message_link(
-    chat_id: Union[int, str], message_id: int, thread: bool = False, account: str = None
+    chat_id: Union[int, str], message_id: int, thread: bool = False, account: Optional[str] = None
 ) -> str:
     """
     Export a t.me/... link for a specific message.

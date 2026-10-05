@@ -5,7 +5,7 @@ from telegram_mcp.runtime import *
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Me", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
-async def get_me(account: str = None) -> str:
+async def get_me(account: Optional[str] = None) -> str:
     """
     Get your own user information.
     """
@@ -25,7 +25,10 @@ async def get_me(account: str = None) -> str:
 )
 @with_account(readonly=False)
 async def update_profile(
-    account: str = None, first_name: str = None, last_name: str = None, about: str = None
+    account: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    about: Optional[str] = None,
 ) -> str:
     """
     Update your profile information (name, bio).
@@ -52,7 +55,7 @@ async def update_profile(
 )
 @with_account(readonly=False)
 async def set_profile_photo(
-    file_path: str, ctx: Optional[Context] = None, account: str = None
+    file_path: str, ctx: Optional[Context] = None, account: Optional[str] = None
 ) -> str:
     """
     Set a new profile photo.
@@ -81,7 +84,7 @@ async def set_profile_photo(
     )
 )
 @with_account(readonly=False)
-async def delete_profile_photo(account: str = None) -> str:
+async def delete_profile_photo(account: Optional[str] = None) -> str:
     """
     Delete your current profile photo.
     """
@@ -105,7 +108,7 @@ async def delete_profile_photo(account: str = None) -> str:
     )
 )
 @with_account(readonly=True)
-async def get_privacy_settings(account: str = None) -> str:
+async def get_privacy_settings(account: Optional[str] = None) -> str:
     """
     Get your privacy settings for last seen status.
     """
@@ -140,7 +143,7 @@ async def set_privacy_settings(
     key: str,
     allow_users: Optional[List[Union[int, str]]] = None,
     disallow_users: Optional[List[Union[int, str]]] = None,
-    account: str = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Set privacy settings (e.g., last seen, phone, etc.).
@@ -290,7 +293,7 @@ def _business_profile(full_user) -> dict:
     annotations=ToolAnnotations(title="Get Full User", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
-async def get_full_user(username: Union[int, str], account: str = None) -> str:
+async def get_full_user(username: Union[int, str], account: Optional[str] = None) -> str:
     """
     Get full profile info of a Telegram user including bio/about text,
     personal channel link, and other profile details.
@@ -376,7 +379,7 @@ async def get_full_user(username: Union[int, str], account: str = None) -> str:
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Bot Info", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
-async def get_bot_info(bot_username: str, account: str = None) -> str:
+async def get_bot_info(bot_username: str, account: Optional[str] = None) -> str:
     """
     Get information about a bot by username.
 
@@ -418,7 +421,9 @@ async def get_bot_info(bot_username: str, account: str = None) -> str:
     )
 )
 @with_account(readonly=False)
-async def set_bot_commands(bot_username: str, commands: list, account: str = None) -> str:
+async def set_bot_commands(
+    bot_username: str, commands: list, account: Optional[str] = None
+) -> str:
     """
     Set bot commands for a bot you own.
     Note: This function can only be used if the Telegram client is a bot account.
@@ -468,7 +473,9 @@ async def set_bot_commands(bot_username: str, commands: list, account: str = Non
 )
 @with_account(readonly=True)
 @validate_id("user_id")
-async def get_user_photos(user_id: Union[int, str], limit: int = 10, account: str = None) -> str:
+async def get_user_photos(
+    user_id: Union[int, str], limit: int = 10, account: Optional[str] = None
+) -> str:
     """
     Get profile photos of a user.
     """
@@ -488,7 +495,7 @@ async def get_user_photos(user_id: Union[int, str], limit: int = 10, account: st
 )
 @with_account(readonly=True)
 @validate_id("user_id")
-async def get_user_status(user_id: Union[int, str], account: str = None) -> str:
+async def get_user_status(user_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Get the online status of a user.
     """
