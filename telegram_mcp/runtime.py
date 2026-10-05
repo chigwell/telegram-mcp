@@ -27,6 +27,7 @@ from urllib.parse import unquote, urlparse
 # Third-party libraries
 from dotenv import find_dotenv, load_dotenv
 from mcp.server.fastmcp import FastMCP, Context, Image
+from mcp.server.fastmcp.exceptions import ToolError
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
@@ -741,6 +742,8 @@ def with_account(readonly=False):
     - In multi-mode with explicit account: uses that account's client.
     - In multi-mode without account + readonly: fans out to all accounts
       concurrently, prefixes each result with [label], concatenates.
+      ToolError failures are labelled alongside successful results; if every
+      account raises ToolError, the combined failure is raised instead.
     - In multi-mode without account + NOT readonly: returns an error.
 
     The wrapped function must accept ``account: str = None`` and use
@@ -765,14 +768,24 @@ def with_account(readonly=False):
             async def _call_for(label):
                 kw = dict(kwargs)
                 kw["account"] = label
-                return label, await fn(*args, **kw)
+                try:
+                    result = await fn(*args, **kw)
+                    failed = False
+                except ToolError as error:
+                    result = str(error)
+                    failed = True
+                return label, result, failed
 
             results = await asyncio.gather(*(_call_for(label) for label in clients))
-            if all(isinstance(result, str) for _, result in results):
-                return "\n\n".join(f"[{label}]\n{result}" for label, result in results)
+            if all(failed for _, _, failed in results):
+                raise ToolError(
+                    "\n\n".join(f"[{label}]\n{result}" for label, result, _ in results)
+                )
+            if all(isinstance(result, str) for _, result, _ in results):
+                return "\n\n".join(f"[{label}]\n{result}" for label, result, _ in results)
 
             account_labelled_content = []
-            for label, result in results:
+            for label, result, _ in results:
                 account_labelled_content.append(f"[{label}]")
                 account_labelled_content.extend(result if isinstance(result, list) else [result])
             return account_labelled_content
@@ -1194,12 +1207,19 @@ def log_and_format_error(
     return f"An error occurred (code: {error_code})."
 
 
-def validate_id(*param_names_to_validate):
+def validate_id(*param_names_to_validate, raise_errors=False):
     """
     Decorator to validate chat_id and user_id parameters, including lists of IDs.
     It checks for valid integer ranges, string representations of integers,
     and username formats.
+    Set raise_errors to surface validation/privacy failures as MCP tool errors;
+    other tools retain their existing return contract by default.
     """
+
+    def error_result(message):
+        if raise_errors:
+            raise ToolError(message)
+        return message
 
     def decorator(func):
         @wraps(func)
@@ -1256,24 +1276,28 @@ def validate_id(*param_names_to_validate):
                     for item in param_value:
                         validated_item, error_msg = validate_single_id(item, param_name)
                         if error_msg:
-                            return log_and_format_error(
-                                func.__name__,
-                                ValidationError(error_msg),
-                                prefix="VALIDATION-001",
-                                user_message=error_msg,
-                                **{param_name: param_value},
+                            return error_result(
+                                log_and_format_error(
+                                    func.__name__,
+                                    ValidationError(error_msg),
+                                    prefix="VALIDATION-001",
+                                    user_message=error_msg,
+                                    **{param_name: param_value},
+                                )
                             )
                         validated_list.append(validated_item)
                     kwargs[param_name] = validated_list
                 else:
                     validated_value, error_msg = validate_single_id(param_value, param_name)
                     if error_msg:
-                        return log_and_format_error(
-                            func.__name__,
-                            ValidationError(error_msg),
-                            prefix="VALIDATION-001",
-                            user_message=error_msg,
-                            **{param_name: param_value},
+                        return error_result(
+                            log_and_format_error(
+                                func.__name__,
+                                ValidationError(error_msg),
+                                prefix="VALIDATION-001",
+                                user_message=error_msg,
+                                **{param_name: param_value},
+                            )
                         )
                     kwargs[param_name] = validated_value
 
@@ -1297,12 +1321,14 @@ def validate_id(*param_names_to_validate):
                                     pass
                             if not resolved_allowed:
                                 err = check_chat_access(item)
-                                return log_and_format_error(
-                                    func.__name__,
-                                    ChatAccessDeniedError(err),
-                                    prefix=ErrorCategory.PRIVACY,
-                                    user_message=err,
-                                    **{param_name: param_value},
+                                return error_result(
+                                    log_and_format_error(
+                                        func.__name__,
+                                        ChatAccessDeniedError(err),
+                                        prefix=ErrorCategory.PRIVACY,
+                                        user_message=err,
+                                        **{param_name: param_value},
+                                    )
                                 )
 
             return await func(*args, **kwargs)
