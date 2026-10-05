@@ -40,11 +40,11 @@ class _DownloadLimitExceeded(Exception):
 async def send_file(
     chat_id: Union[int, str],
     file_path: Union[str, List[str]],
-    caption: str = None,
+    caption: Optional[str] = None,
     topic_id: Optional[int] = None,
     schedule_date: Union[str, int, None] = None,
     ctx: Optional[Context] = None,
-    account: str = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Send a file to a chat.
@@ -150,11 +150,11 @@ async def _send_album(
 async def send_album(
     chat_id: Union[int, str],
     file_paths: List[str],
-    caption: str = None,
+    caption: Optional[str] = None,
     topic_id: Optional[int] = None,
     schedule_date: Union[str, int, None] = None,
     ctx: Optional[Context] = None,
-    account: str = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Send multiple photos/videos as one Telegram media group (album).
@@ -203,7 +203,7 @@ async def download_media(
     message_id: int,
     file_path: Optional[str] = None,
     ctx: Optional[Context] = None,
-    account: str = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Download media from a message in a chat.
@@ -299,7 +299,7 @@ async def send_voice(
     file_path: str,
     topic_id: Optional[int] = None,
     ctx: Optional[Context] = None,
-    account: str = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Send a voice message to a chat. File must be an OGG/OPUS voice note.
@@ -344,7 +344,9 @@ async def send_voice(
     annotations=ToolAnnotations(title="Upload File", openWorldHint=True, destructiveHint=True)
 )
 @with_account(readonly=False)
-async def upload_file(file_path: str, ctx: Optional[Context] = None, account: str = None) -> str:
+async def upload_file(
+    file_path: str, ctx: Optional[Context] = None, account: Optional[str] = None
+) -> str:
     """
     Upload a local file to Telegram and return upload metadata.
 
@@ -379,7 +381,9 @@ async def upload_file(file_path: str, ctx: Optional[Context] = None, account: st
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
-async def get_media_info(chat_id: Union[int, str], message_id: int, account: str = None) -> str:
+async def get_media_info(
+    chat_id: Union[int, str], message_id: int, account: Optional[str] = None
+) -> str:
     """
     Get info about media in a message.
 
@@ -404,7 +408,7 @@ async def get_media_info(chat_id: Union[int, str], message_id: int, account: str
     annotations=ToolAnnotations(title="Get Sticker Sets", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
-async def get_sticker_sets(account: str = None) -> str:
+async def get_sticker_sets(account: Optional[str] = None) -> str:
     """
     Get all sticker sets.
 
@@ -429,7 +433,7 @@ async def send_sticker(
     file_path: str,
     topic_id: Optional[int] = None,
     ctx: Optional[Context] = None,
-    account: str = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Send a sticker to a chat. File must be a valid .webp sticker file.
@@ -463,7 +467,7 @@ async def send_sticker(
     annotations=ToolAnnotations(title="Get Gif Search", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
-async def get_gif_search(query: str, limit: int = 10, account: str = None) -> str:
+async def get_gif_search(query: str, limit: int = 10, account: Optional[str] = None) -> str:
     """
     Search for GIFs by query. Returns a list of Telegram document IDs (not file paths).
 
@@ -525,7 +529,7 @@ async def send_gif(
     chat_id: Union[int, str],
     gif_id: int,
     topic_id: Optional[int] = None,
-    account: str = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Send a GIF to a chat by Telegram GIF document ID (not a file path).
@@ -556,7 +560,7 @@ async def list_photos(
     chat_id: Union[int, str],
     source: str = AVATAR_SOURCE,
     limit: int = 20,
-    account: str = None,
+    account: Optional[str] = None,
 ) -> str:
     """
     Index the photos of any peer as text, without transferring any image.
@@ -615,7 +619,7 @@ async def open_photo(
     message_id: Optional[int] = None,
     save_path: Optional[str] = None,
     ctx: Optional[Context] = None,
-    account: str = None,
+    account: Optional[str] = None,
 ):
     """
     View one photo of any peer at full resolution.
@@ -675,7 +679,7 @@ async def get_photo_sheet(
     source: str = AVATAR_SOURCE,
     limit: int = 6,
     columns: Optional[int] = None,
-    account: str = None,
+    account: Optional[str] = None,
 ):
     """
     View many photos of a peer as one labelled collage, for a single image cost.
