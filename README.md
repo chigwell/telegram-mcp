@@ -95,6 +95,10 @@ The engine is chosen per call via the `engine` argument, or otherwise defaults t
 The cache lives in `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default `data/transcripts`), written as a 700 directory / 600 file since it holds personal-chat text in plaintext — see [Docker](#docker) for why this needs its own volume mount in a container.
 - **Profile and privacy:** get your own account info, update profile fields, set or delete profile photos, inspect privacy settings, get user info/photos/status, and manage bot commands.
 - **Folders and drafts:** list, create, update, reorder, and delete Telegram folders; save, list, and clear drafts.
+  - `get_folder_limits` reports current Premium-aware folder, explicit-chat and pin limits from Telegram app config; unavailable limits are `null`.
+  - `get_folder_snapshot` captures folder definitions/order, including title entities, display fields, flags, stable peer IDs and ordered pins, without access hashes or chat contents. Its private-folder `definition` objects can be passed as restoration patches; shared invites and account/chat state are outside this snapshot's scope.
+  - `update_folder(folder_id, patch, expected_revision?)` edits an existing private folder in place, preserving omitted fields. Peer lists replace only the specified list; `[]` clears it. For example, `{"title": "Projects", "exclude_archived": false}` renames the folder and allows archived chats through its rules without unarchiving anything. Save a snapshot before editing and use its `revision` to reject stale plans. Shared/system folders are refused; avoid concurrent folder editors because Telegram has no atomic compare-and-swap.
+
 - **Events:** wait for incoming messages with debounce (`wait_for_new_message`, `wait_for_settled_message`), optionally for one chat only via `chat_id` — without it any unrelated conversation wakes the wait — or enable the opt-in incoming event feed for callback-style delivery (see below).
 
 All tool results that include Telegram user-controlled content are sanitized and, where practical, returned as structured JSON.
