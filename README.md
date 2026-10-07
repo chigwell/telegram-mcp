@@ -550,9 +550,8 @@ several MCP clients — you can let them share the session instead of pooling:
 TELEGRAM_SESSION_LOCK=shared
 ```
 
-Shared instances coexist with each other but never overlap an exclusive one
-(except on Windows, where a shared instance takes no lock). If you are not sure
-every client egresses from the same IP, use the pool.
+Shared instances coexist with each other but never overlap an exclusive one.
+If you are not sure every client egresses from the same IP, use the pool.
 
 ## Device Identity
 
