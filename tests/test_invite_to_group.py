@@ -19,17 +19,25 @@ class FakeInviteClient:
     """Records every raw request; optionally raises per-user errors for
     AddChatUserRequest to simulate already-participant / privacy failures."""
 
-    def __init__(self, add_user_errors=None, missing=()):
+    def __init__(self, add_user_errors=None, missing=(), already=()):
         self.requests = []
         self.add_user_errors = add_user_errors or {}
         self.missing = set(missing)
+        self.already = set(already)
 
     def _invited_users(self, user_ids):
-        # Telethon >= 1.45 (layer 166+) answers both invite requests with
-        # messages.InvitedUsers: no .users/.count, and users Telegram refused
-        # (privacy, premium-only) come back in missing_invitees, not as an error.
+        # Telethon >= 1.45 answers both invite requests with messages.InvitedUsers:
+        # no .users/.count. Refused users (privacy, premium-only) come back in
+        # missing_invitees, not as an error. A real add into a supergroup carries a
+        # "X added Y" service message; a user already in the group yields nothing.
+        added = [u for u in user_ids if u not in self.missing and u not in self.already]
+        service = SimpleNamespace(
+            message=SimpleNamespace(action=types.MessageActionChatAddUser(users=added))
+        )
         return types.messages.InvitedUsers(
-            updates=types.Updates(updates=[], users=[], chats=[], date=None, seq=0),
+            updates=types.Updates(
+                updates=[service] if added else [], users=[], chats=[], date=None, seq=0
+            ),
             missing_invitees=[
                 types.MissingInvitee(user_id=u) for u in user_ids if u in self.missing
             ],
@@ -121,3 +129,16 @@ async def test_basic_group_reports_missing_invitees(monkeypatch):
 
     assert "Successfully invited 1 users to Basic Group" in result
     assert "not added: 42" in result
+
+
+@pytest.mark.asyncio
+async def test_channel_does_not_count_existing_members_as_invited(monkeypatch):
+    channel = types.Channel(id=777, title="Announcements", photo=None, date=None)
+    u1, u2 = SimpleNamespace(id=41), SimpleNamespace(id=42)
+    client = FakeInviteClient(already={42})
+    _patch(monkeypatch, client, {777: channel, 41: u1, 42: u2})
+
+    result = await groups.invite_to_group(group_id=777, user_ids=[41, 42], account=None)
+
+    assert "Successfully invited 1 users to Announcements" in result
+    assert "1 already a participant" in result

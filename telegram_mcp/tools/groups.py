@@ -121,10 +121,28 @@ async def invite_to_group(
                 )
 
                 missing = _missing_invitee_ids(result)
+                updates = getattr(getattr(result, "updates", None), "updates", None) or []
+                added = [
+                    user_id
+                    for update in updates
+                    for user_id in getattr(
+                        getattr(getattr(update, "message", None), "action", None), "users", []
+                    )
+                    if isinstance(update.message.action, types.MessageActionChatAddUser)
+                ]
+                # A supergroup posts "X added Y" for each real add and nothing for an
+                # existing member; a broadcast channel posts no service message at all.
+                if added or not updates:
+                    invited_count = len(added)
+                else:
+                    invited_count = len(users_to_add) - len(missing)
+                already = len(users_to_add) - invited_count - len(missing)
                 msg = (
-                    f"Successfully invited {len(users_to_add) - len(missing)} users "
+                    f"Successfully invited {invited_count} users "
                     f"to {sanitize_name(entity.title)}"
                 )
+                if already:
+                    msg += f" ({already} already a participant)"
                 if missing:
                     msg += f" (not added: {', '.join(map(str, missing))})"
                 return msg
