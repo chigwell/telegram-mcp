@@ -772,18 +772,18 @@ async def inspect_document(
         msg = await cl.get_messages(entity, ids=message_id)
 
         if not msg or not msg.media:
-            return "В указанном сообщении нет прикрепленного документа или медиафайла."
+            return "There is no attached document or media file in the specified message."
 
-        # Скачивание файла строго в оперативную память (bytes)
+        # Downloading the file strictly into memory (bytes)
         data = await cl.download_media(msg, file=bytes)
         if not data:
-            return "Не удалось прочитать содержимое документа."
+            return "Failed to read the contents of the document."
 
         filename = getattr(msg.file, "name", "") or ""
         mime_type = getattr(msg.file, "mime_type", "") or ""
         ext = Path(filename).suffix.lower()
 
-        # 1. Если это изображение или скан
+        # 1. If this is an image or scan
         if mime_type.startswith("image/") or ext in {".jpg", ".jpeg", ".png", ".webp"}:
             fmt = (
                 "png"
@@ -792,7 +792,7 @@ async def inspect_document(
             )
             return Image(data=data, format=fmt)
 
-        # 2. Если это PDF
+        # 2. If this is a PDF
         if mime_type == "application/pdf" or ext == ".pdf":
             try:
                 reader = PdfReader(io.BytesIO(data))
@@ -803,21 +803,25 @@ async def inspect_document(
                     extracted = (page.extract_text() or "").strip()
                     if extracted:
                         has_any_text = True
-                    text_pages.append(f"--- Страница {i + 1} ---\n{extracted}")
+                    text_pages.append(f"--- Page {i + 1} ---\n{extracted}")
 
                 if not has_any_text:
                     return (
-                        f"Документ '{filename}' ({len(reader.pages)} стр.) "
-                        "не содержит текстового слоя (возможно, отсканированное изображение без OCR)."
+                        f"Document '{filename}' ({len(reader.pages)} pages) "
+                        "does not contain a text layer (possibly a scanned image without OCR)."
                     )
                 full_text = "\n\n".join(text_pages).strip()
-                return (
-                    f"Содержимое документа '{filename}' ({len(reader.pages)} стр.):\n\n{full_text}"
-                )
+                return f"Contents of document '{filename}' ({len(reader.pages)} pages):\n\n{full_text}"
             except Exception as err:
-                return f"Ошибка чтения PDF: {err}"
+                return log_and_format_error(
+                    "inspect_document",
+                    err,
+                    user_message="Error reading PDF.",
+                    chat_id=chat_id,
+                    message_id=message_id,
+                )
 
-        # 3. Если это текстовый файл (TXT, CSV, JSON, MD, LOG и т.д.)
+        # 3. If this is a text file (TXT, CSV, JSON, MD, LOG, etc.)
         if mime_type.startswith("text/") or ext in {
             ".txt",
             ".csv",
@@ -837,7 +841,10 @@ async def inspect_document(
             return text_content
 
         del data
-        return f"Формат файла '{filename}' ({mime_type}) пока не поддерживается для прямого текстового анализа."
+        return (
+            f"File format '{filename}' ({mime_type}) "
+            "is not currently supported for direct text analysis."
+        )
     except Exception as e:
         return log_and_format_error("inspect_document", e, chat_id=chat_id, message_id=message_id)
 

@@ -41,7 +41,7 @@ async def test_inspect_document_no_media(monkeypatch):
     monkeypatch.setattr(media, "resolve_entity", AsyncMock(return_value="entity"))
 
     result = await _inspect_document(123, 1)
-    assert "нет прикрепленного документа" in result
+    assert "no attached document" in result
 
 
 @pytest.mark.asyncio
@@ -64,7 +64,7 @@ async def test_inspect_document_image(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_inspect_document_text(monkeypatch):
-    txt_data = "Hello, world! Привет мир!".encode("utf-8")
+    txt_data = "Hello, world! Multi-language text.".encode("utf-8")
     msg = SimpleNamespace(
         id=3,
         media=object(),
@@ -75,7 +75,7 @@ async def test_inspect_document_text(monkeypatch):
     monkeypatch.setattr(media, "resolve_entity", AsyncMock(return_value="entity"))
 
     result = await _inspect_document(123, 3)
-    assert result == "Hello, world! Привет мир!"
+    assert result == "Hello, world! Multi-language text."
 
 
 @pytest.mark.asyncio
@@ -92,7 +92,7 @@ async def test_inspect_document_pdf(monkeypatch):
 
     # Test PDF without text layer
     result = await _inspect_document(123, 4)
-    assert "не содержит текстового слоя" in result
+    assert "does not contain a text layer" in result
 
     # Test PDF with extracted text by mocking PdfReader.pages
     class MockPage:
@@ -105,8 +105,28 @@ async def test_inspect_document_pdf(monkeypatch):
 
     monkeypatch.setattr(media, "PdfReader", MockReader)
     result = await _inspect_document(123, 4)
-    assert "Содержимое документа 'contract.pdf' (1 стр.):" in result
+    assert "Contents of document 'contract.pdf' (1 pages):" in result
     assert "Sample Contract Text Line 1" in result
+
+
+@pytest.mark.asyncio
+async def test_inspect_document_pdf_error(monkeypatch):
+    class BrokenReader:
+        def __init__(self, stream):
+            raise ValueError("Corrupt PDF syntax")
+
+    monkeypatch.setattr(media, "PdfReader", BrokenReader)
+    msg = SimpleNamespace(
+        id=6,
+        media=object(),
+        file=SimpleNamespace(name="broken.pdf", mime_type="application/pdf"),
+    )
+    client = MockClient(message=msg, media_bytes=b"corrupt")
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+    monkeypatch.setattr(media, "resolve_entity", AsyncMock(return_value="entity"))
+
+    result = await _inspect_document(123, 6)
+    assert "Error reading PDF" in result
 
 
 @pytest.mark.asyncio
@@ -121,7 +141,7 @@ async def test_inspect_document_unsupported(monkeypatch):
     monkeypatch.setattr(media, "resolve_entity", AsyncMock(return_value="entity"))
 
     result = await _inspect_document(123, 5)
-    assert "пока не поддерживается" in result
+    assert "is not currently supported for direct text analysis" in result
 
 
 def test_inspect_document_is_registered_and_read_only():
