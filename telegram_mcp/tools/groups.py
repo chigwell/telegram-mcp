@@ -73,6 +73,15 @@ async def create_group(
         return log_and_format_error("create_group", e, title=title, user_ids=user_ids)
 
 
+def _missing_invitee_ids(result) -> List[int]:
+    """User ids Telegram declined to add (privacy settings, premium-only invites).
+
+    Both invite requests return messages.InvitedUsers; a refused user lands in
+    missing_invitees instead of raising, so the request itself still succeeds.
+    """
+    return [m.user_id for m in getattr(result, "missing_invitees", None) or []]
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Invite To Group", openWorldHint=True, destructiveHint=True, idempotentHint=True
@@ -111,15 +120,32 @@ async def invite_to_group(
                     functions.channels.InviteToChannelRequest(channel=entity, users=users_to_add)
                 )
 
-                invited_count = 0
-                if hasattr(result, "users") and result.users:
-                    invited_count = len(result.users)
-                elif hasattr(result, "count"):
-                    invited_count = result.count
-
-                return (
-                    f"Successfully invited {invited_count} users to {sanitize_name(entity.title)}"
+                missing = _missing_invitee_ids(result)
+                updates = getattr(getattr(result, "updates", None), "updates", None) or []
+                added = [
+                    user_id
+                    for update in updates
+                    for user_id in getattr(
+                        getattr(getattr(update, "message", None), "action", None), "users", []
+                    )
+                    if isinstance(update.message.action, types.MessageActionChatAddUser)
+                ]
+                # A supergroup posts "X added Y" for each real add and nothing for an
+                # existing member; a broadcast channel posts no service message at all.
+                if added or not updates:
+                    invited_count = len(added)
+                else:
+                    invited_count = len(users_to_add) - len(missing)
+                already = len(users_to_add) - invited_count - len(missing)
+                msg = (
+                    f"Successfully invited {invited_count} users "
+                    f"to {sanitize_name(entity.title)}"
                 )
+                if already:
+                    msg += f" ({already} already a participant)"
+                if missing:
+                    msg += f" (not added: {', '.join(map(str, missing))})"
+                return msg
             else:
                 # Basic group (telethon Chat): channels.InviteToChannel cannot be used
                 # (it casts to InputChannel and fails). Add each user individually via
@@ -127,14 +153,19 @@ async def invite_to_group(
                 invited_count = 0
                 already = 0
                 failures = []
+                missing = []
                 for user in users_to_add:
                     try:
-                        await cl(
+                        result = await cl(
                             functions.messages.AddChatUserRequest(
                                 chat_id=entity.id, user_id=user, fwd_limit=100
                             )
                         )
-                        invited_count += 1
+                        refused = _missing_invitee_ids(result)
+                        if refused:
+                            missing.extend(refused)
+                        else:
+                            invited_count += 1
                     except telethon.errors.rpcerrorlist.UserAlreadyParticipantError:
                         already += 1
                     except (
@@ -150,6 +181,8 @@ async def invite_to_group(
                     msg += f" ({already} already a participant)"
                 if failures:
                     msg += f" (failed: {'; '.join(failures)})"
+                if missing:
+                    msg += f" (not added: {', '.join(map(str, missing))})"
                 return msg
         except telethon.errors.rpcerrorlist.UserNotMutualContactError:
             return "Error: Cannot invite users who are not mutual contacts. Please ensure the users are in your contacts and have added you back."
