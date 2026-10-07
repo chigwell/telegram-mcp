@@ -3121,6 +3121,7 @@ async def save_draft(
     message: str,
     reply_to_msg_id: Optional[int] = None,
     no_webpage: bool = False,
+    parse_mode: Optional[str] = None,
     account: Optional[str] = None,
 ) -> str:
     """
@@ -3132,8 +3133,26 @@ async def save_draft(
         message: The draft message text
         reply_to_msg_id: Optional message ID to reply to
         no_webpage: If True, disable link preview in the draft
+        parse_mode: Optional formatting, kept in the draft as real entities. Use 'html'
+            for <b>, <i>, <u>, <s>, <code>, <pre>, <a href="...">, <blockquote>
+            (the only way to get underline), or 'md'/'markdown' for **bold**,
+            __italic__, `code`. Omit (or 'plain') to save the text exactly as given.
     """
     try:
+        mode = (parse_mode or "plain").lower()
+        if mode == "html":
+            from telethon.extensions import html as _html
+
+            message, entities = _html.parse(message)
+        elif mode in ("md", "markdown"):
+            from telethon.extensions import markdown as _md
+
+            message, entities = _md.parse(message)
+        elif mode == "plain":
+            entities = None
+        else:
+            return f"parse_mode='{parse_mode}' is not supported for drafts. Use 'html', 'md' or 'plain'."
+
         cl = get_client(account)
         peer = await resolve_input_entity(chat_id, cl)
 
@@ -3150,6 +3169,7 @@ async def save_draft(
                 message=message,
                 no_webpage=no_webpage,
                 reply_to=reply_to,
+                entities=entities or None,
             )
         )
 
