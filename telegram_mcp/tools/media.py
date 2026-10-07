@@ -1,9 +1,12 @@
 """Media MCP tools."""
 
+import io
 import os
 import shutil
 import tempfile
 from uuid import uuid4
+
+from pypdf import PdfReader
 
 from telegram_mcp.runtime import *
 
@@ -738,6 +741,107 @@ async def get_photo_sheet(
         )
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Inspect Document",
+        openWorldHint=True,
+        readOnlyHint=True,
+    )
+)
+@with_account(readonly=True)
+@validate_id("chat_id")
+async def inspect_document(
+    chat_id: Union[int, str],
+    message_id: int,
+    account: Optional[str] = None,
+):
+    """
+    Inspect and read the contents of a document, PDF, or image from a Telegram message
+    entirely in memory (no disk footprint).
+
+    Returns extracted text for PDFs and documents, or an Image for scans/photos
+    to allow instant visual verification in Claude.
+
+    Args:
+        chat_id: The chat ID, username, or alias.
+        message_id: The ID of the message containing the document or media.
+    """
+    try:
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        msg = await cl.get_messages(entity, ids=message_id)
+
+        if not msg or not msg.media:
+            return "В указанном сообщении нет прикрепленного документа или медиафайла."
+
+        # Скачивание файла строго в оперативную память (bytes)
+        data = await cl.download_media(msg, file=bytes)
+        if not data:
+            return "Не удалось прочитать содержимое документа."
+
+        filename = getattr(msg.file, "name", "") or ""
+        mime_type = getattr(msg.file, "mime_type", "") or ""
+        ext = Path(filename).suffix.lower()
+
+        # 1. Если это изображение или скан
+        if mime_type.startswith("image/") or ext in {".jpg", ".jpeg", ".png", ".webp"}:
+            fmt = (
+                "png"
+                if (ext == ".png" or mime_type == "image/png")
+                else ("webp" if (ext == ".webp" or mime_type == "image/webp") else "jpeg")
+            )
+            return Image(data=data, format=fmt)
+
+        # 2. Если это PDF
+        if mime_type == "application/pdf" or ext == ".pdf":
+            try:
+                reader = PdfReader(io.BytesIO(data))
+                del data
+                text_pages = []
+                has_any_text = False
+                for i, page in enumerate(reader.pages):
+                    extracted = (page.extract_text() or "").strip()
+                    if extracted:
+                        has_any_text = True
+                    text_pages.append(f"--- Страница {i + 1} ---\n{extracted}")
+
+                if not has_any_text:
+                    return (
+                        f"Документ '{filename}' ({len(reader.pages)} стр.) "
+                        "не содержит текстового слоя (возможно, отсканированное изображение без OCR)."
+                    )
+                full_text = "\n\n".join(text_pages).strip()
+                return (
+                    f"Содержимое документа '{filename}' ({len(reader.pages)} стр.):\n\n{full_text}"
+                )
+            except Exception as err:
+                return f"Ошибка чтения PDF: {err}"
+
+        # 3. Если это текстовый файл (TXT, CSV, JSON, MD, LOG и т.д.)
+        if mime_type.startswith("text/") or ext in {
+            ".txt",
+            ".csv",
+            ".json",
+            ".md",
+            ".log",
+            ".yaml",
+            ".yml",
+            ".xml",
+            ".html",
+        }:
+            try:
+                text_content = data.decode("utf-8")
+            except UnicodeDecodeError:
+                text_content = data.decode("latin-1", errors="replace")
+            del data
+            return text_content
+
+        del data
+        return f"Формат файла '{filename}' ({mime_type}) пока не поддерживается для прямого текстового анализа."
+    except Exception as e:
+        return log_and_format_error("inspect_document", e, chat_id=chat_id, message_id=message_id)
+
+
 __all__ = [
     "send_file",
     "send_album",
@@ -752,4 +856,5 @@ __all__ = [
     "send_sticker",
     "get_gif_search",
     "send_gif",
+    "inspect_document",
 ]

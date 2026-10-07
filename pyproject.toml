@@ -27,6 +27,7 @@ dependencies = [
     "httpx>=0.28.1",
     "mcp[cli]>=1.8.0,<2",
     "pillow>=11.0.0",
+    "pypdf>=4.0.0",
     "python-dotenv>=1.1.0",
     "python-json-logger>=3.3.0",
     "qrcode>=8.2",
