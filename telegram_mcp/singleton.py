@@ -28,8 +28,9 @@ split-tunnel hosts). Where every instance shares one egress IP,
 holders coexist with each other, but a shared holder and an exclusive
 holder never overlap, so an operator who never opted in keeps the
 exclusive guarantee. (On Windows, ``msvcrt`` byte-range locks have no
-shared mode; a shared holder there takes no lock at all.) The exclusive
-holder leaves its PID in the lock file so a refused contender can name it.
+shared mode; it is emulated with one locked byte per shared holder.) The
+exclusive holder leaves its PID in the lock file so a refused contender can
+name it.
 """
 
 from __future__ import annotations
@@ -44,20 +45,31 @@ from typing import IO, Optional
 if os.name == "nt":
     import msvcrt
 
-    def _try_lock(fh: IO, shared: bool = False) -> bool:
-        if shared:
-            return True  # no shared byte-range locks on Windows; see module docstring
+    # msvcrt byte-range locks have no shared mode, so emulate one: an exclusive
+    # holder locks byte 0 plus every shared slot, a shared holder locks one free
+    # slot. Shared holders then coexist, and neither kind overlaps an exclusive
+    # one. Locking past the end of the file is allowed.
+    _SHARED_SLOTS = 64
+
+    def _lock_range(fh: IO, start: int, length: int) -> bool:
         try:
-            fh.seek(0)
-            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-            return True
+            fh.seek(start)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, length)
         except OSError:
             return False
+        fh.locked_range = (start, length)
+        return True
+
+    def _try_lock(fh: IO, shared: bool = False) -> bool:
+        if not shared:
+            return _lock_range(fh, 0, 1 + _SHARED_SLOTS)
+        return any(_lock_range(fh, 1 + slot, 1) for slot in range(_SHARED_SLOTS))
 
     def _unlock(fh: IO) -> None:
+        start, length = getattr(fh, "locked_range", (0, 1 + _SHARED_SLOTS))
         try:
-            fh.seek(0)
-            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            fh.seek(start)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, length)
         except OSError:
             pass
 
