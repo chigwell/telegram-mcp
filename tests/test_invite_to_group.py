@@ -19,9 +19,21 @@ class FakeInviteClient:
     """Records every raw request; optionally raises per-user errors for
     AddChatUserRequest to simulate already-participant / privacy failures."""
 
-    def __init__(self, add_user_errors=None):
+    def __init__(self, add_user_errors=None, missing=()):
         self.requests = []
         self.add_user_errors = add_user_errors or {}
+        self.missing = set(missing)
+
+    def _invited_users(self, user_ids):
+        # Telethon >= 1.45 (layer 166+) answers both invite requests with
+        # messages.InvitedUsers: no .users/.count, and users Telegram refused
+        # (privacy, premium-only) come back in missing_invitees, not as an error.
+        return types.messages.InvitedUsers(
+            updates=types.Updates(updates=[], users=[], chats=[], date=None, seq=0),
+            missing_invitees=[
+                types.MissingInvitee(user_id=u) for u in user_ids if u in self.missing
+            ],
+        )
 
     async def __call__(self, request):
         self.requests.append(request)
@@ -29,9 +41,9 @@ class FakeInviteClient:
             err = self.add_user_errors.get(request.user_id.id)
             if err is not None:
                 raise err
-            return SimpleNamespace()
+            return self._invited_users([request.user_id.id])
         if isinstance(request, functions.channels.InviteToChannelRequest):
-            return SimpleNamespace(users=list(request.users), count=len(request.users))
+            return self._invited_users([u.id for u in request.users])
         raise AssertionError(f"unexpected request: {request!r}")
 
 
@@ -83,3 +95,29 @@ async def test_channel_still_uses_invite_to_channel(monkeypatch):
     assert len(client.requests) == 1
     assert isinstance(client.requests[0], functions.channels.InviteToChannelRequest)
     assert "Successfully invited 2 users to Announcements" in result
+
+
+@pytest.mark.asyncio
+async def test_channel_reports_missing_invitees(monkeypatch):
+    channel = types.Channel(id=777, title="Announcements", photo=None, date=None)
+    u1, u2, u3 = SimpleNamespace(id=41), SimpleNamespace(id=42), SimpleNamespace(id=43)
+    client = FakeInviteClient(missing={43})
+    _patch(monkeypatch, client, {777: channel, 41: u1, 42: u2, 43: u3})
+
+    result = await groups.invite_to_group(group_id=777, user_ids=[41, 42, 43], account=None)
+
+    assert "Successfully invited 2 users to Announcements" in result
+    assert "not added: 43" in result
+
+
+@pytest.mark.asyncio
+async def test_basic_group_reports_missing_invitees(monkeypatch):
+    group = SimpleNamespace(id=555, title="Basic Group")
+    u1, u2 = SimpleNamespace(id=41), SimpleNamespace(id=42)
+    client = FakeInviteClient(missing={42})
+    _patch(monkeypatch, client, {555: group, 41: u1, 42: u2})
+
+    result = await groups.invite_to_group(group_id=555, user_ids=[41, 42], account=None)
+
+    assert "Successfully invited 1 users to Basic Group" in result
+    assert "not added: 42" in result
