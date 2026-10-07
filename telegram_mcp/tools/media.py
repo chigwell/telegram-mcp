@@ -1,9 +1,12 @@
 """Media MCP tools."""
 
+import io
 import os
 import shutil
 import tempfile
 from uuid import uuid4
+
+from pypdf import PdfReader
 
 from telegram_mcp.runtime import *
 
@@ -738,6 +741,114 @@ async def get_photo_sheet(
         )
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Inspect Document",
+        openWorldHint=True,
+        readOnlyHint=True,
+    )
+)
+@with_account(readonly=True)
+@validate_id("chat_id")
+async def inspect_document(
+    chat_id: Union[int, str],
+    message_id: int,
+    account: Optional[str] = None,
+):
+    """
+    Inspect and read the contents of a document, PDF, or image from a Telegram message
+    entirely in memory (no disk footprint).
+
+    Returns extracted text for PDFs and documents, or an Image for scans/photos
+    to allow instant visual verification in Claude.
+
+    Args:
+        chat_id: The chat ID, username, or alias.
+        message_id: The ID of the message containing the document or media.
+    """
+    try:
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        msg = await cl.get_messages(entity, ids=message_id)
+
+        if not msg or not msg.media:
+            return "There is no attached document or media file in the specified message."
+
+        # Downloading the file strictly into memory (bytes)
+        data = await cl.download_media(msg, file=bytes)
+        if not data:
+            return "Failed to read the contents of the document."
+
+        filename = getattr(msg.file, "name", "") or ""
+        mime_type = getattr(msg.file, "mime_type", "") or ""
+        ext = Path(filename).suffix.lower()
+
+        # 1. If this is an image or scan
+        if mime_type.startswith("image/") or ext in {".jpg", ".jpeg", ".png", ".webp"}:
+            fmt = (
+                "png"
+                if (ext == ".png" or mime_type == "image/png")
+                else ("webp" if (ext == ".webp" or mime_type == "image/webp") else "jpeg")
+            )
+            return Image(data=data, format=fmt)
+
+        # 2. If this is a PDF
+        if mime_type == "application/pdf" or ext == ".pdf":
+            try:
+                reader = PdfReader(io.BytesIO(data))
+                del data
+                text_pages = []
+                has_any_text = False
+                for i, page in enumerate(reader.pages):
+                    extracted = (page.extract_text() or "").strip()
+                    if extracted:
+                        has_any_text = True
+                    text_pages.append(f"--- Page {i + 1} ---\n{extracted}")
+
+                if not has_any_text:
+                    return (
+                        f"Document '{filename}' ({len(reader.pages)} pages) "
+                        "does not contain a text layer (possibly a scanned image without OCR)."
+                    )
+                full_text = "\n\n".join(text_pages).strip()
+                return f"Contents of document '{filename}' ({len(reader.pages)} pages):\n\n{full_text}"
+            except Exception as err:
+                return log_and_format_error(
+                    "inspect_document",
+                    err,
+                    user_message="Error reading PDF.",
+                    chat_id=chat_id,
+                    message_id=message_id,
+                )
+
+        # 3. If this is a text file (TXT, CSV, JSON, MD, LOG, etc.)
+        if mime_type.startswith("text/") or ext in {
+            ".txt",
+            ".csv",
+            ".json",
+            ".md",
+            ".log",
+            ".yaml",
+            ".yml",
+            ".xml",
+            ".html",
+        }:
+            try:
+                text_content = data.decode("utf-8")
+            except UnicodeDecodeError:
+                text_content = data.decode("latin-1", errors="replace")
+            del data
+            return text_content
+
+        del data
+        return (
+            f"File format '{filename}' ({mime_type}) "
+            "is not currently supported for direct text analysis."
+        )
+    except Exception as e:
+        return log_and_format_error("inspect_document", e, chat_id=chat_id, message_id=message_id)
+
+
 __all__ = [
     "send_file",
     "send_album",
@@ -752,4 +863,5 @@ __all__ = [
     "send_sticker",
     "get_gif_search",
     "send_gif",
+    "inspect_document",
 ]
