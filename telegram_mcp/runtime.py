@@ -925,6 +925,7 @@ _DEFAULT_EXTENSION_ALLOWLISTS: dict[str, set[str]] = {
     "send_sticker": {".webp"},
     "set_profile_photo": {".jpg", ".jpeg", ".png", ".webp"},
     "edit_chat_photo": {".jpg", ".jpeg", ".png", ".webp"},
+    "preview_custom_emoji": {".webp", ".png", ".jpg", ".jpeg", ".tgs", ".webm"},
 }
 # Mutable, TELEGRAM_FILE_EXTENSIONS-aware allowlist actually consulted by
 # _ensure_extension_allowed(). Rebuilt from _DEFAULT_EXTENSION_ALLOWLISTS by
@@ -940,6 +941,7 @@ MAX_FILE_BYTES: dict[str, int] = {
     "send_sticker": 10 * 1024 * 1024,
     "set_profile_photo": 50 * 1024 * 1024,
     "edit_chat_photo": 50 * 1024 * 1024,
+    "preview_custom_emoji": 20 * 1024 * 1024,
 }
 ROOTS_UNSUPPORTED_ERROR_CODES = {-32601}
 ROOTS_STATUS_READY = "ready"
