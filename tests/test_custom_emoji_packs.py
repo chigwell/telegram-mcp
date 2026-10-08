@@ -158,9 +158,7 @@ async def test_get_custom_emoji_packs_featured(monkeypatch):
     cl = AsyncMock()
     s = _mock_sticker_set(id=10, title="Featured Pack", short_name="feat_pack")
     covered = types.StickerSetCovered(set=s, cover=types.DocumentEmpty(id=1))
-    cl.return_value = types.messages.FeaturedStickers(
-        hash=0, count=1, sets=[covered], unread=[]
-    )
+    cl.return_value = types.messages.FeaturedStickers(hash=0, count=1, sets=[covered], unread=[])
 
     monkeypatch.setattr(custom_emoji, "get_client", lambda account=None: cl)
     monkeypatch.setattr(custom_emoji, "ensure_connected", AsyncMock())
@@ -223,7 +221,9 @@ async def test_get_custom_emoji_packs_error(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_custom_emoji_pack_success(monkeypatch):
     cl = AsyncMock()
-    s_meta = _mock_sticker_set(id=100, title="Duck Pack", short_name="duck_pack", count=2, emojis=True)
+    s_meta = _mock_sticker_set(
+        id=100, title="Duck Pack", short_name="duck_pack", count=2, emojis=True
+    )
     doc1 = _mock_custom_emoji_doc(doc_id=101, alt="🦆", free=True, mime_type="image/webp")
     doc2 = _mock_custom_emoji_doc(
         doc_id=102, alt="🔥", free=False, mime_type="application/x-tgsticker", is_animated=True

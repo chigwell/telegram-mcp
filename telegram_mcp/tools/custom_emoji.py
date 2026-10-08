@@ -78,15 +78,11 @@ async def get_custom_emoji_packs(
 
         if query and query.strip():
             result = await cl(
-                functions.messages.SearchEmojiStickerSetsRequest(
-                    q=query.strip(), hash=0
-                )
+                functions.messages.SearchEmojiStickerSetsRequest(q=query.strip(), hash=0)
             )
             raw_sets = getattr(result, "sets", []) or []
         elif featured:
-            result = await cl(
-                functions.messages.GetFeaturedEmojiStickersRequest(hash=0)
-            )
+            result = await cl(functions.messages.GetFeaturedEmojiStickersRequest(hash=0))
             raw_sets = getattr(result, "sets", []) or []
         else:
             result = await cl(functions.messages.GetEmojiStickersRequest(hash=0))
@@ -200,19 +196,13 @@ async def get_custom_emoji_pack(
                     alt = getattr(attr, "alt", alt) or alt
 
             mime_type = getattr(doc, "mime_type", "")
-            is_animated = (
-                mime_type == "application/x-tgsticker"
-                or any(
-                    isinstance(a, types.DocumentAttributeAnimated)
-                    for a in getattr(doc, "attributes", []) or []
-                )
+            is_animated = mime_type == "application/x-tgsticker" or any(
+                isinstance(a, types.DocumentAttributeAnimated)
+                for a in getattr(doc, "attributes", []) or []
             )
-            is_video = (
-                mime_type == "video/webm"
-                or any(
-                    isinstance(a, types.DocumentAttributeVideo)
-                    for a in getattr(doc, "attributes", []) or []
-                )
+            is_video = mime_type == "video/webm" or any(
+                isinstance(a, types.DocumentAttributeVideo)
+                for a in getattr(doc, "attributes", []) or []
             )
             if is_animated:
                 fmt = "animated"
@@ -233,9 +223,7 @@ async def get_custom_emoji_pack(
                 }
             )
 
-        return json.dumps(
-            {"pack": pack_info, "emojis": emojis}, indent=2, default=json_serializer
-        )
+        return json.dumps({"pack": pack_info, "emojis": emojis}, indent=2, default=json_serializer)
     except Exception as e:
         return log_and_format_error("get_custom_emoji_pack", e, pack=pack)
 
@@ -273,9 +261,7 @@ async def preview_custom_emoji(
         cl = get_client(account)
         await ensure_connected(cl)
 
-        docs = await cl(
-            functions.messages.GetCustomEmojiDocumentsRequest(document_id=[doc_id])
-        )
+        docs = await cl(functions.messages.GetCustomEmojiDocumentsRequest(document_id=[doc_id]))
         if not docs:
             return f"Custom emoji with document ID {doc_id} not found."
 
