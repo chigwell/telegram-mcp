@@ -30,9 +30,7 @@ HANDSHAKE_PROTOCOL_VERSIONS: Final[tuple[str, ...]] = (
     "2025-11-25",
 )
 
-MODERN_PROTOCOL_VERSIONS: Final[tuple[str, ...]] = (
-    "2026-07-28",
-)
+MODERN_PROTOCOL_VERSIONS: Final[tuple[str, ...]] = ("2026-07-28",)
 
 DEFAULT_PROTOCOL_VERSION: Final[str] = "2025-11-25"
 LATEST_PROTOCOL_VERSION: Final[str] = "2026-07-28"
@@ -90,6 +88,7 @@ def install_protocol_compatibility() -> None:
 
     try:
         import mcp.shared.version
+
         if "2026-07-28" not in mcp.shared.version.SUPPORTED_PROTOCOL_VERSIONS:
             mcp.shared.version.SUPPORTED_PROTOCOL_VERSIONS.append("2026-07-28")
     except (ImportError, AttributeError) as exc:
@@ -97,12 +96,14 @@ def install_protocol_compatibility() -> None:
 
     try:
         import mcp.types
+
         mcp.types.LATEST_PROTOCOL_VERSION = LATEST_PROTOCOL_VERSION
     except (ImportError, AttributeError) as exc:
         logger.debug("Could not patch mcp.types: %s", exc)
 
     try:
         import mcp.server.streamable_http
+
         if hasattr(mcp.server.streamable_http, "SUPPORTED_PROTOCOL_VERSIONS"):
             current = mcp.server.streamable_http.SUPPORTED_PROTOCOL_VERSIONS
             if "2026-07-28" not in current:
@@ -117,6 +118,7 @@ def install_protocol_compatibility() -> None:
 
     try:
         import mcp.server.session
+
         if hasattr(mcp.server.session, "SUPPORTED_PROTOCOL_VERSIONS"):
             current = mcp.server.session.SUPPORTED_PROTOCOL_VERSIONS
             if "2026-07-28" not in current:
@@ -131,6 +133,7 @@ def install_protocol_compatibility() -> None:
 
     try:
         import mcp.client.session
+
         if hasattr(mcp.client.session, "SUPPORTED_PROTOCOL_VERSIONS"):
             current = mcp.client.session.SUPPORTED_PROTOCOL_VERSIONS
             if "2026-07-28" not in current:
@@ -145,6 +148,7 @@ def install_protocol_compatibility() -> None:
 
     try:
         from telegram_mcp.transport.http import patch_fastmcp_streamable_http
+
         patch_fastmcp_streamable_http()
     except Exception as exc:
         logger.debug("Could not patch FastMCP streamable_http: %s", exc)

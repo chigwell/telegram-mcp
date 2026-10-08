@@ -129,9 +129,7 @@ class ProtocolNegotiationMiddleware:
 
                 if b"access-control-expose-headers" not in header_names:
                     expose_val = b"*, mcp-protocol-version, mcp-session-id"
-                    resp_headers.append(
-                        (b"access-control-expose-headers", expose_val)
-                    )
+                    resp_headers.append((b"access-control-expose-headers", expose_val))
 
                 message["headers"] = resp_headers
             await send(message)
@@ -143,6 +141,7 @@ def patch_fastmcp_streamable_http() -> None:
     """Patch FastMCP.streamable_http_app to enforce MCP 2026-07-28 protocol negotiation."""
     try:
         from mcp.server.fastmcp import FastMCP
+
         if getattr(FastMCP, "_protocol_negotiation_patched", False):
             return
 
@@ -187,6 +186,7 @@ async def run_streamable_http_async(mcp_instance: Any) -> None:
             return
 
     import uvicorn
+
     app = create_streamable_http_app(mcp_instance)
 
     config = uvicorn.Config(
