@@ -181,7 +181,10 @@ class SessionLock:
                 text = fh.read().decode("ascii", "replace").strip()
         except OSError:
             return None
-        return int(text) if text.isdigit() else None
+        parts = text.split()
+        if parts and parts[0].isdigit() and int(parts[0]) > 0:
+            return int(parts[0])
+        return None
 
     def _record_holder(self, shared: bool) -> None:
         # Exclusive holders leave their PID for a refused contender to report;
@@ -189,6 +192,7 @@ class SessionLock:
         self._clear_holder()
         if not shared:
             try:
+                self._fh.seek(0)
                 self._fh.write(" " * _PID_OFFSET + str(os.getpid()))
                 self._fh.flush()
             except OSError:
@@ -197,7 +201,8 @@ class SessionLock:
     def _clear_holder(self) -> None:
         try:
             self._fh.seek(0)
-            self._fh.truncate()
+            self._fh.truncate(0)
+            self._fh.flush()
         except OSError:
             pass
 
