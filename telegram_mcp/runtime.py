@@ -153,6 +153,11 @@ load_dotenv()
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID"))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
 
+# Install protocol compatibility for MCP 2026-07-28 and backwards compatibility
+from telegram_mcp.transport import install_protocol_compatibility
+
+install_protocol_compatibility()
+
 # The shared HTTP service can be consumed by long-lived MCP clients. Stateless requests keep
 # those clients usable across server-process restarts instead of rejecting their next call
 # with "No valid session ID provided". Stdio transport remains unaffected.
