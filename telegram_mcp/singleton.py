@@ -50,6 +50,9 @@ if os.name == "nt":
     # slot. Shared holders then coexist, and neither kind overlaps an exclusive
     # one. Locking past the end of the file is allowed.
     _SHARED_SLOTS = 64
+    # Windows locks are mandatory, so the exclusive holder writes its PID past
+    # the locked bytes, where a refused contender can still read it.
+    _PID_OFFSET = 1 + _SHARED_SLOTS
 
     def _lock_range(fh: IO, start: int, length: int) -> bool:
         try:
@@ -75,6 +78,8 @@ if os.name == "nt":
 
 else:
     import fcntl
+
+    _PID_OFFSET = 0
 
     def _try_lock(fh: IO, shared: bool = False) -> bool:
         try:
@@ -168,14 +173,18 @@ class SessionLock:
     def holder_pid(self) -> Optional[int]:
         """PID left in the lock file by the current exclusive holder, if any.
 
-        Best effort: Windows refuses to read a locked byte range, and a shared
-        holder records nothing (there may be several).
+        Best effort: a shared holder records nothing (there may be several).
         """
         try:
-            text = self.path.read_text().strip()
+            with open(self.path, "rb") as fh:
+                fh.seek(_PID_OFFSET)
+                text = fh.read().decode("ascii", "replace").strip()
         except OSError:
             return None
-        return int(text) if text.isdigit() else None
+        parts = text.split()
+        if parts and parts[0].isdigit() and int(parts[0]) > 0:
+            return int(parts[0])
+        return None
 
     def _record_holder(self, shared: bool) -> None:
         # Exclusive holders leave their PID for a refused contender to report;
@@ -183,7 +192,8 @@ class SessionLock:
         self._clear_holder()
         if not shared:
             try:
-                self._fh.write(str(os.getpid()))
+                self._fh.seek(0)
+                self._fh.write(" " * _PID_OFFSET + str(os.getpid()))
                 self._fh.flush()
             except OSError:
                 pass
@@ -191,7 +201,8 @@ class SessionLock:
     def _clear_holder(self) -> None:
         try:
             self._fh.seek(0)
-            self._fh.truncate()
+            self._fh.truncate(0)
+            self._fh.flush()
         except OSError:
             pass
 
