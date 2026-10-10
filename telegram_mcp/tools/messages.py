@@ -1795,15 +1795,23 @@ async def delete_messages_bulk(
 @with_account(readonly=False)
 @validate_id("chat_id")
 async def pin_message(
-    chat_id: Union[int, str], message_id: int, account: Optional[str] = None
+    chat_id: Union[int, str],
+    message_id: int,
+    notify: bool = False,
+    account: Optional[str] = None,
 ) -> str:
     """
     Pin a message in a chat.
+
+    Args:
+        chat_id: The ID or username of the chat.
+        message_id: The ID of the message to pin.
+        notify: Notify chat members about the pin. Default False pins silently.
     """
     try:
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
-        await cl.pin_message(entity, message_id)
+        await cl.pin_message(entity, message_id, notify=notify)
         return f"Message {message_id} pinned in chat {chat_id}."
     except Exception as e:
         return log_and_format_error("pin_message", e, chat_id=chat_id, message_id=message_id)
