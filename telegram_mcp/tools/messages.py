@@ -2,6 +2,7 @@
 
 from telegram_mcp.runtime import *
 from telegram_mcp import transcription
+from pydantic import StrictInt
 
 # Domain used to build message permalinks. Overridable because the default is a
 # single point of failure: on 2026-07-13 the .me registry put t.me on serverHold
@@ -2277,6 +2278,63 @@ async def create_poll(
         )
 
 
+@mcp.tool(annotations=ToolAnnotations(title="Vote Poll", openWorldHint=True, destructiveHint=True))
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def vote_poll(
+    chat_id: Union[int, str],
+    message_id: StrictInt,
+    option_indices: List[StrictInt],
+    account: Optional[str] = None,
+) -> str:
+    """Vote in an existing Telegram poll, replacing the current vote if allowed.
+
+    Args:
+        chat_id: The ID or username of the chat containing the poll.
+        message_id: The message ID of the poll.
+        option_indices: Non-empty list of zero-based answer indices, in the order
+            shown by get_messages. Multiple indices require a multiple-choice poll.
+            This submits a vote; it does not press an inline keyboard button.
+        account: Account name to use (required in multi-account mode).
+
+    Telegram enforces voting permissions and restrictions on changing quiz votes.
+    """
+    try:
+        if type(message_id) is not int or message_id <= 0:
+            return "Error: message_id must be a positive integer."
+        if not option_indices or any(type(i) is not int for i in option_indices):
+            return "Error: option_indices must be a non-empty list of integers."
+        if len(set(option_indices)) != len(option_indices):
+            return "Error: option_indices must not contain duplicates."
+
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+            raise ChatAccessDeniedError(check_chat_access(chat_id, entity))
+
+        message = await cl.get_messages(entity, ids=message_id)
+        if message is None or not isinstance(message.media, types.MessageMediaPoll):
+            return "Error: Message not found or does not contain a poll."
+        poll = message.media.poll
+        if poll.closed:
+            return "Error: Poll is closed."
+        if len(option_indices) > 1 and not poll.multiple_choice:
+            return "Error: This poll only allows one answer."
+        if any(i < 0 or i >= len(poll.answers) for i in option_indices):
+            return "Error: Answer index out of range (indices are zero-based)."
+
+        await cl(
+            functions.messages.SendVoteRequest(
+                peer=entity,
+                msg_id=message_id,
+                options=[poll.answers[i].option for i in option_indices],
+            )
+        )
+        return f"Vote submitted for poll {message_id} in chat {chat_id}."
+    except Exception as e:
+        return log_and_format_error("vote_poll", e, chat_id=chat_id, message_id=message_id)
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Send Reaction", openWorldHint=True, destructiveHint=False, idempotentHint=True
@@ -2766,6 +2824,7 @@ __all__ = [
     "get_history",
     "get_pinned_messages",
     "create_poll",
+    "vote_poll",
     "send_reaction",
     "remove_reaction",
     "get_message_reactions",
