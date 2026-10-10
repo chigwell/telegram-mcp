@@ -314,13 +314,19 @@ def main() -> None:
     # send_file is not exposed is a valid configuration, so the name check
     # has to see the full tool set.
     _runtime._apply_file_extension_overrides()
-    hidden = _runtime._apply_exposed_tools_mode()
+    hidden, excluded = _runtime._apply_exposed_tools_mode()
     if hidden:
         # These names are the menu for the "+" allowlist; without this line the
         # only way to find them is reading the tool annotations in the source.
         print(
             f"TELEGRAM_EXPOSED_TOOLS hides {len(hidden)} tool(s); list any of them "
             f"after '+' to expose it: {', '.join(sorted(hidden))}",
+            file=sys.stderr,
+        )
+    if excluded:
+        print(
+            f"TELEGRAM_EXPOSED_TOOLS excludes {len(excluded)} tool(s) listed "
+            f"after '-': {', '.join(sorted(excluded))}",
             file=sys.stderr,
         )
     _transcription.validate_transcription_config()
