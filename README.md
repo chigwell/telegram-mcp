@@ -267,17 +267,33 @@ Every other write tool stays unregistered:
 TELEGRAM_EXPOSED_TOOLS=read-only+send_message,reply_to_message,send_file
 ```
 
-An unknown name in the allowlist aborts startup, so a typo cannot silently
-degrade into a narrower surface that looks like it worked.
+To hide specific tools instead, append `-` and a comma-separated list to either
+base. It works after a `+` list too:
+
+```env
+TELEGRAM_EXPOSED_TOOLS=all-delete_chat_history,delete_messages_bulk
+TELEGRAM_EXPOSED_TOOLS=read-only-get_participants
+TELEGRAM_EXPOSED_TOOLS=read-only+send_message,reply_to_message-get_participants
+```
+
+An unknown name in either list aborts startup, so a typo cannot silently
+produce a different surface that looks like it worked. Startup also aborts on
+an empty list, a name in both lists, or a `-` name the base already hides (such
+as `read-only-send_message`), which would be a no-op. To turn off voice
+transcription, set `TELEGRAM_TRANSCRIBE=off` rather than `-transcribe_voice`:
+hiding the tool leaves listings' pending-transcript hints and `auto` prefetch in
+place.
 
 At startup the server prints the names of the tools the mode hides to stderr;
-those are the names the `+` list accepts.
+those are the names the `+` list accepts. Tools hidden by the `-` list are
+printed on a separate line.
 
 This is an MCP tool-surface restriction, not a Telegram session sandbox or
 reduced Telegram account permission. The Telegram session string still has its
 normal authority inside the server process; read-only mode only prevents
 non-read-only tools from being registered and exposed through MCP. Accepted
-values are `all` (the default), `read-only`, and `read-only+<tool>,<tool>`.
+values are `all` (the default), `read-only`, and `read-only+<tool>,<tool>`,
+each optionally followed by `-<tool>,<tool>`.
 
 A separate, hardcoded allowlist restricts `send_voice`, `send_sticker`,
 `set_profile_photo`, and `edit_chat_photo` to their expected file extensions;

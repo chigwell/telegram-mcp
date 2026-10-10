@@ -63,7 +63,7 @@ def test_apply_exposed_tools_all_keeps_tools():
 
     removed = runtime._apply_exposed_tools_mode(server, "all")
 
-    assert removed == []
+    assert removed == ([], [])
     assert _tool_names(server) == {"read_tool", "write_tool"}
 
 
@@ -72,7 +72,7 @@ def test_apply_exposed_tools_read_only_removes_non_read_only_tools():
 
     removed = runtime._apply_exposed_tools_mode(server, "read-only")
 
-    assert removed == ["write_tool"]
+    assert removed == (["write_tool"], [])
     assert _tool_names(server) == {"read_tool"}
 
 
@@ -109,7 +109,7 @@ def test_apply_exposed_tools_allowlist_keeps_named_write_tools():
 
     removed = runtime._apply_exposed_tools_mode(server, "read-only+send_tool")
 
-    assert removed == ["write_tool"]
+    assert removed == (["write_tool"], [])
     assert _tool_names(server) == {"read_tool", "send_tool"}
 
 
@@ -120,6 +120,7 @@ def test_apply_exposed_tools_allowlist_rejects_unknown_tool():
         runtime._apply_exposed_tools_mode(server, "read-only+send_mesage")
 
     assert "send_mesage" in str(excinfo.value)
+    assert "underscores" not in str(excinfo.value)
     assert _tool_names(server) == {"read_tool", "write_tool", "send_tool"}
 
 
@@ -135,6 +136,247 @@ def test_get_exposed_tools_mode_rejects_empty_allowlist():
         runtime._get_exposed_tools_mode("read-only+")
 
     assert "at least one tool" in str(excinfo.value)
+
+
+# --- "-" exclusion list -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        # Every form that was valid before the "-" list existed normalises as before.
+        ("all", "all"),
+        (" ALL ", "all"),
+        ("read-only", "read-only"),
+        ("Read-Only", "read-only"),
+        ("read-only+send_tool", "read-only+send_tool"),
+        ("read-only+send_tool,,write_tool,", "read-only+send_tool,write_tool"),
+        ("read-only+send_tool,send_tool", "read-only+send_tool,send_tool"),
+        ("read-only+read_tool", "read-only+read_tool"),
+        # New forms.
+        ("all-write_tool", "all-write_tool"),
+        (" All- write_tool , send_tool ", "all-write_tool,send_tool"),
+        ("all-write_tool,write_tool", "all-write_tool,write_tool"),
+        ("read-only-read_tool", "read-only-read_tool"),
+        ("read-only+send_tool-read_tool", "read-only+send_tool-read_tool"),
+        ("read-only+send_tool,write_tool-read_tool,", "read-only+send_tool,write_tool-read_tool"),
+    ],
+)
+def test_get_exposed_tools_mode_normalises(value, expected):
+    assert runtime._get_exposed_tools_mode(value) == expected
+
+
+def test_parse_exposed_tools_mode_reads_env(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_EXPOSED_TOOLS", "Read-Only+send_tool-read_tool")
+
+    assert runtime._parse_exposed_tools_mode() == ("read-only", ["send_tool"], ["read_tool"])
+
+    monkeypatch.delenv("TELEGRAM_EXPOSED_TOOLS")
+    assert runtime._parse_exposed_tools_mode() == ("all", [], [])
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "none", "allx", "read-onlyx", "read_only", "readonly-write_tool", "-write_tool"],
+)
+def test_get_exposed_tools_mode_rejects_unknown_base(value):
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._get_exposed_tools_mode(value)
+
+    assert "Expected one of: all, read-only." in str(excinfo.value)
+
+
+@pytest.mark.parametrize("value", ["all-", "read-only-", "read-only+send_tool-", "all- , "])
+def test_get_exposed_tools_mode_rejects_empty_exclusions(value):
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._get_exposed_tools_mode(value)
+
+    assert "'-' exclusion list must name at least one tool" in str(excinfo.value)
+
+
+def test_get_exposed_tools_mode_rejects_empty_allowlist_before_exclusions():
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._get_exposed_tools_mode("read-only+-read_tool")
+
+    assert "at least one tool" in str(excinfo.value)
+    assert "'+'" in str(excinfo.value)
+
+
+def test_get_exposed_tools_mode_rejects_allowlist_with_all_and_exclusions():
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._get_exposed_tools_mode("all+send_tool-write_tool")
+
+    assert "only valid with read-only" in str(excinfo.value)
+
+
+def test_get_exposed_tools_mode_rejects_tool_in_both_lists():
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._get_exposed_tools_mode("read-only+send_tool,write_tool-write_tool")
+
+    message = str(excinfo.value)
+    assert "both exposed with '+' and excluded with '-'" in message
+    assert "write_tool" in message
+
+
+@pytest.mark.parametrize(
+    "value", ["read-only-read_tool+send_tool", "all-write_tool-send_tool", "all-write_tool+"]
+)
+def test_get_exposed_tools_mode_rejects_misordered_or_repeated_lists(value):
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._get_exposed_tools_mode(value)
+
+    assert "one '+' list followed by one '-' list" in str(excinfo.value)
+
+
+def test_apply_exposed_tools_all_with_exclusions_removes_only_named_tools():
+    server = _synthetic_mcp_with_two_writes()
+
+    result = runtime._apply_exposed_tools_mode(server, "all-write_tool")
+
+    assert result == ([], ["write_tool"])
+    assert _tool_names(server) == {"read_tool", "send_tool"}
+
+
+def test_apply_exposed_tools_all_can_exclude_read_only_tools():
+    server = _synthetic_mcp_with_two_writes()
+
+    result = runtime._apply_exposed_tools_mode(server, "all-read_tool,send_tool")
+
+    assert result == ([], ["read_tool", "send_tool"])
+    assert _tool_names(server) == {"write_tool"}
+
+
+def test_apply_exposed_tools_exclusions_accept_repeated_names():
+    server = _synthetic_mcp_with_two_writes()
+
+    result = runtime._apply_exposed_tools_mode(server, "all-write_tool,write_tool")
+
+    assert result == ([], ["write_tool"])
+    assert _tool_names(server) == {"read_tool", "send_tool"}
+
+
+def test_apply_exposed_tools_read_only_with_exclusions_hides_read_tools():
+    server = _synthetic_mcp_with_two_writes()
+
+    result = runtime._apply_exposed_tools_mode(server, "read-only-read_tool")
+
+    assert result == (["write_tool", "send_tool"], ["read_tool"])
+    assert _tool_names(server) == set()
+
+
+def test_apply_exposed_tools_allowlist_and_exclusions_combine():
+    server = _synthetic_mcp_with_two_writes()
+
+    result = runtime._apply_exposed_tools_mode(server, "read-only+send_tool-read_tool")
+
+    assert result == (["write_tool"], ["read_tool"])
+    assert _tool_names(server) == {"send_tool"}
+
+
+def test_apply_exposed_tools_allowlist_accepts_already_exposed_tool():
+    """Unchanged behaviour: naming a read-only tool after '+' is harmless."""
+    server = _synthetic_mcp_with_two_writes()
+
+    result = runtime._apply_exposed_tools_mode(server, "read-only+read_tool,send_tool")
+
+    assert result == (["write_tool"], [])
+    assert _tool_names(server) == {"read_tool", "send_tool"}
+
+
+@pytest.mark.parametrize(
+    "mode", ["all-write_tol", "read-only-read_tol", "read-only+send_tool-read_tol"]
+)
+def test_apply_exposed_tools_exclusions_reject_unknown_tool(mode):
+    server = _synthetic_mcp_with_two_writes()
+
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._apply_exposed_tools_mode(server, mode)
+
+    message = str(excinfo.value)
+    assert "exclusion list: unknown tool(s)" in message
+    assert "_tol" in message
+    assert _tool_names(server) == {"read_tool", "write_tool", "send_tool"}
+
+
+@pytest.mark.parametrize(
+    "mode, expected",
+    [
+        ("read-only-write_tool", "write_tool is already hidden by read-only; remove it"),
+        (
+            "read-only-send_tool,write_tool",
+            "send_tool, write_tool are already hidden by read-only; remove them",
+        ),
+    ],
+)
+def test_apply_exposed_tools_rejects_excluding_already_hidden_tool(mode, expected):
+    server = _synthetic_mcp_with_two_writes()
+
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._apply_exposed_tools_mode(server, mode)
+
+    message = str(excinfo.value)
+    assert expected in message
+    assert "underscores" not in message
+    assert _tool_names(server) == {"read_tool", "write_tool", "send_tool"}
+
+
+def test_apply_exposed_tools_hints_at_hyphen_typo_in_allowlist_name():
+    """'+send-tool' splits into '+send' and '-tool'; the error says why."""
+    server = _synthetic_mcp_with_two_writes()
+
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._apply_exposed_tools_mode(server, "read-only+send-tool")
+
+    message = str(excinfo.value)
+    assert "allowlist: unknown tool(s) send." in message
+    assert "Tool names use underscores; '-' starts the exclusion list." in message
+    assert _tool_names(server) == {"read_tool", "write_tool", "send_tool"}
+
+
+def test_apply_exposed_tools_hints_at_hyphen_typo_between_allowlist_names():
+    """'+send_tool-write_tool' meant two '+' names, not an exclusion."""
+    server = _synthetic_mcp_with_two_writes()
+
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._apply_exposed_tools_mode(server, "read-only+send_tool-write_tool")
+
+    message = str(excinfo.value)
+    assert "write_tool is already hidden by read-only" in message
+    assert "Tool names use underscores; '-' starts the exclusion list." in message
+    assert _tool_names(server) == {"read_tool", "write_tool", "send_tool"}
+
+
+def _copy_of_registered_tools():
+    server = FastMCP("copy")
+    for tool in runtime.mcp._tool_manager.list_tools():
+        server._tool_manager._tools[tool.name] = tool
+    return server
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "all-delete_message,delete_messages_bulk",
+        "read-only-get_participants",
+        "read-only+send_message,reply_to_message-get_participants",
+    ],
+)
+def test_apply_exposed_tools_exclusions_on_registered_tools(mode):
+    server = _copy_of_registered_tools()
+    before = _tool_names(server)
+    selected = runtime._parse_exposed_tools_mode(mode)
+    read_only = {
+        tool.name
+        for tool in server._tool_manager.list_tools()
+        if getattr(tool.annotations, "readOnlyHint", False)
+    }
+    base_exposed = before if selected.base == "all" else read_only | set(selected.allowlist)
+
+    hidden, excluded = runtime._apply_exposed_tools_mode(server, mode)
+
+    assert _tool_names(server) == base_exposed - set(selected.exclusions)
+    assert sorted(excluded) == sorted(selected.exclusions)
+    assert set(hidden) == before - base_exposed
 
 
 def _synthetic_mcp_with_file_tools():

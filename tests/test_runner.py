@@ -472,7 +472,7 @@ def test_file_extension_overrides_are_validated_before_tools_are_pruned(monkeypa
     monkeypatch.setattr(
         runner._runtime,
         "_apply_exposed_tools_mode",
-        lambda *a, **k: calls.append("exposed") or [],
+        lambda *a, **k: calls.append("exposed") or ([], []),
     )
     monkeypatch.setattr(
         runner._runtime,
@@ -505,7 +505,7 @@ def test_cli_transport_flag_sets_env_var(monkeypatch):
     monkeypatch.setattr(runner._runtime, "_CLI_HOST", None)
     monkeypatch.setattr(runner._runtime, "_CLI_PORT", None)
     monkeypatch.setattr(runner._runtime, "_apply_file_extension_overrides", lambda: None)
-    monkeypatch.setattr(runner._runtime, "_apply_exposed_tools_mode", lambda: None)
+    monkeypatch.setattr(runner._runtime, "_apply_exposed_tools_mode", lambda: ([], []))
     monkeypatch.setattr(runner._transcription, "validate_transcription_config", lambda: None)
     monkeypatch.setattr(runner, "_session_lock_shared", lambda: None)
     monkeypatch.setattr(runner.asyncio, "run", lambda coro: coro.close())
@@ -566,7 +566,7 @@ def test_main_prints_the_tools_exposure_hides(monkeypatch, capsys):
     monkeypatch.setattr(
         runner._runtime,
         "_apply_exposed_tools_mode",
-        lambda: ["send_message", "export_chat_invite"],
+        lambda: (["send_message", "export_chat_invite"], []),
     )
     monkeypatch.setattr(runner._transcription, "validate_transcription_config", lambda: None)
     monkeypatch.setattr(runner, "_session_lock_shared", lambda: None)
@@ -577,3 +577,35 @@ def test_main_prints_the_tools_exposure_hides(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "hides 2 tool(s)" in err
     assert "export_chat_invite, send_message" in err
+
+
+def _run_main_with_exposure_result(monkeypatch, result):
+    monkeypatch.setattr(runner, "_configure_allowed_roots_from_cli", lambda *a, **k: None)
+    monkeypatch.setattr(runner._runtime, "_apply_file_extension_overrides", lambda: None)
+    monkeypatch.setattr(runner._runtime, "_apply_exposed_tools_mode", lambda: result)
+    monkeypatch.setattr(runner._transcription, "validate_transcription_config", lambda: None)
+    monkeypatch.setattr(runner, "_session_lock_shared", lambda: None)
+    monkeypatch.setattr(runner.asyncio, "run", lambda coro: coro.close())
+
+    runner.main()
+
+
+def test_main_reports_excluded_tools_separately(monkeypatch, capsys):
+    """Excluded names are not '+' candidates, so they get their own line."""
+    _run_main_with_exposure_result(
+        monkeypatch, (["delete_message", "ban_user"], ["list_chats", "get_participants"])
+    )
+
+    err = capsys.readouterr().err
+    assert (
+        "hides 2 tool(s); list any of them after '+' to expose it: ban_user, delete_message" in err
+    )
+    assert "excludes 2 tool(s) listed after '-': get_participants, list_chats" in err
+
+
+def test_main_reports_only_exclusions_for_all_base(monkeypatch, capsys):
+    _run_main_with_exposure_result(monkeypatch, ([], ["delete_message", "delete_messages_bulk"]))
+
+    err = capsys.readouterr().err
+    assert "after '+'" not in err
+    assert "excludes 2 tool(s) listed after '-': delete_message, delete_messages_bulk" in err

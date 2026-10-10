@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import List, Dict, Optional, Union, Any, Iterable, get_args
+from typing import List, Dict, NamedTuple, Optional, Union, Any, Iterable, get_args
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -241,74 +241,194 @@ _install_annotation_hook()
 
 _EXPOSED_TOOLS_MODES = {"all", "read-only"}
 _EXPOSED_TOOLS_ALLOW_SEPARATOR = "+"
+_EXPOSED_TOOLS_EXCLUDE_SEPARATOR = "-"
+_EXPOSED_TOOLS_HYPHEN_HINT = (
+    f" Tool names use underscores; '{_EXPOSED_TOOLS_EXCLUDE_SEPARATOR}' starts the "
+    "exclusion list."
+)
 
 
-def _split_exposed_tools_mode(mode: str) -> tuple[str, list[str]]:
-    """Split a normalised exposure mode into its base mode and write allowlist."""
-    base, separator, raw_allowlist = mode.partition(_EXPOSED_TOOLS_ALLOW_SEPARATOR)
-    if not separator:
-        return base, []
-    return base, [name.strip() for name in raw_allowlist.split(",") if name.strip()]
+class _ExposedToolsMode(NamedTuple):
+    """A validated ``TELEGRAM_EXPOSED_TOOLS`` value."""
+
+    base: str
+    allowlist: list[str]
+    exclusions: list[str]
+
+    def __str__(self) -> str:
+        normalised = self.base
+        if self.allowlist:
+            normalised += _EXPOSED_TOOLS_ALLOW_SEPARATOR + ",".join(self.allowlist)
+        if self.exclusions:
+            normalised += _EXPOSED_TOOLS_EXCLUDE_SEPARATOR + ",".join(self.exclusions)
+        return normalised
 
 
-def _get_exposed_tools_mode(value: Optional[str] = None) -> str:
-    """Return the configured MCP tool exposure mode.
+class _ExposedToolsResult(NamedTuple):
+    """Tools removed by the base mode (``hidden``) and by the ``-`` list (``excluded``)."""
 
-    ``TELEGRAM_EXPOSED_TOOLS=read-only`` keeps only tools annotated with
-    ``readOnlyHint=True``. ``read-only+send_message,reply_to_message`` keeps
-    those plus the named write tools. The default is ``all`` for backward
-    compatibility.
+    hidden: list[str]
+    excluded: list[str]
+
+
+def _split_tool_list(raw: Optional[str]) -> Optional[list[str]]:
+    """Split a comma-separated tool list; ``None`` means the separator was absent."""
+    if raw is None:
+        return None
+    return [name.strip() for name in raw.split(",") if name.strip()]
+
+
+def _split_exposed_tools_value(
+    mode: str,
+) -> tuple[Optional[str], Optional[list[str]], Optional[list[str]]]:
+    """Split a lowercased value into base mode, ``+`` allowlist and ``-`` exclusions.
+
+    The base is matched as a known-mode prefix rather than by splitting on
+    ``-``, because ``read-only`` itself contains one. Tool names use
+    underscores, so a ``-`` after the base always starts the exclusion list.
+    A ``None`` base means no known mode matched; a ``None`` list means its
+    separator was absent.
+    """
+    for base in sorted(_EXPOSED_TOOLS_MODES, key=len, reverse=True):
+        rest = mode[len(base) :]
+        if mode.startswith(base) and rest[:1] in (
+            "",
+            _EXPOSED_TOOLS_ALLOW_SEPARATOR,
+            _EXPOSED_TOOLS_EXCLUDE_SEPARATOR,
+        ):
+            break
+    else:
+        return None, None, None
+
+    raw_allowlist: Optional[str] = None
+    raw_exclusions: Optional[str] = None
+    if rest.startswith(_EXPOSED_TOOLS_ALLOW_SEPARATOR):
+        raw_allowlist, separator, tail = rest[1:].partition(_EXPOSED_TOOLS_EXCLUDE_SEPARATOR)
+        if separator:
+            raw_exclusions = tail
+    elif rest.startswith(_EXPOSED_TOOLS_EXCLUDE_SEPARATOR):
+        raw_exclusions = rest[1:]
+    return base, _split_tool_list(raw_allowlist), _split_tool_list(raw_exclusions)
+
+
+def _parse_exposed_tools_mode(value: Optional[str] = None) -> _ExposedToolsMode:
+    """Parse and validate ``TELEGRAM_EXPOSED_TOOLS`` (or ``value``).
+
+    ``read-only`` keeps only tools annotated with ``readOnlyHint=True``.
+    ``read-only+send_message,reply_to_message`` keeps those plus the named
+    write tools. A trailing ``-tool,tool`` list hides named tools from either
+    base, e.g. ``all-delete_chat_history``. The default is ``all`` for
+    backward compatibility. Tool names are checked against the registry
+    later, in ``_apply_exposed_tools_mode``.
     """
     raw_value = os.getenv("TELEGRAM_EXPOSED_TOOLS", "all") if value is None else value
-    mode = raw_value.strip().lower()
-    base_mode, allowlist = _split_exposed_tools_mode(mode)
-    if base_mode not in _EXPOSED_TOOLS_MODES:
+    base_mode, allowlist, exclusions = _split_exposed_tools_value(raw_value.strip().lower())
+    invalid = f"Invalid TELEGRAM_EXPOSED_TOOLS '{raw_value}'."
+    if base_mode is None:
         accepted = ", ".join(sorted(_EXPOSED_TOOLS_MODES))
+        raise SystemExit(f"{invalid} Expected one of: {accepted}.")
+    if allowlist is not None and base_mode != "read-only":
         raise SystemExit(
-            f"Invalid TELEGRAM_EXPOSED_TOOLS '{raw_value}'. Expected one of: {accepted}."
-        )
-    if _EXPOSED_TOOLS_ALLOW_SEPARATOR not in mode:
-        return base_mode
-    if base_mode != "read-only":
-        raise SystemExit(
-            f"Invalid TELEGRAM_EXPOSED_TOOLS '{raw_value}'. The "
+            f"{invalid} The "
             f"'{_EXPOSED_TOOLS_ALLOW_SEPARATOR}tool,tool' allowlist is only valid "
             "with read-only."
         )
-    if not allowlist:
+    if allowlist is not None and not allowlist:
         raise SystemExit(
-            f"Invalid TELEGRAM_EXPOSED_TOOLS '{raw_value}'. The "
+            f"{invalid} The "
             f"'{_EXPOSED_TOOLS_ALLOW_SEPARATOR}' allowlist must name at least one tool."
         )
-    return f"{base_mode}{_EXPOSED_TOOLS_ALLOW_SEPARATOR}{','.join(allowlist)}"
+    if exclusions is not None:
+        _validate_exposed_tools_exclusions(invalid, allowlist or [], exclusions)
+    return _ExposedToolsMode(base_mode, allowlist or [], exclusions or [])
 
 
-def _apply_exposed_tools_mode(server: FastMCP = mcp, mode: Optional[str] = None) -> list[str]:
-    """Prune registered MCP tools according to the configured exposure mode."""
-    selected_mode = _get_exposed_tools_mode() if mode is None else _get_exposed_tools_mode(mode)
-    base_mode, allowlist = _split_exposed_tools_mode(selected_mode)
-    if base_mode == "all":
-        return []
+def _get_exposed_tools_mode(value: Optional[str] = None) -> str:
+    """Return the configured MCP tool exposure mode, normalised."""
+    return str(_parse_exposed_tools_mode(value))
 
-    registered = {tool.name for tool in server._tool_manager.list_tools()}
-    unknown = sorted(set(allowlist) - registered)
-    if unknown:
-        # Fail loudly: a typo must not silently degrade into a narrower allowlist
-        # that looks like it worked.
+
+def _validate_exposed_tools_exclusions(
+    invalid: str, allowlist: list[str], exclusions: list[str]
+) -> None:
+    """Reject syntax mistakes in the ``-`` exclusion list."""
+    sep = _EXPOSED_TOOLS_EXCLUDE_SEPARATOR
+    if not exclusions:
+        raise SystemExit(f"{invalid} The '{sep}' exclusion list must name at least one tool.")
+    if any(_EXPOSED_TOOLS_ALLOW_SEPARATOR in name or sep in name for name in exclusions):
         raise SystemExit(
-            f"Invalid TELEGRAM_EXPOSED_TOOLS allowlist: unknown tool(s) {', '.join(unknown)}."
+            f"{invalid} Use one '{_EXPOSED_TOOLS_ALLOW_SEPARATOR}' list followed by one "
+            f"'{sep}' list, each comma-separated."
+        )
+    conflicting = sorted(set(allowlist) & set(exclusions))
+    if conflicting:
+        raise SystemExit(
+            f"{invalid} Tool(s) both exposed with '{_EXPOSED_TOOLS_ALLOW_SEPARATOR}' and "
+            f"excluded with '{sep}': {', '.join(conflicting)}."
         )
 
-    allowed = set(allowlist)
-    removed: list[str] = []
-    for tool in list(server._tool_manager.list_tools()):
-        if tool.name in allowed:
+
+def _reject_unknown_exposed_tools(
+    kind: str, names: list[str], registered: set[str], hint: str = ""
+) -> None:
+    unknown = sorted(set(names) - registered)
+    if unknown:
+        # Fail loudly: a typo must not silently produce a different surface
+        # that looks like it worked.
+        raise SystemExit(
+            f"Invalid TELEGRAM_EXPOSED_TOOLS {kind}: unknown tool(s) "
+            f"{', '.join(unknown)}.{hint}"
+        )
+
+
+def _apply_exposed_tools_mode(
+    server: FastMCP = mcp, mode: Optional[str] = None
+) -> _ExposedToolsResult:
+    """Prune registered MCP tools according to the configured exposure mode."""
+    selected = _parse_exposed_tools_mode(mode)
+    if selected.base == "all" and not selected.exclusions:
+        return _ExposedToolsResult([], [])
+
+    tools = list(server._tool_manager.list_tools())
+    registered = {tool.name for tool in tools}
+    # "read-only+send-message" splits into "+send" and "-message"; point at the
+    # hyphen when a "-" list could be the result of one.
+    hint = _EXPOSED_TOOLS_HYPHEN_HINT if selected.exclusions else ""
+    _reject_unknown_exposed_tools("allowlist", selected.allowlist, registered, hint)
+    _reject_unknown_exposed_tools("exclusion list", selected.exclusions, registered)
+
+    allowed = set(selected.allowlist)
+    excluded = set(selected.exclusions)
+
+    def base_exposes(tool) -> bool:
+        if selected.base == "all" or tool.name in allowed:
+            return True
+        return bool(getattr(getattr(tool, "annotations", None), "readOnlyHint", False))
+
+    already_hidden = sorted(
+        tool.name for tool in tools if tool.name in excluded and not base_exposes(tool)
+    )
+    if already_hidden:
+        # A no-op exclusion usually means the operator expected a different base,
+        # or typed "-" for "_" inside a "+" name.
+        verb, pronoun = ("is", "it") if len(already_hidden) == 1 else ("are", "them")
+        raise SystemExit(
+            f"Invalid TELEGRAM_EXPOSED_TOOLS exclusion list: {', '.join(already_hidden)} "
+            f"{verb} already hidden by {selected.base}; remove {pronoun} from the "
+            f"'{_EXPOSED_TOOLS_EXCLUDE_SEPARATOR}' list."
+            f"{_EXPOSED_TOOLS_HYPHEN_HINT if selected.allowlist else ''}"
+        )
+
+    result = _ExposedToolsResult([], [])
+    for tool in tools:
+        if tool.name in excluded:
+            result.excluded.append(tool.name)
+        elif not base_exposes(tool):
+            result.hidden.append(tool.name)
+        else:
             continue
-        annotations = getattr(tool, "annotations", None)
-        if not getattr(annotations, "readOnlyHint", False):
-            server._tool_manager.remove_tool(tool.name)
-            removed.append(tool.name)
-    return removed
+        server._tool_manager.remove_tool(tool.name)
+    return result
 
 
 _FILE_EXTENSION_TOKEN_PATTERN = re.compile(r"^\.[A-Za-z0-9_-]+$")
