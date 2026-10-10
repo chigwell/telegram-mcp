@@ -129,6 +129,18 @@ or `edit_message`, and insert `<tg-emoji emoji-id="ID">EMOJI</tg-emoji>` using i
 the entry above becomes `<tg-emoji emoji-id="5368324170671202286">🍷</tg-emoji>`.
 Telegram's account restrictions still apply to sending custom emoji.
 
+For plain-text messages, pass the entries themselves as `custom_emojis` instead,
+with no HTML and no escaping; the text is sent verbatim. For example,
+`send_message(chat_id, "🍷 News for List<int> & co", custom_emojis=[{"emoji": "🍷",
+"id": "5368324170671202286"}])`. The same parameter works in `reply_to_message` and
+`edit_message`. Every standalone occurrence of each `emoji` becomes that custom
+emoji, including ones inside URLs or code; to keep one plain, use
+`parse_mode="html"` with `<tg-emoji>` instead. An emoji inside a longer sequence
+(such as 👍 in 👍🏽) is not a match. Nothing is sent when an `emoji` is not found or
+does not look like an emoji (pure ASCII/Latin punctuation such as `#` is refused),
+an `id` is not a positive 64-bit integer, two marked spans overlap, or `parse_mode`
+is set. It combines with `format_date`.
+
 ### Tappable dates and times
 
 Passing `format_date` to `send_message`, `reply_to_message`, or `edit_message`
