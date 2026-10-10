@@ -60,6 +60,14 @@ The server currently includes 80+ MCP tools grouped into these areas:
 - **Messages:** send, schedule, edit, delete, forward, pin, unpin, mark read, reply, search, inspect context, create polls, manage reactions, inspect inline buttons, and press inline callbacks. `send_message`, `reply_to_message`, and `edit_message` support classic formatting (`parse_mode='md'`/`'html'`) and server-side rich formatting (`parse_mode='rich'`/`'rich_markdown'`/`'rich_html'` — full Markdown/HTML with tables, headings, formulas, and collapsible sections). Rich modes require Telegram Premium on the account; Premium is re-checked on every call, and without it nothing is sent — the tool returns a structured `telegram_premium_required` result so the agent can reformat with classic modes and retry. `send_message`, `reply_to_message`, and `edit_message` also accept `format_date` to render a date as a tappable chip.
 
 `get_message_reactions` returns an empty list for a message with no reactions. To reuse a custom reaction, pass the returned `custom:<document_id>` value to `send_reaction`.
+
+`vote_poll(chat_id, message_id, option_indices, account=None)` votes in an existing poll.
+Read the poll with `get_messages` first, then select zero-based answer indices: `[0]`
+for the first answer, or `[0, 2]` for the first and third in a multiple-choice poll.
+This may replace an existing vote; empty selections, duplicate or out-of-range
+indices, closed polls, and multiple answers in single-choice polls are rejected.
+Telegram enforces voting permissions and restrictions on changing quiz votes.
+
 - **Contacts:** list, search, add, delete, block, unblock, import, export, inspect direct chats, find recent contact interactions, and remember contacts by the names you actually use (see below).
 
 ### Remembered contacts
