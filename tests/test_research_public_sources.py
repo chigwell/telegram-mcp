@@ -134,7 +134,9 @@ def test_incomplete_telegram_selection_is_rejected(extra):
         example.parse_args(["--public-query", "Redis pool limits", *extra])
 
 
-@pytest.mark.parametrize("url", ["file:///tmp/secret", "https://", "https://user:secret@host/"])
+@pytest.mark.parametrize(
+    "url", ["file:///tmp/secret", "https://", "https://user:secret@host/", "https://:secret@host/"]
+)
 def test_non_public_url_forms_are_rejected(url):
     with pytest.raises(SystemExit):
         example.parse_args(["--public-url", url])

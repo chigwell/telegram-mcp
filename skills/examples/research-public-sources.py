@@ -67,7 +67,11 @@ async def research(args):
 
 def public_url(value):
     parsed = urlsplit(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username:
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+    ):
         raise argparse.ArgumentTypeError("Use an HTTP(S) public URL without login credentials")
     return value
 
