@@ -28,6 +28,7 @@ In this repository, a **Skill** represents a structured, reproducible agent work
 | **Draft Replies Without Sending** | `get_message_context`, `save_draft` (or text draft) | Safe / Non-transmitting | [`draft-replies-without-sending.md`](examples/draft-replies-without-sending.md) |
 | **Triage & Action Items** | `list_chats`, `get_messages`, `set_contact_alias` | Read-Only | [`triage-and-action-items.md`](examples/triage-and-action-items.md) |
 | **Search Chat & Context Summarization** | `list_messages(search_query=...)`, `get_message_context` | Read-Only | [`search-chat-and-summarize-context.md`](examples/search-chat-and-summarize-context.md) |
+| **Research Public Sources** | `get_message_context`, Parallel `web_search` / `web_fetch` | Read-Only / Explicit public inputs | [`research-public-sources.md`](examples/research-public-sources.md) |
 
 ---
 
