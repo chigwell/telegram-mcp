@@ -1,5 +1,6 @@
 import io
 import json
+from types import SimpleNamespace
 
 import pytest
 from mcp.server.fastmcp import Image
@@ -121,6 +122,32 @@ async def test_open_photo_with_message_id_selects_the_message_source(patched_med
     await media.open_photo("chat", message_id=9001)
 
     assert seen == {"source": "messages", "identifier": 9001}
+
+
+@pytest.mark.asyncio
+async def test_open_photo_fetches_and_downloads_only_the_requested_message(patched_media):
+    photo = object()
+    calls = []
+
+    class SinglePhotoClient:
+        async def get_messages(self, entity, *, ids):
+            calls.append(("get_messages", ids))
+            return SimpleNamespace(id=ids, photo=photo)
+
+        async def download_media(self, requested_photo, *, file):
+            assert requested_photo is photo
+            assert file is bytes
+            calls.append(("download_media", requested_photo))
+            return _jpeg_bytes()
+
+    client = SinglePhotoClient()
+    patched_media.setattr(media, "get_client", lambda account=None: client)
+
+    result = await media.open_photo("chat", message_id=9001)
+
+    assert isinstance(result, Image)
+    assert result.data == _jpeg_bytes()
+    assert calls == [("get_messages", 9001), ("download_media", photo)]
 
 
 def _async(value):
