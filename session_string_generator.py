@@ -260,7 +260,9 @@ def main() -> None:
             choice = "n"
         if choice.lower() == "y":
             try:
-                with open(".env", "r") as file:
+                # python-dotenv reads .env as UTF-8; the locale default
+                # (cp1252, cp1251, cp936 on Windows) can't decode it.
+                with open(".env", "r", encoding="utf-8") as file:
                     env_contents = file.readlines()
 
                 session_string_line_found = False
@@ -273,7 +275,7 @@ def main() -> None:
                 if not session_string_line_found:
                     env_contents.append(f"{env_var}={session_string}\n")
 
-                with open(".env", "w") as file:
+                with open(".env", "w", encoding="utf-8") as file:
                     file.writelines(env_contents)
 
                 print("\n.env file updated successfully!")
