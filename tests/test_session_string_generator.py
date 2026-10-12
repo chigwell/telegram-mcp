@@ -242,3 +242,61 @@ def test_parse_args_rejects_conflicting_login_modes(monkeypatch):
 
     with pytest.raises(SystemExit):
         session_string_generator._parse_args()
+
+
+class _AuthorizedClient:
+    def __init__(self, *args, **kwargs):
+        self.session = object()
+        self.disconnected = False
+
+    def connect(self):
+        pass
+
+    def is_user_authorized(self):
+        return True
+
+    def disconnect(self):
+        self.disconnected = True
+
+
+class _FakeStringSession:
+    def __init__(self, *args):
+        pass
+
+    @staticmethod
+    def save(session):
+        return "NEWSESSION"
+
+
+def test_env_update_keeps_utf8_file_under_windows_locale(monkeypatch, tmp_path):
+    # .env is UTF-8 (python-dotenv reads it that way); the update must not fall
+    # back to the locale encoding, here cp1252 as on an English Windows install.
+    real_open = open
+
+    def locale_open(file, mode="r", *args, encoding=None, **kwargs):
+        if "b" not in mode and encoding is None:
+            encoding = "cp1252"
+        return real_open(file, mode, *args, encoding=encoding, **kwargs)
+
+    env_file = tmp_path / ".env"
+    original = "# Настройки Telegram\nTELEGRAM_API_ID=1\n"
+    env_file.write_text(original, encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(session_string_generator, "open", locale_open, raising=False)
+    monkeypatch.setattr("sys.argv", ["session_string_generator.py", "--qr"])
+    monkeypatch.setenv("TELEGRAM_API_ID", "1")
+    monkeypatch.setenv("TELEGRAM_API_HASH", "hash")
+    monkeypatch.setattr(session_string_generator, "_harden_stdio", lambda: None)
+    monkeypatch.setattr(session_string_generator, "_check_installation", lambda: None)
+    monkeypatch.setattr(session_string_generator, "client_identity_kwargs", dict)
+    monkeypatch.setattr(session_string_generator, "TelegramClient", _AuthorizedClient)
+    monkeypatch.setattr(session_string_generator, "StringSession", _FakeStringSession)
+    answers = iter(["", "y"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    session_string_generator.main()
+
+    assert env_file.read_text(encoding="utf-8") == (
+        original + "TELEGRAM_SESSION_STRING=NEWSESSION\n"
+    )
