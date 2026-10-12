@@ -1,11 +1,15 @@
+import json
 import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from starlette.requests import Request
 
 from telegram_mcp import runner
 import telegram_mcp.runtime as runtime_module
+from telegram_mcp.broker_security import StaticTokenVerifier
 
 
 class _FakeSession:
@@ -403,7 +407,7 @@ async def test_serve_defaults_to_stdio(monkeypatch, transport):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("transport", ["http", "sse"])
+@pytest.mark.parametrize("transport", ["sse"])
 async def test_serve_http_transports_bind_host_and_port(monkeypatch, transport):
     fake = _FakeMcp()
     monkeypatch.setattr(runner, "mcp", fake)
@@ -423,22 +427,50 @@ async def test_serve_http_uses_default_host_and_port(monkeypatch):
     monkeypatch.setattr(runner, "mcp", fake)
     monkeypatch.delenv("MCP_HOST", raising=False)
     monkeypatch.delenv("MCP_PORT", raising=False)
+    monkeypatch.delenv("MCP_BROKER_MODE", raising=False)
 
     await runner._serve("http")
 
     assert fake.ran == "http"
     assert fake.settings.host == "127.0.0.1"
     assert fake.settings.port == 8765
+    assert fake.settings.transport_security is None
 
 
 @pytest.mark.asyncio
-async def test_serve_http_leaves_transport_security_unset_by_default(monkeypatch):
+async def test_broker_mode_uses_loopback_auth_and_default_security(monkeypatch):
+    fake = _FakeMcp()
+    monkeypatch.setattr(runner, "mcp", fake)
+    monkeypatch.delenv("MCP_HOST", raising=False)
+    monkeypatch.delenv("MCP_PORT", raising=False)
+    monkeypatch.delenv("MCP_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("MCP_ALLOWED_ORIGINS", raising=False)
+    monkeypatch.setenv("MCP_BROKER_MODE", "1")
+    monkeypatch.setenv("MCP_AUTH_TOKEN_TEST", "secret")
+
+    await runner._serve("http")
+
+    assert fake.ran == "http"
+    assert fake.settings.transport_security.allowed_hosts == [
+        "127.0.0.1:8765",
+        "localhost:8765",
+        "[::1]:8765",
+    ]
+    assert fake.settings.transport_security.allowed_origins == [
+        "http://127.0.0.1:8765",
+        "http://localhost:8765",
+        "http://[::1]:8765",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_serve_sse_leaves_transport_security_unset_by_default(monkeypatch):
     fake = _FakeMcp()
     monkeypatch.setattr(runner, "mcp", fake)
     monkeypatch.delenv("MCP_ALLOWED_HOSTS", raising=False)
     monkeypatch.delenv("MCP_ALLOWED_ORIGINS", raising=False)
 
-    await runner._serve("http")
+    await runner._serve("sse")
 
     assert fake.settings.transport_security is None
 
@@ -449,6 +481,7 @@ async def test_serve_http_configures_allowed_hosts(monkeypatch):
     monkeypatch.setattr(runner, "mcp", fake)
     monkeypatch.setenv("MCP_ALLOWED_HOSTS", "mcp.example.com, localhost:8765")
     monkeypatch.setenv("MCP_ALLOWED_ORIGINS", "https://mcp.example.com")
+    monkeypatch.setenv("MCP_AUTH_TOKEN_TEST", "secret")
 
     await runner._serve("http")
 
@@ -609,3 +642,139 @@ def test_main_reports_only_exclusions_for_all_base(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "after '+'" not in err
     assert "excludes 2 tool(s) listed after '-': delete_message, delete_messages_bulk" in err
+
+
+@pytest.mark.asyncio
+async def test_serve_http_rejects_non_loopback_bind(monkeypatch):
+    fake = _FakeMcp()
+    monkeypatch.setattr(runner, "mcp", fake)
+    monkeypatch.setenv("MCP_HOST", "0.0.0.0")
+    monkeypatch.setenv("MCP_BROKER_MODE", "1")
+    monkeypatch.setenv("MCP_AUTH_TOKEN_TEST", "secret")
+
+    with pytest.raises(ValueError, match="must bind to loopback"):
+        await runner._serve("http")
+
+
+@pytest.mark.asyncio
+async def test_serve_http_requires_auth_token(monkeypatch):
+    fake = _FakeMcp()
+    monkeypatch.setattr(runner, "mcp", fake)
+    monkeypatch.setenv("MCP_HOST", "127.0.0.1")
+    monkeypatch.setenv("MCP_BROKER_MODE", "1")
+    for key in list(runner.os.environ):
+        if key.startswith("MCP_AUTH_TOKEN"):
+            monkeypatch.delenv(key, raising=False)
+
+    with pytest.raises(RuntimeError, match="requires MCP_AUTH_TOKEN"):
+        await runner._serve("http")
+
+
+@pytest.mark.asyncio
+async def test_legacy_http_keeps_public_docker_compatible_bind(monkeypatch):
+    fake = _FakeMcp()
+    monkeypatch.setattr(runner, "mcp", fake)
+    monkeypatch.setenv("MCP_HOST", "0.0.0.0")
+    monkeypatch.setenv("MCP_PORT", "8765")
+    monkeypatch.delenv("MCP_BROKER_MODE", raising=False)
+    for key in list(runner.os.environ):
+        if key.startswith("MCP_AUTH_TOKEN"):
+            monkeypatch.delenv(key, raising=False)
+
+    await runner._serve("http")
+
+    assert fake.ran == "http"
+    assert fake.settings.host == "0.0.0.0"
+    assert fake.settings.transport_security is None
+
+
+def test_docker_compose_remains_legacy_http_mode():
+    compose = (Path(__file__).resolve().parents[1] / "docker-compose.yml").read_text()
+    assert "MCP_TRANSPORT: http" in compose
+    assert "MCP_HOST: 0.0.0.0" in compose
+    assert "MCP_BROKER_MODE" not in compose
+
+
+class _SharedClient(_FakeClient):
+    def __init__(self):
+        super().__init__(authorized=True)
+        self.connect_count = 0
+        self.disconnect_count = 0
+        self.dialog_count = 0
+
+    async def connect(self):
+        self.connect_count += 1
+        self.connected = True
+
+    async def disconnect(self):
+        self.disconnect_count += 1
+        self.connected = False
+
+    async def get_dialogs(self):
+        self.dialog_count += 1
+        return []
+
+    def is_connected(self):
+        return self.connected
+
+
+@pytest.mark.asyncio
+async def test_one_broker_connection_serves_multiple_http_clients(monkeypatch):
+    telegram = _SharedClient()
+    simulated_clients = []
+
+    async def serve(_transport):
+        # HTTP clients share the already-connected process. They do not call
+        # _connect_authorized_client themselves.
+        simulated_clients.extend(await runner.asyncio.gather(_client("codex"), _client("claude")))
+
+    async def _client(name):
+        await runner.asyncio.sleep(0)
+        return name
+
+    monkeypatch.setattr(runner, "clients", {"default": telegram})
+    monkeypatch.setattr(runner, "_serve", serve)
+    monkeypatch.setenv("MCP_TRANSPORT", "http")
+
+    await runner._main()
+
+    assert sorted(simulated_clients) == ["claude", "codex"]
+    assert telegram.connect_count == 1
+    assert telegram.disconnect_count == 1
+
+
+def _request(token=None):
+    headers = []
+    if token is not None:
+        headers.append((b"authorization", f"Bearer {token}".encode()))
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/status",
+            "headers": headers,
+            "query_string": b"",
+            "server": ("127.0.0.1", 18765),
+            "client": ("127.0.0.1", 12345),
+            "scheme": "http",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_broker_status_requires_auth_and_reports_client_identity(tmp_path, monkeypatch):
+    telegram = _SharedClient()
+    telegram.connected = True
+    monkeypatch.setattr(runner, "clients", {"default": telegram})
+    monkeypatch.setattr(runner.mcp, "_token_verifier", StaticTokenVerifier({"codex": "secret"}))
+    monkeypatch.setenv("MCP_AUDIT_FILE", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv("TELEGRAM_MCP_LOCK", str(tmp_path / "telegram.lock"))
+
+    unauthorized = await runner.broker_status(_request())
+    authorized = await runner.broker_status(_request("secret"))
+
+    assert unauthorized.status_code == 401
+    payload = json.loads(authorized.body)
+    assert authorized.status_code == 200
+    assert payload["client_id"] == "codex"
+    assert payload["telegram_connections"] == {"default": True}

@@ -57,7 +57,8 @@ py-modules = ["main", "migrate_session", "sanitize", "session_string_generator"]
 packages = ["telegram_mcp", "telegram_mcp.tools", "telegram_mcp.transport"]
 
 [project.scripts]
-telegram-mcp = "main:main"
+telegram-mcp = "telegram_mcp.launcher:main"
+telegram-mcp-server = "main:main"
 telegram-mcp-generate-session = "session_string_generator:main"
 telegram-mcp-migrate-session = "migrate_session:main"
 
@@ -102,6 +103,10 @@ branch = true
 source = [
     "main",
     "sanitize",
+    "telegram_mcp.broker_security",
+    "telegram_mcp.connection_guard",
+    "telegram_mcp.launcher",
+    "telegram_mcp.runner",
     "telegram_mcp.runtime",
 ]
 

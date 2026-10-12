@@ -9,6 +9,7 @@ import sqlite3
 import logging
 import mimetypes
 import unicodedata
+import weakref
 
 # Ensure sys.stderr is reconfigured for UTF-8 on Windows where possible
 if hasattr(sys.stderr, "reconfigure"):
@@ -189,6 +190,79 @@ def _tool_timeout_seconds(value: Optional[str] = None) -> Optional[float]:
     return timeout if timeout > 0 else None
 
 
+_MUTATING_TOOL_LOCK = asyncio.Lock()
+
+
+def _broker_audit_enabled() -> bool:
+    return os.getenv("MCP_BROKER_MODE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+async def _call_tool_with_audit(req, original_handler, *, server=mcp):
+    if not _broker_audit_enabled():
+        return await original_handler(req)
+
+    from mcp.server.auth.middleware.auth_context import get_access_token
+
+    from telegram_mcp.broker_security import record_audit_event
+
+    request = getattr(req, "root", req)
+    params = getattr(request, "params", None)
+    tool_name = getattr(params, "name", None)
+    if not tool_name:
+        # Keep the hook compatible with synthetic handlers and future MCP
+        # request shapes that do not represent a tool invocation.
+        return await original_handler(req)
+    tool = server._tool_manager.get_tool(tool_name)
+    annotations = getattr(tool, "annotations", None)
+    read_only = bool(getattr(annotations, "readOnlyHint", False))
+    access_token = get_access_token()
+    client_id = access_token.client_id if access_token else "stdio"
+
+    record_audit_event(
+        client_id=client_id,
+        tool=tool_name,
+        read_only=read_only,
+        outcome="started",
+    )
+    try:
+        if read_only:
+            response = await original_handler(req)
+        else:
+            # One broker may serve several clients concurrently.  Mutating
+            # Telegram operations are serialized to keep their ordering
+            # deterministic; read-only calls remain concurrent.
+            async with _MUTATING_TOOL_LOCK:
+                response = await original_handler(req)
+    except asyncio.CancelledError:
+        record_audit_event(
+            client_id=client_id,
+            tool=tool_name,
+            read_only=read_only,
+            outcome="cancelled",
+        )
+        raise
+    except Exception:
+        record_audit_event(
+            client_id=client_id,
+            tool=tool_name,
+            read_only=read_only,
+            outcome="error",
+        )
+        raise
+    record_audit_event(
+        client_id=client_id,
+        tool=tool_name,
+        read_only=read_only,
+        outcome="completed",
+    )
+    return response
+
+
 def _install_annotation_hook() -> None:
     from mcp.types import CallToolRequest, ServerResult, CallToolResult
 
@@ -197,10 +271,12 @@ def _install_annotation_hook() -> None:
     async def annotated_handler(req):
         timeout = _tool_timeout_seconds()
         if timeout is None:
-            response = await original_handler(req)
+            response = await _call_tool_with_audit(req, original_handler)
         else:
             try:
-                response = await asyncio.wait_for(original_handler(req), timeout=timeout)
+                response = await asyncio.wait_for(
+                    _call_tool_with_audit(req, original_handler), timeout=timeout
+                )
             except asyncio.TimeoutError:
                 response = ServerResult(
                     CallToolResult(
@@ -920,9 +996,22 @@ def with_account(readonly=False):
     return decorator
 
 
-_last_conn_verified: dict[int, float] = {}
+_last_conn_verified: weakref.WeakKeyDictionary[TelegramClient, float] = weakref.WeakKeyDictionary()
+_connection_check_locks: weakref.WeakKeyDictionary[
+    TelegramClient, tuple[asyncio.AbstractEventLoop, asyncio.Lock]
+] = weakref.WeakKeyDictionary()
 _CONN_VERIFY_INTERVAL: float = 30.0  # seconds between live pings
 _RECONNECT_TIMEOUT: float = 30.0  # seconds before a reconnect attempt is abandoned
+
+
+def _get_connection_check_lock(cl: TelegramClient) -> asyncio.Lock:
+    """Return this client's lock for the currently running event loop."""
+    loop = asyncio.get_running_loop()
+    lock_state = _connection_check_locks.get(cl)
+    if lock_state is None or lock_state[0] is not loop:
+        lock_state = (loop, asyncio.Lock())
+        _connection_check_locks[cl] = lock_state
+    return lock_state[1]
 
 
 async def _force_reconnect(cl: TelegramClient):
@@ -961,7 +1050,7 @@ async def _force_reconnect(cl: TelegramClient):
             "Telegram session is not authorized after reconnect. Re-authorize it "
             "outside the server (session_string_generator.py) and restart."
         )
-    _last_conn_verified[id(cl)] = time.time()
+    _last_conn_verified[cl] = time.time()
     reconnect_logger.warning("Forced reconnect successful")
 
 
@@ -978,26 +1067,30 @@ async def ensure_connected(cl: TelegramClient = None):
     if cl is None:
         cl = get_client()
 
-    key = id(cl)
+    lock = _get_connection_check_lock(cl)
 
-    if not cl.is_connected():
-        await _force_reconnect(cl)
-        return
+    # Only connection verification/recovery is serialized. The Telegram tool
+    # call itself runs after this function returns and remains concurrent.
+    async with lock:
+        if not cl.is_connected():
+            await _force_reconnect(cl)
+            return
 
-    # Skip verification if recently confirmed alive
-    now = time.time()
-    if now - _last_conn_verified.get(key, 0.0) < _CONN_VERIFY_INTERVAL:
-        return
+        # Re-check after acquiring the lock: another waiter may have already
+        # verified or reconnected this client while this call was queued.
+        now = time.time()
+        if now - _last_conn_verified.get(cl, 0.0) < _CONN_VERIFY_INTERVAL:
+            return
 
-    # Verify with a lightweight Telegram API call
-    try:
-        await asyncio.wait_for(
-            cl(functions.help.GetNearestDcRequest()),
-            timeout=5.0,
-        )
-        _last_conn_verified[key] = now
-    except (ConnectionError, OSError, asyncio.TimeoutError, Exception):
-        await _force_reconnect(cl)
+        # Verify with a lightweight Telegram API call
+        try:
+            await asyncio.wait_for(
+                cl(functions.help.GetNearestDcRequest()),
+                timeout=5.0,
+            )
+            _last_conn_verified[cl] = now
+        except (ConnectionError, OSError, asyncio.TimeoutError, Exception):
+            await _force_reconnect(cl)
 
 
 # Setup robust logging with both file and console output

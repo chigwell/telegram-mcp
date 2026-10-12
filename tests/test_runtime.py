@@ -1,8 +1,10 @@
 import asyncio
+import gc
 import json
 import logging
 import os
 import sys
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -785,21 +787,34 @@ class _ConnectivityClient:
         return "ok"
 
 
+class _CoordinatedPingFailureClient(_ConnectivityClient):
+    def __init__(self):
+        super().__init__(connected=True, authorized=True)
+        self.ping_started = asyncio.Event()
+        self.release_ping = asyncio.Event()
+
+    async def __call__(self, _request):
+        self.calls.append("ping")
+        self.ping_started.set()
+        await self.release_ping.wait()
+        raise ConnectionError()
+
+
 @pytest.mark.asyncio
 async def test_ensure_connected_reconnects_disconnected_client(monkeypatch):
     client = _ConnectivityClient(connected=False, authorized=True)
-    monkeypatch.setattr(runtime, "_last_conn_verified", {})
+    monkeypatch.setattr(runtime, "_last_conn_verified", weakref.WeakKeyDictionary())
 
     await runtime.ensure_connected(client)
 
     assert client.calls == ["is_connected", "disconnect", "connect", "is_user_authorized"]
-    assert runtime._last_conn_verified[id(client)] > 0
+    assert runtime._last_conn_verified[client] > 0
 
 
 @pytest.mark.asyncio
 async def test_force_reconnect_never_starts_interactive_login(monkeypatch):
     client = _ConnectivityClient(connected=False, authorized=False)
-    monkeypatch.setattr(runtime, "_last_conn_verified", {})
+    monkeypatch.setattr(runtime, "_last_conn_verified", weakref.WeakKeyDictionary())
 
     with pytest.raises(RuntimeError, match="not authorized after reconnect") as excinfo:
         await runtime._force_reconnect(client)
@@ -809,13 +824,13 @@ async def test_force_reconnect_never_starts_interactive_login(monkeypatch):
     # The unauthorized connection is dropped so the next tool call reconnects
     # and reports the same error instead of reusing a half-open session.
     assert client.calls == ["disconnect", "connect", "is_user_authorized", "disconnect"]
-    assert id(client) not in runtime._last_conn_verified
+    assert client not in runtime._last_conn_verified
 
 
 @pytest.mark.asyncio
 async def test_ensure_connected_surfaces_revoked_session(monkeypatch):
     client = _ConnectivityClient(connected=False, authorized=False)
-    monkeypatch.setattr(runtime, "_last_conn_verified", {})
+    monkeypatch.setattr(runtime, "_last_conn_verified", weakref.WeakKeyDictionary())
 
     with pytest.raises(RuntimeError, match="not authorized after reconnect"):
         await runtime.ensure_connected(client)
@@ -826,7 +841,7 @@ async def test_ensure_connected_surfaces_revoked_session(monkeypatch):
 @pytest.mark.asyncio
 async def test_ensure_connected_pings_and_reconnects_on_failed_ping(monkeypatch):
     client = _ConnectivityClient(connected=True, authorized=True, ping_error=ConnectionError())
-    monkeypatch.setattr(runtime, "_last_conn_verified", {})
+    monkeypatch.setattr(runtime, "_last_conn_verified", weakref.WeakKeyDictionary())
 
     await runtime.ensure_connected(client)
 
@@ -835,13 +850,69 @@ async def test_ensure_connected_pings_and_reconnects_on_failed_ping(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_concurrent_ensure_connected_only_pings_and_reconnects_once(monkeypatch):
+    client = _CoordinatedPingFailureClient()
+    monkeypatch.setattr(runtime, "_last_conn_verified", weakref.WeakKeyDictionary())
+    monkeypatch.setattr(runtime, "_connection_check_locks", weakref.WeakKeyDictionary())
+
+    first = asyncio.create_task(runtime.ensure_connected(client))
+    await client.ping_started.wait()
+    second = asyncio.create_task(runtime.ensure_connected(client))
+    await asyncio.sleep(0)
+    client.release_ping.set()
+
+    await asyncio.gather(first, second)
+
+    assert client.calls.count("ping") == 1
+    assert client.calls.count("disconnect") == 1
+    assert client.calls.count("connect") == 1
+    assert client.calls.count("is_user_authorized") == 1
+
+
+@pytest.mark.asyncio
 async def test_ensure_connected_skips_recently_verified_client(monkeypatch):
     client = _ConnectivityClient(connected=True)
-    monkeypatch.setattr(runtime, "_last_conn_verified", {id(client): runtime.time.time()})
+    last_verified = weakref.WeakKeyDictionary()
+    last_verified[client] = runtime.time.time()
+    monkeypatch.setattr(runtime, "_last_conn_verified", last_verified)
 
     await runtime.ensure_connected(client)
 
     assert client.calls == ["is_connected"]
+
+
+@pytest.mark.asyncio
+async def test_connection_state_is_removed_when_client_is_collected(monkeypatch):
+    monkeypatch.setattr(runtime, "_last_conn_verified", weakref.WeakKeyDictionary())
+    monkeypatch.setattr(runtime, "_connection_check_locks", weakref.WeakKeyDictionary())
+    client = _ConnectivityClient(connected=True)
+
+    await runtime.ensure_connected(client)
+
+    assert client in runtime._last_conn_verified
+    assert client in runtime._connection_check_locks
+    client_ref = weakref.ref(client)
+    del client
+    gc.collect()
+
+    assert client_ref() is None
+    assert len(runtime._last_conn_verified) == 0
+    assert len(runtime._connection_check_locks) == 0
+
+
+def test_connection_check_lock_is_replaced_for_new_event_loop(monkeypatch):
+    monkeypatch.setattr(runtime, "_connection_check_locks", weakref.WeakKeyDictionary())
+    client = _ConnectivityClient(connected=True)
+
+    async def get_loop_and_lock():
+        return asyncio.get_running_loop(), runtime._get_connection_check_lock(client)
+
+    first_loop, first_lock = asyncio.run(get_loop_and_lock())
+    second_loop, second_lock = asyncio.run(get_loop_and_lock())
+
+    assert first_loop is not second_loop
+    assert first_lock is not second_lock
+    assert runtime._connection_check_locks[client] == (second_loop, second_lock)
 
 
 class _HangingConnectClient(_ConnectivityClient):

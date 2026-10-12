@@ -9,6 +9,10 @@ except UnsafeInstallationError as exc:
 
 import sys
 from telethon.errors import AuthKeyDuplicatedError, BotMethodInvalidError
+from mcp.server.auth.settings import AuthSettings
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 # Ensure sys.stderr is reconfigured for UTF-8 on Windows where possible
 if hasattr(sys.stderr, "reconfigure"):
@@ -26,6 +30,13 @@ from telegram_mcp.singleton import (
     SessionLockError,
     session_identity,
 )
+from telegram_mcp.broker_security import (
+    StaticTokenVerifier,
+    load_client_tokens,
+    record_audit_event,
+    require_loopback,
+)
+from telegram_mcp.connection_guard import connection_status
 import telegram_mcp.tools  # noqa: F401 - registers MCP tools via decorators
 
 # Populated as each account's session lock is acquired; released in _main's
@@ -156,25 +167,110 @@ async def _connect_authorized_client(label, client) -> None:
     )
 
 
-def _configure_transport_security() -> None:
+def _configure_transport_security(*, require_auth: bool = False) -> None:
     """Wire MCP_ALLOWED_HOSTS/MCP_ALLOWED_ORIGINS into FastMCP's DNS-rebinding
     protection, e.g. when the server sits behind a reverse proxy on a public
     domain instead of only being reached via 127.0.0.1/localhost.
     """
+    host = mcp.settings.host
+    if require_auth:
+        require_loopback(host)
+        tokens = load_client_tokens()
+        if not tokens:
+            raise RuntimeError(
+                "Shared HTTP broker requires MCP_AUTH_TOKEN or per-client "
+                "MCP_AUTH_TOKEN_<CLIENT> values."
+            )
+        mcp._token_verifier = StaticTokenVerifier(tokens)
+        url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        base_url = f"http://{url_host}:{mcp.settings.port}"
+        mcp.settings.auth = AuthSettings(
+            issuer_url=base_url,
+            resource_server_url=f"{base_url}/mcp",
+            required_scopes=["telegram"],
+        )
+
     raw_hosts = os.getenv("MCP_ALLOWED_HOSTS", "")
     allowed_hosts = [h.strip() for h in raw_hosts.split(",") if h.strip()]
+    if require_auth and not allowed_hosts:
+        allowed_hosts = [
+            f"127.0.0.1:{mcp.settings.port}",
+            f"localhost:{mcp.settings.port}",
+            f"[::1]:{mcp.settings.port}",
+        ]
     if not allowed_hosts:
         return
 
-    from mcp.server.transport_security import TransportSecuritySettings
-
     raw_origins = os.getenv("MCP_ALLOWED_ORIGINS", "")
     allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    if require_auth and not allowed_origins:
+        allowed_origins = [
+            f"http://127.0.0.1:{mcp.settings.port}",
+            f"http://localhost:{mcp.settings.port}",
+            f"http://[::1]:{mcp.settings.port}",
+        ]
 
     mcp.settings.transport_security = TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
+    )
+
+
+def _broker_mode_enabled() -> bool:
+    return os.getenv("MCP_BROKER_MODE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _telegram_connection_summary() -> dict[str, bool]:
+    return {label: bool(client.is_connected()) for label, client in clients.items()}
+
+
+async def _request_access_token(request: Request):
+    authorization = request.headers.get("authorization", "")
+    scheme, separator, token = authorization.partition(" ")
+    if not separator or scheme.lower() != "bearer" or not token:
+        return None
+    verifier = getattr(mcp, "_token_verifier", None)
+    if verifier is None:
+        return None
+    return await verifier.verify_token(token)
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def broker_health(_request: Request) -> JSONResponse:
+    connections = _telegram_connection_summary()
+    healthy = bool(connections) and all(connections.values())
+    return JSONResponse(
+        {"status": "ok" if healthy else "degraded", "telegram_connected": healthy},
+        status_code=200 if healthy else 503,
+    )
+
+
+@mcp.custom_route("/status", methods=["GET"])
+async def broker_status(request: Request) -> JSONResponse:
+    access_token = await _request_access_token(request)
+    if access_token is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    record_audit_event(
+        client_id=access_token.client_id,
+        tool="broker_status",
+        read_only=True,
+        outcome="completed",
+    )
+    return JSONResponse(
+        {
+            "status": "ok",
+            "transport": "http",
+            "pid": os.getpid(),
+            "client_id": access_token.client_id,
+            "telegram_connections": _telegram_connection_summary(),
+            "connection_owner": connection_status(),
+        }
     )
 
 
@@ -191,7 +287,8 @@ async def _serve(transport: str) -> None:
     if transport in ("http", "sse"):
         mcp.settings.host = os.getenv("MCP_HOST", "127.0.0.1")
         mcp.settings.port = int(os.getenv("MCP_PORT", "8765"))
-        _configure_transport_security()
+        broker_mode = transport == "http" and _broker_mode_enabled()
+        _configure_transport_security(require_auth=broker_mode)
         if transport == "http":
             await mcp.run_streamable_http_async()
         else:

@@ -30,8 +30,9 @@ class ProtocolNegotiationMiddleware:
     - Provides a JSON discovery response for plain GET probes (non-SSE) on the MCP endpoint.
     """
 
-    def __init__(self, app: ASGIApp):
+    def __init__(self, app: ASGIApp, *, streamable_http_path: str = "/mcp"):
         self.app = app
+        self.streamable_http_path = streamable_http_path
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -93,7 +94,11 @@ class ProtocolNegotiationMiddleware:
 
         # 3. Handle plain GET discovery probe (clients querying without text/event-stream)
         accept_header = headers.get(b"accept", b"").decode("latin-1").lower()
-        if scope.get("method") == "GET" and "text/event-stream" not in accept_header:
+        if (
+            scope.get("method") == "GET"
+            and scope.get("path") == self.streamable_http_path
+            and "text/event-stream" not in accept_header
+        ):
             discovery_data = {
                 "name": "telegram",
                 "version": "2.0.1",
@@ -149,7 +154,10 @@ def patch_fastmcp_streamable_http() -> None:
 
         def wrapped_streamable_http_app(self: Any, *args: Any, **kwargs: Any) -> Any:
             app = original_streamable_http_app(self, *args, **kwargs)
-            return ProtocolNegotiationMiddleware(app)
+            return ProtocolNegotiationMiddleware(
+                app,
+                streamable_http_path=self.settings.streamable_http_path,
+            )
 
         FastMCP.streamable_http_app = wrapped_streamable_http_app  # type: ignore[assignment]
         FastMCP._protocol_negotiation_patched = True  # type: ignore[attr-defined]
@@ -171,7 +179,10 @@ def create_streamable_http_app(mcp_instance: Any) -> Any:
     app = mcp_instance.streamable_http_app()
     # If not already wrapped via monkeypatch
     if not isinstance(app, ProtocolNegotiationMiddleware):
-        app = ProtocolNegotiationMiddleware(app)
+        app = ProtocolNegotiationMiddleware(
+            app,
+            streamable_http_path=mcp_instance.settings.streamable_http_path,
+        )
     return app
 
 

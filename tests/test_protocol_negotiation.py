@@ -210,6 +210,28 @@ def test_http_transport_discovery_get_probe():
         assert response.headers.get("mcp-protocol-version") == "2026-07-28"
 
 
+def test_http_transport_plain_health_get_reaches_custom_route():
+    """Verify plain health probes are not replaced by MCP discovery metadata."""
+    app = create_streamable_http_app(mcp)
+    with TestClient(app, base_url="http://localhost:8765") as client:
+        response = client.get("/health")
+
+        assert response.status_code in (200, 503)
+        assert set(response.json()) == {"status", "telegram_connected"}
+        assert response.headers.get("mcp-protocol-version") == DEFAULT_PROTOCOL_VERSION
+
+
+def test_http_transport_plain_status_get_without_token_is_unauthorized():
+    """Verify plain status probes reach the authenticated custom route."""
+    app = create_streamable_http_app(mcp)
+    with TestClient(app, base_url="http://localhost:8765") as client:
+        response = client.get("/status")
+
+        assert response.status_code == 401
+        assert response.json() == {"error": "unauthorized"}
+        assert response.headers.get("mcp-protocol-version") == DEFAULT_PROTOCOL_VERSION
+
+
 def test_http_transport_modern_stateless_tools_list():
     """Verify modern 2026-07-28 stateless call to tools/list executes cleanly."""
     app = create_streamable_http_app(mcp)

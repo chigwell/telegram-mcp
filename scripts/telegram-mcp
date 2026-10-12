@@ -1,0 +1,56 @@
+#!/bin/bash
+# Local launcher template for ~/.local/bin/telegram-mcp.
+# It keeps Telegram and broker credentials in macOS Keychain and delegates the
+# process lock/owner lifecycle to the repository's Python launcher.
+set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
+
+SERVICE="telegram-mcp"
+REPO="${TELEGRAM_MCP_REPO:-$HOME/telegram-mcp}"
+if ! cd "$REPO"; then
+    echo "telegram-mcp repository is unavailable: $REPO" >&2
+    exit 1
+fi
+REPO="$PWD"
+PYTHON="$REPO/.venv/bin/python"
+if [[ ! -x "$PYTHON" ]]; then
+    echo "telegram-mcp Python is unavailable: $PYTHON" >&2
+    exit 1
+fi
+
+if [[ "${1:-}" == "--status" ]]; then
+    exec "$PYTHON" -m telegram_mcp.launcher "$@"
+fi
+
+read_secret() {
+    security find-generic-password -a "$1" -s "$SERVICE" -w 2>/dev/null || true
+}
+
+TELEGRAM_API_ID="$(read_secret api_id)"
+TELEGRAM_API_HASH="$(read_secret api_hash)"
+TELEGRAM_SESSION_STRING="$(read_secret session_string)"
+export TELEGRAM_API_ID TELEGRAM_API_HASH TELEGRAM_SESSION_STRING
+
+if [[ -z "$TELEGRAM_API_ID" || -z "$TELEGRAM_API_HASH" || -z "$TELEGRAM_SESSION_STRING" ]]; then
+    echo "telegram-mcp credentials are missing in macOS Keychain." >&2
+    echo "Run: ~/.local/bin/telegram-mcp-auth" >&2
+    exit 1
+fi
+
+export TELEGRAM_EXPOSED_TOOLS="${TELEGRAM_EXPOSED_TOOLS:-read-only+save_draft}"
+
+if [[ "${1:-}" == "--broker" ]]; then
+    MCP_AUTH_TOKEN_CODEX="$(read_secret broker_codex)"
+    MCP_AUTH_TOKEN_CLAUDE="$(read_secret broker_claude)"
+    export MCP_AUTH_TOKEN_CODEX MCP_AUTH_TOKEN_CLAUDE
+    if [[ -z "$MCP_AUTH_TOKEN_CODEX" || -z "$MCP_AUTH_TOKEN_CLAUDE" ]]; then
+        echo "Broker tokens are missing in macOS Keychain (broker_codex/broker_claude)." >&2
+        exit 1
+    fi
+    export MCP_HOST="${MCP_HOST:-127.0.0.1}"
+    export MCP_PORT="${MCP_PORT:-18765}"
+    shift
+    exec "$PYTHON" -m telegram_mcp.launcher --broker --client-app local-broker "$@"
+fi
+
+exec "$PYTHON" -m telegram_mcp.launcher --client-app "${TELEGRAM_MCP_CLIENT_APP:-stdio-client}" "$@"

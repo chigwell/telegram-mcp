@@ -467,7 +467,9 @@ The server speaks three MCP transports, selected with `MCP_TRANSPORT`:
 
 For `http` and `sse`, the server binds `MCP_HOST`:`MCP_PORT` (default
 `127.0.0.1:8765`); the streamable HTTP endpoint is `/mcp`, the SSE endpoint is
-`/sse`.
+`/sse`. `MCP_TRANSPORT=http` keeps the historical server semantics: it may bind
+to a configured interface and does not require bearer authentication. This is
+the mode used by the bundled Docker and Compose examples.
 
 If the server is reachable via a domain (e.g. behind a reverse proxy) rather
 than only `127.0.0.1`/`localhost`, set `MCP_ALLOWED_HOSTS` (and optionally
@@ -488,7 +490,7 @@ that completion is unknown: a write may already have succeeded, so check the
 destination before retrying. Set the value to `0` only for a deliberately
 unbounded operator session.
 
-Register the shared server with clients:
+Register a regular shared HTTP server with clients:
 
 ```bash
 # Claude Code
@@ -497,6 +499,23 @@ claude mcp add --transport http telegram http://127.0.0.1:8765/mcp
 # Codex
 codex mcp add telegram --url http://127.0.0.1:8765/mcp
 ```
+
+### Guarded local broker mode
+
+For one local Telegram session shared by Codex and Claude, start the explicit
+broker path with `telegram-mcp --broker` (equivalent to
+`MCP_TRANSPORT=http MCP_BROKER_MODE=1` under the guarded launcher). Broker mode
+adds constraints that legacy HTTP does not have:
+
+- loopback-only bind;
+- mandatory `MCP_AUTH_TOKEN` or distinct `MCP_AUTH_TOKEN_<CLIENT>` values;
+- per-client audit identity;
+- one machine-wide `flock` and owner diagnostics via `telegram-mcp --status`.
+
+Use the reviewed migration sequence in
+[`docs/local-broker-migration.md`](docs/local-broker-migration.md). Installing
+the repository alone does not edit MCP client config or start a background
+service.
 
 For stdio-only clients, bridge with [mcp-remote](https://www.npmjs.com/package/mcp-remote):
 
@@ -557,6 +576,7 @@ Size the pool to the number of clients you actually run concurrently. If every
 slot is already claimed, the server refuses to start with an explicit error
 rather than reusing a session another client holds — reuse would make Telegram
 permanently invalidate that session for both clients.
+
 - "Send this from my work account to @example"
 
 ### Sharing one session from one host
@@ -748,7 +768,7 @@ Build the image:
 docker build -t telegram-mcp:latest .
 ```
 
-### Shared server (recommended)
+### Shared server (legacy-compatible HTTP)
 
 Run one long-lived container serving streamable HTTP, and point every MCP
 client at it (see [Transports](#transports) for client registration):
@@ -765,7 +785,9 @@ docker run -d --name telegram-mcp --restart unless-stopped \
 `MCP_HOST=0.0.0.0` binds inside the container so the published port works;
 `-p 127.0.0.1:8765:8765` keeps the server reachable only from the local
 machine — the endpoint is unauthenticated, so never publish it on a public
-interface.
+interface. Docker does not enable `MCP_BROKER_MODE`; the loopback check applies
+to the host-local guarded broker, not to a container that must bind `0.0.0.0`
+inside its network namespace.
 
 The bundled Compose file runs the same setup:
 
