@@ -844,6 +844,23 @@ async def test_ensure_connected_skips_recently_verified_client(monkeypatch):
     assert client.calls == ["is_connected"]
 
 
+class _SlowConnectClient(_ConnectivityClient):
+    async def connect(self):
+        await asyncio.sleep(0)
+        await super().connect()
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_reconnects_once_for_concurrent_callers(monkeypatch):
+    client = _SlowConnectClient(connected=False)
+    monkeypatch.setattr(runtime, "_last_conn_verified", {})
+    monkeypatch.setattr(runtime, "_conn_locks", {})
+
+    await asyncio.gather(*(runtime.ensure_connected(client) for _ in range(3)))
+
+    assert client.calls.count("connect") == 1
+
+
 class _HangingConnectClient(_ConnectivityClient):
     async def connect(self):
         self.calls.append("connect")
