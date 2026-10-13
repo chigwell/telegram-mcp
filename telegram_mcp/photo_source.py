@@ -126,8 +126,22 @@ async def list_photo_references(client, entity, source: str, limit: int) -> List
 async def find_photo_reference(
     client, entity, source: str, identifier: Optional[int], search_depth: int
 ) -> Optional[PhotoReference]:
-    """Find one photo by identifier, or the current avatar when none is given."""
-    references = await list_photo_references(client, entity, source, search_depth)
+    """Fetch a message photo directly, or search avatar history by photo id."""
+    resolved_source = validate_source(source)
+    if resolved_source == MESSAGE_SOURCE and identifier is not None:
+        message = await client.get_messages(entity, ids=identifier)
+        photo = getattr(message, "photo", None)
+        if photo is None:
+            return None
+        return PhotoReference(
+            identifier=message.id,
+            photo=photo,
+            is_current=False,
+            taken_at=getattr(message, "date", None),
+            caption=getattr(message, "message", "") or "",
+        )
+
+    references = await list_photo_references(client, entity, resolved_source, search_depth)
     if not references:
         return None
     if identifier is None:

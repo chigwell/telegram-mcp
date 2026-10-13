@@ -55,6 +55,7 @@ class _Client:
         self._messages = messages or []
         self.requested_filter = None
         self.requested_thumb = "unset"
+        self.message_requests = []
 
     async def __call__(self, request):
         class _Result:
@@ -62,8 +63,11 @@ class _Client:
 
         return _Result()
 
-    async def get_messages(self, entity, limit=None, filter=None):
+    async def get_messages(self, entity, limit=None, filter=None, ids=None):
+        self.message_requests.append((entity, limit, filter, ids))
         self.requested_filter = filter
+        if ids is not None:
+            return next((message for message in self._messages if message.id == ids), None)
         return self._messages[:limit]
 
     async def download_media(self, photo, file=None, thumb=None):
@@ -141,6 +145,53 @@ async def test_find_by_identifier_selects_the_matching_photo():
     )
 
     assert found.identifier == 100
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entity", [_User(), _Channel()])
+async def test_find_message_photo_fetches_only_the_requested_id_beyond_search_depth(entity):
+    when = datetime.datetime(2026, 8, 22, tzinfo=datetime.timezone.utc)
+    target = _PhotoMessage(9001, _Photo(1), caption="target", date=when)
+    client = _Client(messages=[_PhotoMessage(i, _Photo(i)) for i in range(200)] + [target])
+
+    found = await photo_source.find_photo_reference(
+        client, entity, photo_source.MESSAGE_SOURCE, 9001, 100
+    )
+
+    assert found.photo is target.photo
+    assert found.describe() == {"id": 9001, "date": when, "is_current": False, "caption": "target"}
+    assert client.message_requests == [(entity, None, None, 9001)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("messages", [[], [_PhotoMessage(9001, None)]])
+async def test_find_missing_or_non_photo_message_does_not_scan_history(messages):
+    entity = _Channel()
+    client = _Client(messages=messages)
+
+    found = await photo_source.find_photo_reference(
+        client, entity, photo_source.MESSAGE_SOURCE, 9001, 100
+    )
+
+    assert found is None
+    assert client.message_requests == [(entity, None, None, 9001)]
+
+
+@pytest.mark.asyncio
+async def test_find_message_photo_propagates_access_failure_without_fallback():
+    class DeniedClient:
+        calls = 0
+
+        async def get_messages(self, entity, *, ids):
+            self.calls += 1
+            raise PermissionError("access denied")
+
+    client = DeniedClient()
+    with pytest.raises(PermissionError, match="access denied"):
+        await photo_source.find_photo_reference(
+            client, _Channel(), photo_source.MESSAGE_SOURCE, 9001, 100
+        )
+    assert client.calls == 1
 
 
 @pytest.mark.asyncio
