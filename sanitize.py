@@ -111,15 +111,21 @@ def sanitize_name(text: Optional[str], max_length: int = 256) -> str:
 
 
 def sanitize_dict(data: Any) -> Any:
-    """Recursively sanitize all string values in a nested dict/list structure.
+    """Recursively sanitize all string and bytes values in a nested dict/list structure.
 
     Use this for raw Telegram API responses (e.g. to_dict()) where
-    user-controlled content can appear at any nesting depth.
+    user-controlled content can appear at any nesting depth. Bytes are
+    decoded (UTF-8, replacing errors) and sanitized as text, matching how
+    they are later serialized to JSON.
     """
     if isinstance(data, dict):
         return {k: sanitize_dict(v) for k, v in data.items()}
     if isinstance(data, list):
         return [sanitize_dict(item) for item in data]
+    if isinstance(data, bytes):
+        # Decode at the sanitization point: _json_default only decodes at
+        # serialization time, which would let control bytes slip through raw.
+        return sanitize_user_content(data.decode("utf-8", errors="replace"), max_length=4096)
     if isinstance(data, str):
         return sanitize_user_content(data, max_length=4096)
     return data
