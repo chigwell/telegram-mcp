@@ -101,6 +101,32 @@ def _summary(result):
 
 
 @pytest.mark.asyncio
+async def test_export_skips_chat_with_zero_unread(tmp_path, monkeypatch):
+    """Issue #296: unread_count == 0 must export nothing, not the whole history."""
+    chat_id = -100123
+    history = [_fake_message(i, f"m{i}") for i in range(1, 351)]
+    client = FakeExportClient(
+        dialogs=[_dialog(chat_id, unread_count=0)],
+        messages_by_chat={chat_id: history},
+    )
+    _patch_export(monkeypatch, client, tmp_path)
+
+    out = tmp_path / "out.json"
+    result = await messages.export_unread_messages(chat_ids=[chat_id], output_path=str(out))
+    summary = _summary(result)
+
+    assert client.get_messages_calls == []
+    assert summary["chats_processed"] == 1
+    assert summary["messages_exported"] == 0
+
+    data = json.loads(out.read_text(encoding="utf-8"))
+    chat_entry = data["chats"][str(chat_id)]
+    assert chat_entry["unread_count_at_export"] == 0
+    assert chat_entry["messages_exported"] == 0
+    assert chat_entry["messages"] == []
+
+
+@pytest.mark.asyncio
 async def test_export_creates_output_file_with_messages(tmp_path, monkeypatch):
     chat_id = -100123
     msgs = [_fake_message(1, "first"), _fake_message(2, "second")]
