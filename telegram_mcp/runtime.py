@@ -148,10 +148,27 @@ def parse_schedule_date(
     return dt, None
 
 
+def _require_api_credentials() -> tuple[int, str]:
+    """Fail with a readable config error instead of a raw TypeError from int(None)."""
+    api_id_raw = os.getenv("TELEGRAM_API_ID")
+    api_hash = os.getenv("TELEGRAM_API_HASH")
+    if not api_id_raw or not api_hash:
+        print(
+            "Error: TELEGRAM_API_ID and TELEGRAM_API_HASH must be set. "
+            "Create an .env file with your credentials from https://my.telegram.org/apps",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    try:
+        return int(api_id_raw), api_hash
+    except ValueError:
+        print("Error: TELEGRAM_API_ID must be an integer", file=sys.stderr)
+        sys.exit(1)
+
+
 load_dotenv()
 
-TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID"))
-TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
+TELEGRAM_API_ID, TELEGRAM_API_HASH = _require_api_credentials()
 
 # Install protocol compatibility for MCP 2026-07-28 and backwards compatibility
 from telegram_mcp.transport import install_protocol_compatibility
