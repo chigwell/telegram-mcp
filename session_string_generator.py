@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 from telethon import errors
 from telethon.sessions import StringSession
 from telethon.sync import TelegramClient
+from telegram_mcp.account_labels import canonical_account_label
 from telegram_mcp.client_identity import client_identity_kwargs
 from telegram_mcp.install_guard import UnsafeInstallationError, assert_safe_distribution
 
@@ -217,6 +218,9 @@ def main() -> None:
     except EOFError:
         # Non-interactive stdin (piped/scripted runs): fall back to the default label.
         label = ""
+    # The suggested env var must match what the migrator and the server read:
+    # `export TELEGRAM_SESSION_STRING_MY-WORK=...` is not valid shell syntax.
+    label = canonical_account_label(label)
 
     if args.qr:
         method = "1"
