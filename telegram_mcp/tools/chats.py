@@ -182,7 +182,13 @@ async def get_chats(account: Optional[str] = None, page: int = 1, page_size: int
         records = []
         for dialog in chats:
             entity = dialog.entity
-            title = getattr(entity, "title", None) or getattr(entity, "first_name", "Unknown")
+            title = getattr(entity, "title", None)
+            if not title:
+                # Match list_chats: users are titled by first + last name
+                # (empty/None parts are skipped, so "Bob" stays "Bob").
+                first = getattr(entity, "first_name", "") or ""
+                last = getattr(entity, "last_name", "") or ""
+                title = f"{first} {last}".strip() or "Unknown"
             records.append(
                 {
                     "chat_id": get_marked_id(entity),
