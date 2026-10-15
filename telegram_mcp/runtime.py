@@ -922,8 +922,10 @@ def with_account(readonly=False):
 
 _last_conn_verified: dict[int, float] = {}
 _conn_locks: dict[int, asyncio.Lock] = {}
+_last_reconnect_failure: dict[int, tuple[float, BaseException]] = {}
 _CONN_VERIFY_INTERVAL: float = 30.0  # seconds between live pings
 _RECONNECT_TIMEOUT: float = 30.0  # seconds before a reconnect attempt is abandoned
+_RECONNECT_FAILURE_TTL: float = 30.0  # seconds a failed reconnect result is replayed to waiters
 
 
 async def _force_reconnect(cl: TelegramClient):
@@ -966,6 +968,28 @@ async def _force_reconnect(cl: TelegramClient):
     reconnect_logger.warning("Forced reconnect successful")
 
 
+async def _reconnect_once(cl: TelegramClient, key: int):
+    """Run one reconnect under the caller's lock and cache its outcome.
+
+    Only a successful reconnect used to be reused, so when one failed every
+    queued caller ran its own full disconnect+connect (up to _RECONNECT_TIMEOUT
+    each) and hit the tool timeout with an opaque error instead of the real one.
+    """
+    try:
+        await _force_reconnect(cl)
+    except Exception as exc:
+        _last_reconnect_failure[key] = (time.time(), exc)
+        raise
+    _last_reconnect_failure.pop(key, None)
+
+
+def _raise_cached_reconnect_failure(key: int):
+    """Replay a recent reconnect failure instead of repeating the attempt."""
+    failure = _last_reconnect_failure.get(key)
+    if failure is not None and time.time() - failure[0] < _RECONNECT_FAILURE_TTL:
+        raise failure[1]
+
+
 async def ensure_connected(cl: TelegramClient = None):
     """Verify Telegram connection is alive, reconnect if needed.
 
@@ -985,7 +1009,8 @@ async def ensure_connected(cl: TelegramClient = None):
     # reconnect the same client in parallel: one disconnect breaks another's connect.
     async with _conn_locks.setdefault(key, asyncio.Lock()):
         if not cl.is_connected():
-            await _force_reconnect(cl)
+            _raise_cached_reconnect_failure(key)
+            await _reconnect_once(cl, key)
             return
 
         # Skip verification if recently confirmed alive
@@ -1001,7 +1026,7 @@ async def ensure_connected(cl: TelegramClient = None):
             )
             _last_conn_verified[key] = now
         except (ConnectionError, OSError, asyncio.TimeoutError, Exception):
-            await _force_reconnect(cl)
+            await _reconnect_once(cl, key)
 
 
 # Setup robust logging with both file and console output

@@ -752,6 +752,14 @@ async def test_with_account_routes_single_multi_and_readonly(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _reset_reconnect_state(monkeypatch):
+    """Reconnect state is keyed by id(client), which CPython reuses across tests."""
+    monkeypatch.setattr(runtime, "_last_conn_verified", {})
+    monkeypatch.setattr(runtime, "_conn_locks", {})
+    monkeypatch.setattr(runtime, "_last_reconnect_failure", {})
+
+
 class _ConnectivityClient:
     def __init__(self, *, connected=True, authorized=True, ping_error=None):
         self.connected = connected
@@ -853,12 +861,42 @@ class _SlowConnectClient(_ConnectivityClient):
 @pytest.mark.asyncio
 async def test_ensure_connected_reconnects_once_for_concurrent_callers(monkeypatch):
     client = _SlowConnectClient(connected=False)
-    monkeypatch.setattr(runtime, "_last_conn_verified", {})
-    monkeypatch.setattr(runtime, "_conn_locks", {})
 
     await asyncio.gather(*(runtime.ensure_connected(client) for _ in range(3)))
 
     assert client.calls.count("connect") == 1
+
+
+class _FailingConnectClient(_ConnectivityClient):
+    async def connect(self):
+        self.calls.append("connect")
+        raise ConnectionError("network down")
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_replays_failed_reconnect_to_waiters():
+    """Callers queued behind a failed reconnect reuse its error instead of retrying (#298)."""
+    client = _FailingConnectClient(connected=False)
+
+    results = await asyncio.gather(
+        *(runtime.ensure_connected(client) for _ in range(3)), return_exceptions=True
+    )
+
+    assert client.calls.count("connect") == 1
+    assert client.calls.count("disconnect") == 1
+    assert all(isinstance(result, ConnectionError) for result in results)
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_retries_reconnect_after_cached_failure_goes_stale():
+    client = _ConnectivityClient(connected=False, authorized=True)
+    stale = runtime.time.time() - 2 * runtime._RECONNECT_FAILURE_TTL
+    runtime._last_reconnect_failure[id(client)] = (stale, RuntimeError("old attempt"))
+
+    await runtime.ensure_connected(client)
+
+    assert "connect" in client.calls
+    assert id(client) not in runtime._last_reconnect_failure
 
 
 class _HangingConnectClient(_ConnectivityClient):
