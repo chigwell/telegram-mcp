@@ -214,7 +214,8 @@ async def download_media(
         chat_id: The chat ID or username.
         message_id: The message ID containing the media.
         file_path: Optional absolute or relative path under allowed roots.
-            If omitted, saves into `<first_root>/downloads/`.
+            If omitted, saves into `<first_root>/downloads/` (or directly into
+            `<first_root>/` if the root is already a downloads directory).
     """
     try:
         cl = get_client(account)

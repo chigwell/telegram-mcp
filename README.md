@@ -692,7 +692,7 @@ Security behavior:
 - Paths are resolved through real paths and must stay inside an allowed root.
 - Traversal, wildcard-like, shell-like, and null-byte path patterns are rejected.
 - Relative paths resolve under the first allowed root.
-- Downloads default to `<first_root>/downloads/`.
+- Downloads default to `<first_root>/downloads/` (or directly into `<first_root>/` if the root folder is already named `downloads` / `Downloads`). Configurable via `TELEGRAM_DOWNLOAD_SUBDIR`.
 - Size and extension limits are enforced for sensitive media tools. `send_file`
   and `upload_file` have no extension limit by default; see
   `TELEGRAM_FILE_EXTENSIONS` above to add one.
