@@ -39,6 +39,26 @@ def test_apply_alias_passes_through_unknown_values():
 def test_load_aliases_missing_or_corrupt_file(tmp_path):
     assert runtime.load_aliases() == {}
 
+
+def test_save_aliases_creates_missing_override_directory(monkeypatch, tmp_path):
+    nested = tmp_path / "missing" / "nested" / "aliases.json"
+    monkeypatch.setenv("TELEGRAM_ALIASES_FILE", str(nested))
+
+    runtime.save_aliases({"андрей": 12345})
+
+    assert runtime.load_aliases() == {
+        "андрей": {"id": 12345, "name": None, "account": None}
+    }
+
+
+def test_update_aliases_creates_missing_override_directory(monkeypatch, tmp_path):
+    nested = tmp_path / "missing" / "aliases.json"
+    monkeypatch.setenv("TELEGRAM_ALIASES_FILE", str(nested))
+
+    runtime.update_aliases(lambda aliases: aliases.setdefault("андрей", 12345))
+
+    assert runtime.load_aliases()["андрей"]["id"] == 12345
+
     path = runtime.aliases_file_path()
     path.write_text("not json")
     assert runtime.load_aliases() == {}
