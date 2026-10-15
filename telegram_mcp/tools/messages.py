@@ -582,19 +582,41 @@ def _is_keycap_base(text: str, i: int) -> bool:
     return text[i] in "#*0123456789" and text[i + 1 : i + 2] in ("\ufe0f", "\u20e3")
 
 
+def _is_emoji_char(char: str) -> bool:
+    """An emoji code point or an emoji-sequence component (VS16 or ZWJ).
+
+    Emoji blocks, listed instead of the old U+2100 floor: letterlike signs
+    (\u2116 \u2122), math operators and control pictures are not emoji. Coarse on
+    purpose \u2014 not a full Unicode emoji inventory. The keycap mark U+20E3 is
+    deliberately absent: it only counts via its base.
+    """
+    code = ord(char)
+    return char in "\u200d\ufe0f" or (
+        0x2190 <= code <= 0x21FF  # arrows (\u2194 \u2195 \u2026, mostly with VS16)
+        or 0x2300 <= code <= 0x23FF  # misc technical (\u231a \u231b \u23f0 \u2026)
+        or 0x2460 <= code <= 0x24FF  # enclosed alphanumerics (\u24c2 \u3297 \u3299 \u2026)
+        or 0x25A0 <= code <= 0x27BF  # geometric shapes, misc symbols, dingbats
+        or 0x2B00 <= code <= 0x2BFF  # misc symbols and arrows (\u2b50 \u2b55 \u2026)
+        or 0x1F000 <= code <= 0x1FAFF  # astral emoji blocks
+    )
+
+
 def _looks_like_emoji(text: str) -> bool:
     """Cheap fallback check, not a full emoji validation.
 
     Refuses spaces, letters and digits other than keycap bases, a leading modifier or
     joiner, a trailing joiner, an odd number of regional indicators, and text with no
-    code point at or above U+2100 that is not a keycap sequence.
+    emoji code point or keycap base.
     """
     if not text or text[0] in "\u200d\ufe0f" or 0x1F3FB <= ord(text[0]) <= 0x1F3FF:
         return False
     if text[-1] == "\u200d" or sum(map(_is_regional_indicator, text)) % 2:
         return False
-    if "\u20e3" not in text and all(ord(char) < 0x2100 for char in text):
-        return False  # plain punctuation such as "#" would mark the start of "#tag"
+    if not any(
+        _is_emoji_char(char) or _is_keycap_base(text, i)
+        for i, char in enumerate(text)
+    ):
+        return False  # plain punctuation and signs such as "\u2116" or "#" would just mark text
     return not any(
         char.isspace() or (char.isalnum() and not _is_keycap_base(text, i))
         for i, char in enumerate(text)
