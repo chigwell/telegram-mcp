@@ -57,6 +57,7 @@ from telethon.tl.types import (
     TextWithEntities,
 )
 import hashlib
+import zlib
 import tempfile
 
 try:
@@ -1362,7 +1363,9 @@ def log_and_format_error(
                     break
 
         prefix_str = prefix.value if isinstance(prefix, ErrorCategory) else (prefix or "GEN")
-        error_code = f"{prefix_str}-ERR-{abs(hash(function_name)) % 1000:03d}"
+        # str hash() is salted per process, which would give the same failure a new code
+        # after every restart; crc32 is stable.
+        error_code = f"{prefix_str}-ERR-{zlib.crc32(function_name.encode()) % 1000:03d}"
 
     # Telegram FloodWait (Rate Limiting) must be explicitly formatted for LLM agents.
     # LLMs will blindly retry generic errors, escalating the flood penalty and risking bans.
