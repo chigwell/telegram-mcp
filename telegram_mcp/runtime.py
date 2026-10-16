@@ -1110,7 +1110,12 @@ ROOTS_REQUEST_TIMEOUT_DEFAULT = 10.0
 
 # Per-chat access control allowlist configuration (TELEGRAM_ALLOWED_CHAT_IDS)
 ALLOWED_CHAT_IDS: Optional[set[Union[int, str]]] = None
-CHAT_PARAM_NAMES: frozenset[str] = frozenset({"chat_id", "from_chat_id", "to_chat_id", "channel"})
+# Every parameter that names a chat the tool reads or changes, whatever it is called:
+# contact_id is the private chat with that contact, group_id the group being administered.
+# user_id stays out: it names a member acted on inside an already-checked chat.
+CHAT_PARAM_NAMES: frozenset[str] = frozenset(
+    {"chat_id", "from_chat_id", "to_chat_id", "channel", "contact_id", "group_id"}
+)
 
 
 def _parse_allowed_chat_ids(
