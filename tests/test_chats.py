@@ -148,7 +148,9 @@ async def test_get_chats_titles_users_with_last_name(monkeypatch):
 
     dialogs = [
         SimpleNamespace(entity=User(id=555, first_name="", last_name="Иванов"), unread_count=0),
-        SimpleNamespace(entity=User(id=556, first_name="Alice", last_name="Smith"), unread_count=0),
+        SimpleNamespace(
+            entity=User(id=556, first_name="Alice", last_name="Smith"), unread_count=0
+        ),
         SimpleNamespace(entity=User(id=557, first_name="Bob"), unread_count=0),
     ]
     client = DialogListClient(dialogs)
