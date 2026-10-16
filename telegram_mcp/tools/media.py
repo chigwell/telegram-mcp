@@ -402,7 +402,7 @@ async def upload_file(
             "size": getattr(uploaded, "size", safe_path.stat().st_size),
             "md5_checksum": getattr(uploaded, "md5_checksum", None),
         }
-        return json.dumps(payload, indent=2, default=json_serializer)
+        return json.dumps(payload, indent=2, default=json_serializer, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("upload_file", e, file_path=file_path)
 
@@ -450,7 +450,9 @@ async def get_sticker_sets(account: Optional[str] = None) -> str:
         cl = get_client(account)
         await ensure_connected(cl)
         result = await cl(functions.messages.GetAllStickersRequest(hash=0))
-        return json.dumps([sanitize_name(s.title) for s in result.sets], indent=2)
+        return json.dumps(
+            [sanitize_name(s.title) for s in result.sets], indent=2, ensure_ascii=False
+        )
     except Exception as e:
         return log_and_format_error("get_sticker_sets", e)
 
@@ -518,7 +520,10 @@ async def get_gif_search(query: str, limit: int = 10, account: Optional[str] = N
             if not result.gifs:
                 return "[]"
             return json.dumps(
-                [g.document.id for g in result.gifs], indent=2, default=json_serializer
+                [g.document.id for g in result.gifs],
+                indent=2,
+                default=json_serializer,
+                ensure_ascii=False,
             )
         except (AttributeError, ImportError):
             # Fallback approach: Use SearchRequest with GIF filter
@@ -547,7 +552,7 @@ async def get_gif_search(query: str, limit: int = 10, account: Optional[str] = N
                 for msg in result.messages:
                     if hasattr(msg, "media") and msg.media and hasattr(msg.media, "document"):
                         gif_ids.append(msg.media.document.id)
-                return json.dumps(gif_ids, default=json_serializer)
+                return json.dumps(gif_ids, default=json_serializer, ensure_ascii=False)
             except Exception as inner_e:
                 return log_and_format_error("get_gif_search", inner_e, query=query, limit=limit)
     except Exception as e:

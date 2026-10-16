@@ -3002,6 +3002,7 @@ async def get_message_reactions(
             return json.dumps(
                 {"message_id": message_id, "chat_id": str(chat_id), "reactions": [], "count": 0},
                 indent=2,
+                ensure_ascii=False,
             )
 
         result = await cl(
@@ -3038,6 +3039,7 @@ async def get_message_reactions(
             },
             indent=2,
             default=json_serializer,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error(
@@ -3160,7 +3162,10 @@ async def get_drafts(account: Optional[str] = None) -> str:
             return "No drafts found."
 
         return json.dumps(
-            {"drafts": drafts_info, "count": len(drafts_info)}, indent=2, default=json_serializer
+            {"drafts": drafts_info, "count": len(drafts_info)},
+            indent=2,
+            default=json_serializer,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error("get_drafts", e)
@@ -3338,6 +3343,7 @@ async def export_unread_messages(
                 "messages_exported": stats["messages_exported"],
             },
             indent=2,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error(
