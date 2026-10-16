@@ -735,14 +735,10 @@ def _looks_like_emoji(text: str) -> bool:
         return False
     if text[-1] == "\u200d" or sum(map(_is_regional_indicator, text)) % 2:
         return False
-    if not any(
-        _is_emoji_char(char) or _is_keycap_base(text, i)
-        for i, char in enumerate(text)
-    ):
+    if not any(_is_emoji_char(char) or _is_keycap_base(text, i) for i, char in enumerate(text)):
         return False  # plain punctuation and signs such as "\u2116" or "#" would just mark text
     return not any(
-        char.isspace()
-        or (char.isalnum() and char != "ℹ" and not _is_keycap_base(text, i))
+        char.isspace() or (char.isalnum() and char != "ℹ" and not _is_keycap_base(text, i))
         for i, char in enumerate(text)
     )  # U+2139 INFORMATION SOURCE is the only letter-form emoji (Ll, not So)
 
