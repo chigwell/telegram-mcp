@@ -106,6 +106,27 @@ def test_odd_regional_indicators_are_refused(emoji):
     assert error.startswith(f"custom_emojis emoji {emoji!r} {BAD_EMOJI}")
 
 
+@pytest.mark.parametrize("emoji", ["№", "™", "⃣", "∉", "#"])
+def test_non_emoji_signs_are_refused(emoji):
+    # Letterlike signs (№ ™), math operators and a lone keycap mark are not emoji;
+    # a lone ⃣ has no keycap base to attach to.
+    entities, error = _result("🍷 x", [{"emoji": emoji, "id": WINE_ID}])
+    assert entities is None
+    assert error.startswith(f"custom_emojis emoji {emoji!r} {BAD_EMOJI}")
+
+
+@pytest.mark.parametrize("emoji", ["™️", "☀️", "ℹ️", "⤴️", "〽️", "㊙️"])
+def test_text_presentation_signs_with_vs16_are_accepted(emoji):
+    # Signs and RGI emoji scattered between the emoji blocks (ℹ in letterlike,
+    # ⤴ in supplemental arrows, 〽 in CJK symbols, ㊙ in enclosed CJK) become
+    # emoji with an explicit U+FE0F variation selector and must not regress.
+    # ℹ additionally needs the letter-form exemption: U+2139 is Ll, so
+    # isalnum() is True for it, unlike every other emoji base.
+    entities, error = _result(f"{emoji} x", [{"emoji": emoji, "id": WINE_ID}])
+    assert error is None
+    assert [e.offset for e in entities] == [0]
+
+
 def test_format_date_and_entries_are_sorted():
     text = "Tasting 13/09 17:00 🍷 at ☕"
     entities, error = _result(
