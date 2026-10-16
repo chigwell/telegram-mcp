@@ -133,9 +133,7 @@ async def test_open_photo_fetches_and_downloads_only_the_requested_message(patch
     class SinglePhotoClient:
         async def get_messages(self, entity, *, ids):
             calls.append(("get_messages", ids))
-            return SimpleNamespace(
-                id=ids, photo=photo, media=types.MessageMediaPhoto(photo=photo)
-            )
+            return SimpleNamespace(id=ids, photo=photo, media=types.MessageMediaPhoto(photo=photo))
 
         async def download_media(self, requested_photo, *, file):
             assert requested_photo is photo
