@@ -1700,8 +1700,7 @@ def load_aliases(strict: bool = False) -> Dict[str, Dict[str, Any]]:
 def save_aliases(aliases: Dict[str, Any]) -> None:
     """Atomically persist aliases 0600 — the file maps nicknames to real people."""
     path = aliases_file_path()
-    if not os.getenv(_ALIASES_ENV):
-        path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
@@ -1753,8 +1752,7 @@ def update_aliases(mutate):
     lose one of the two writes — including a delete silently coming back.
     """
     path = aliases_file_path()
-    if not os.getenv(_ALIASES_ENV):
-        path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)  # also for the .lock file below
     with _alias_lock(path):
         aliases = load_aliases(strict=True)
         result = mutate(aliases)

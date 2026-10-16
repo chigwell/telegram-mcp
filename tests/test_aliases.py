@@ -50,6 +50,24 @@ def test_load_aliases_missing_or_corrupt_file(tmp_path):
     assert _ids(runtime.load_aliases()) == {"ok": 5}  # bad row skipped, good row kept
 
 
+def test_save_aliases_creates_missing_override_directory(monkeypatch, tmp_path):
+    nested = tmp_path / "missing" / "nested" / "aliases.json"
+    monkeypatch.setenv("TELEGRAM_ALIASES_FILE", str(nested))
+
+    runtime.save_aliases({"андрей": 12345})
+
+    assert runtime.load_aliases() == {"андрей": {"id": 12345, "name": None, "account": None}}
+
+
+def test_update_aliases_creates_missing_override_directory(monkeypatch, tmp_path):
+    nested = tmp_path / "missing" / "aliases.json"
+    monkeypatch.setenv("TELEGRAM_ALIASES_FILE", str(nested))
+
+    runtime.update_aliases(lambda aliases: aliases.setdefault("андрей", 12345))
+
+    assert runtime.load_aliases()["андрей"]["id"] == 12345
+
+
 def test_save_and_load_roundtrip_normalizes_keys():
     runtime.save_aliases({"Работа": -1001234567890})
 
