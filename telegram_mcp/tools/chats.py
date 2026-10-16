@@ -190,9 +190,7 @@ async def get_chats(account: Optional[str] = None, page: int = 1, page_size: int
             if not title:
                 # Match list_chats: users are titled by first + last name
                 # (empty/None parts are skipped, so "Bob" stays "Bob").
-                first = getattr(entity, "first_name", "") or ""
-                last = getattr(entity, "last_name", "") or ""
-                title = f"{first} {last}".strip() or "Unknown"
+                title = person_name(entity) or "Unknown"
             records.append(
                 {
                     "chat_id": get_marked_id(entity),
@@ -730,10 +728,7 @@ async def list_chats(
             if hasattr(entity, "title"):
                 record["title"] = sanitize_name(entity.title)
             elif hasattr(entity, "first_name"):
-                name = f"{entity.first_name}"
-                if hasattr(entity, "last_name") and entity.last_name:
-                    name += f" {entity.last_name}"
-                record["name"] = sanitize_name(name)
+                record["name"] = sanitize_name(person_name(entity))
 
             record["type"] = get_entity_type(entity)
 
@@ -863,10 +858,7 @@ async def get_chat(chat_id: Union[int, str], account: Optional[str] = None) -> s
                 record["participants"] = None
 
         elif is_user:
-            name = f"{entity.first_name}"
-            if entity.last_name:
-                name += f" {entity.last_name}"
-            record["name"] = sanitize_name(name)
+            record["name"] = sanitize_name(person_name(entity))
             record["type"] = get_entity_type(entity)
             if entity.username:
                 record["username"] = entity.username
@@ -912,11 +904,7 @@ async def get_chat(chat_id: Union[int, str], account: Optional[str] = None) -> s
                 sender_name = "Unknown"
                 sender = getattr(last_msg, "sender", None)
                 if sender:
-                    sender_name = getattr(sender, "first_name", "") or getattr(
-                        sender, "title", "Unknown"
-                    )
-                    if getattr(sender, "last_name", None):
-                        sender_name += f" {sender.last_name}"
+                    sender_name = person_name(sender) or getattr(sender, "title", "Unknown")
                 sender_name = sanitize_name(sender_name.strip() or "Unknown")
                 record["last_message"] = {
                     "sender": sender_name,
