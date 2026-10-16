@@ -143,6 +143,14 @@ class TestSanitizeDict:
         result = sanitize_dict(data)
         assert result["a"]["b"]["c"]["d"] == "texthere"
 
+    def test_bytes_values_are_decoded_and_sanitized(self):
+        """bytes must get the same treatment as str, not survive raw
+        until the later _json_default decode."""
+        data = {"blob": b"\x1b[31mRED", "nested": {"b": b"caf\xc3\xa9\x00"}}
+        result = sanitize_dict(data)
+        assert result["blob"] == "[31mRED"
+        assert result["nested"]["b"] == "café"
+
 
 class TestFormatToolResult:
     def test_empty_results(self):
