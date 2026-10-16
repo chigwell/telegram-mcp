@@ -466,8 +466,10 @@ async def test_transcribe_via_groq_normalizes_audio_file_extension(
     monkeypatch, ext_in, expected_filename
 ):
     """Groq API audio transcription only accepts [flac mp3 mp4 mpeg mpga m4a ogg opus wav webm].
-    Telegram voice notes arrive as .oga, which Groq rejects with 400 unsupported_audio_format.
-    Naming the upload as .ogg satisfies Groq while preserving the identical audio content (issue #219).
+    Telegram voice notes arrive as .oga, which Groq rejects with 400
+    unsupported_audio_format.
+    Naming the upload as .ogg satisfies Groq while preserving the identical
+    audio content (issue #219).
     """
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
     calls = []

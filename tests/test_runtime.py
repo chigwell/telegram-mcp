@@ -1808,7 +1808,8 @@ def test_resolve_session_path_resolves_in_subdirectory(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "PROJECT_ROOT", str(fake_root))
     monkeypatch.chdir(sub_dir)
 
-    # Even if the file does not exist yet, running from a subdirectory resolves against project root
+    # Even if the file does not exist yet, running from a subdirectory
+    # resolves against project root
     resolved = runtime._resolve_session_path("new_account")
     assert resolved == str(fake_root / "new_account")
 

@@ -16,7 +16,8 @@ from telegram_mcp.runtime import *
 from telegram_mcp.runner import _main, main
 from telegram_mcp.tools import *
 
-# Backward-compatible alias for callers/tests that monkeypatch main.SERVER_ALLOWED_ROOTS / main.ALLOWED_CHAT_IDS.
+# Backward-compatible alias for callers/tests that monkeypatch
+# main.SERVER_ALLOWED_ROOTS / main.ALLOWED_CHAT_IDS.
 SERVER_ALLOWED_ROOTS = _runtime.SERVER_ALLOWED_ROOTS
 ALLOWED_CHAT_IDS = _runtime.ALLOWED_CHAT_IDS
 
