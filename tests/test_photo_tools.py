@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from mcp.server.fastmcp import Image
 from PIL import Image as PillowImage
+from telethon.tl import types
 
 from telegram_mcp import contact_sheet, runtime
 from telegram_mcp.photo_source import PhotoReference
@@ -132,7 +133,7 @@ async def test_open_photo_fetches_and_downloads_only_the_requested_message(patch
     class SinglePhotoClient:
         async def get_messages(self, entity, *, ids):
             calls.append(("get_messages", ids))
-            return SimpleNamespace(id=ids, photo=photo)
+            return SimpleNamespace(id=ids, photo=photo, media=types.MessageMediaPhoto(photo=photo))
 
         async def download_media(self, requested_photo, *, file):
             assert requested_photo is photo
