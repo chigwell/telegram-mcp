@@ -130,6 +130,11 @@ async def find_photo_reference(
     resolved_source = validate_source(source)
     if resolved_source == MESSAGE_SOURCE and identifier is not None:
         message = await client.get_messages(entity, ids=identifier)
+        # `Message.photo` also exposes web-page preview images, but this id
+        # space is defined by InputMessagesFilterPhotos, which only matches
+        # attached photos (same convention as get_media_label).
+        if not isinstance(getattr(message, "media", None), types.MessageMediaPhoto):
+            return None
         photo = getattr(message, "photo", None)
         if photo is None:
             return None

@@ -42,9 +42,10 @@ class _ServiceMessage:
 
 
 class _PhotoMessage:
-    def __init__(self, message_id, photo, caption="", date=None):
+    def __init__(self, message_id, photo, caption="", date=None, media=None):
         self.id = message_id
         self.photo = photo
+        self.media = media if media is not None else types.MessageMediaPhoto(photo=photo)
         self.message = caption
         self.date = date
 
@@ -175,6 +176,30 @@ async def test_find_missing_or_non_photo_message_does_not_scan_history(messages)
 
     assert found is None
     assert client.message_requests == [(entity, None, None, 9001)]
+
+
+@pytest.mark.asyncio
+async def test_web_preview_image_is_not_returned_as_a_message_photo():
+    """A link preview is outside the InputMessagesFilterPhotos id space (#304)."""
+    webpage = types.WebPage(
+        id=1, url="https://youtu.be/x", display_url="youtube.com", hash=0, photo=_Photo(777)
+    )
+    # Telethon's Message.photo exposes the web-preview image; list_photos,
+    # which defines the message-id space, does not list such messages.
+    message = _PhotoMessage(
+        42,
+        webpage.photo,
+        media=types.MessageMediaWebPage(webpage=webpage),
+    )
+    entity = _Channel()
+    client = _Client(messages=[message])
+
+    found = await photo_source.find_photo_reference(
+        client, entity, photo_source.MESSAGE_SOURCE, 42, 100
+    )
+
+    assert found is None
+    assert client.message_requests == [(entity, None, None, 42)]
 
 
 @pytest.mark.asyncio
