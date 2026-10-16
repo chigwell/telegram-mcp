@@ -3,6 +3,7 @@
 import asyncio
 import os
 import stat
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1058,3 +1059,38 @@ async def test_whisper_inference_failure_is_error(monkeypatch, fake_whisper):
 
     assert result["status"] == "error"
     assert "bad audio" in result["error"]
+
+
+def test_default_cache_falls_back_to_a_user_cache_when_cwd_is_unusable(tmp_path, monkeypatch):
+    # A server started by an MCP client often has a read-only working directory. A regular
+    # file named "data" makes the relative default unusable even for root.
+    workdir = tmp_path / "cwd"
+    workdir.mkdir()
+    (workdir / "data").write_text("not a directory")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.chdir(workdir)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("TELEGRAM_TRANSCRIPT_CACHE_DIR", raising=False)
+
+    path = transcription.cache_dir()
+
+    assert path == home / ".cache" / "telegram-mcp" / "transcripts"
+    assert path.is_dir()
+
+
+def test_default_cache_stays_in_the_working_directory_when_it_is_writable(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TELEGRAM_TRANSCRIPT_CACHE_DIR", raising=False)
+
+    assert transcription.cache_dir() == Path("data/transcripts")
+    assert (tmp_path / "data" / "transcripts").is_dir()
+
+
+def test_explicit_cache_dir_that_cannot_be_created_still_fails(tmp_path, monkeypatch):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("file")
+    monkeypatch.setenv("TELEGRAM_TRANSCRIPT_CACHE_DIR", str(blocker / "cache"))
+
+    with pytest.raises(OSError):
+        transcription.cache_dir()

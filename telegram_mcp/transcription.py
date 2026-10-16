@@ -252,10 +252,25 @@ def _too_large(size: int, limit: int, cfg: HttpEngineConfig) -> dict:
     }
 
 
+DEFAULT_CACHE_DIR = "data/transcripts"
+
+
 def cache_dir() -> Path:
-    raw = os.getenv("TELEGRAM_TRANSCRIPT_CACHE_DIR", "data/transcripts")
-    d = Path(raw)
-    d.mkdir(parents=True, exist_ok=True)
+    raw = os.getenv("TELEGRAM_TRANSCRIPT_CACHE_DIR")
+    if raw:
+        d = Path(raw)
+        d.mkdir(parents=True, exist_ok=True)
+    else:
+        # The default is relative to the working directory, which is wherever the MCP client
+        # started the server: often "/" or another read-only folder when the installed
+        # `telegram-mcp` script is used. Fall back to a per-user cache instead of failing
+        # every listing that contains a voice message.
+        d = Path(DEFAULT_CACHE_DIR)
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            d = Path.home() / ".cache" / "telegram-mcp" / "transcripts"
+            d.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(d, 0o700)
     except OSError:
