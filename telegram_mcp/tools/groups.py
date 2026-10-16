@@ -653,6 +653,17 @@ async def promote_admin(
         cl = get_client(account)
         chat = await resolve_entity(group_id, cl)
         user = await resolve_entity(user_id, cl)
+        if isinstance(chat, types.Chat):
+            # Basic groups have a single admin level: there are no per-right settings.
+            await cl(
+                functions.messages.EditChatAdminRequest(
+                    chat_id=chat.id, user_id=utils.get_input_user(user), is_admin=True
+                )
+            )
+            return (
+                f"Successfully promoted user {user_id} to admin in {sanitize_name(chat.title)} "
+                "(a basic group has one admin level, so rights were not applied)."
+            )
 
         # Set default admin rights if not provided
         if not rights:
@@ -729,6 +740,13 @@ async def demote_admin(
         cl = get_client(account)
         chat = await resolve_entity(group_id, cl)
         user = await resolve_entity(user_id, cl)
+        if isinstance(chat, types.Chat):
+            await cl(
+                functions.messages.EditChatAdminRequest(
+                    chat_id=chat.id, user_id=utils.get_input_user(user), is_admin=False
+                )
+            )
+            return f"Successfully demoted user {user_id} from admin in {sanitize_name(chat.title)}"
 
         # Create empty admin rights (regular user)
         admin_rights = ChatAdminRights(
@@ -789,6 +807,8 @@ async def ban_user(
     try:
         cl = get_client(account)
         chat = await resolve_entity(chat_id, cl)
+        if isinstance(chat, types.Chat):
+            return BASIC_GROUP_NO_BANS
         user = await resolve_entity(user_id, cl)
 
         # Create banned rights (all restrictions enabled)
@@ -849,6 +869,8 @@ async def unban_user(
     try:
         cl = get_client(account)
         chat = await resolve_entity(chat_id, cl)
+        if isinstance(chat, types.Chat):
+            return BASIC_GROUP_NO_BANS
         user = await resolve_entity(user_id, cl)
 
         # Create unbanned rights (no restrictions)
@@ -1257,8 +1279,11 @@ async def get_admins(chat_id: Union[int, str], account: Optional[str] = None) ->
     try:
         cl = get_client(account)
         await ensure_connected(cl)
-        # Fix: Use the correct filter type ChannelParticipantsAdmins
-        participants = await cl.get_participants(chat_id, filter=ChannelParticipantsAdmins())
+        entity = await resolve_entity(chat_id, cl)
+        if isinstance(entity, types.Chat):
+            participants = await _basic_group_admins(cl, entity)
+        else:
+            participants = await cl.get_participants(entity, filter=ChannelParticipantsAdmins())
         records = []
         for p in participants:
             rec = {
@@ -1274,6 +1299,29 @@ async def get_admins(chat_id: Union[int, str], account: Optional[str] = None) ->
         return format_tool_result(records) if records else "No admins found."
     except Exception as e:
         return log_and_format_error("get_admins", e, chat_id=chat_id)
+
+
+BASIC_GROUP_NO_BANS = (
+    "Error: chat_id is a basic group, which has no ban list. Use remove_user to remove a "
+    "member, or convert the group to a supergroup first."
+)
+
+
+async def _basic_group_admins(cl, chat) -> list:
+    """Creator and admins of a basic group, read from its participant list.
+
+    Telegram's participant filters only exist for supergroups and channels; for a basic group
+    Telethon ignores the filter and returns every member.
+    """
+    full = await cl(functions.messages.GetFullChatRequest(chat_id=chat.id))
+    users = {user.id: user for user in full.users}
+    participants = getattr(full.full_chat.participants, "participants", [])
+    return [
+        users[p.user_id]
+        for p in participants
+        if isinstance(p, (types.ChatParticipantCreator, types.ChatParticipantAdmin))
+        and p.user_id in users
+    ]
 
 
 def _format_admin_rights(admin_rights) -> dict:
@@ -1367,8 +1415,10 @@ async def get_banned_users(chat_id: Union[int, str], account: Optional[str] = No
     try:
         cl = get_client(account)
         await ensure_connected(cl)
-        # Fix: Use the correct filter type ChannelParticipantsKicked
-        participants = await cl.get_participants(chat_id, filter=ChannelParticipantsKicked(q=""))
+        entity = await resolve_entity(chat_id, cl)
+        if isinstance(entity, types.Chat):
+            return "No banned users: a basic group has no ban list."
+        participants = await cl.get_participants(entity, filter=ChannelParticipantsKicked(q=""))
         records = []
         for p in participants:
             rec = {
