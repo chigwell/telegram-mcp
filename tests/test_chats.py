@@ -147,7 +147,7 @@ async def test_get_chats_titles_users_with_last_name(monkeypatch):
     from telethon.tl.types import User
 
     dialogs = [
-        SimpleNamespace(entity=User(id=555, first_name="", last_name="Иванов"), unread_count=0),
+        SimpleNamespace(entity=User(id=555, first_name="", last_name="Ivanov"), unread_count=0),
         SimpleNamespace(
             entity=User(id=556, first_name="Alice", last_name="Smith"), unread_count=0
         ),
@@ -166,6 +166,6 @@ async def test_get_chats_titles_users_with_last_name(monkeypatch):
     data = json.loads(result)
 
     titles = {r["chat_id"]: r["title"] for r in data["results"]}
-    assert titles[555] == "Иванов"
+    assert titles[555] == "Ivanov"
     assert titles[556] == "Alice Smith"
     assert titles[557] == "Bob"
