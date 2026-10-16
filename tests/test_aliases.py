@@ -56,9 +56,7 @@ def test_save_aliases_creates_missing_override_directory(monkeypatch, tmp_path):
 
     runtime.save_aliases({"андрей": 12345})
 
-    assert runtime.load_aliases() == {
-        "андрей": {"id": 12345, "name": None, "account": None}
-    }
+    assert runtime.load_aliases() == {"андрей": {"id": 12345, "name": None, "account": None}}
 
 
 def test_update_aliases_creates_missing_override_directory(monkeypatch, tmp_path):
