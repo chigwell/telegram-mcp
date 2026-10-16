@@ -120,7 +120,7 @@ def test_text_presentation_signs_with_vs16_are_accepted(emoji):
     # Signs and RGI emoji scattered between the emoji blocks (ℹ in letterlike,
     # ⤴ in supplemental arrows, 〽 in CJK symbols, ㊙ in enclosed CJK) become
     # emoji with an explicit U+FE0F variation selector and must not regress.
-    # ℹ additionally needs the letter-form exemption: U+2139 is Lo, so
+    # ℹ additionally needs the letter-form exemption: U+2139 is Ll, so
     # isalnum() is True for it, unlike every other emoji base.
     entities, error = _result(f"{emoji} x", [{"emoji": emoji, "id": WINE_ID}])
     assert error is None

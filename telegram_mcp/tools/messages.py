@@ -622,7 +622,7 @@ def _looks_like_emoji(text: str) -> bool:
         char.isspace()
         or (char.isalnum() and char != "ℹ" and not _is_keycap_base(text, i))
         for i, char in enumerate(text)
-    )  # U+2139 INFORMATION SOURCE is the only letter-form emoji (Lo, not So)
+    )  # U+2139 INFORMATION SOURCE is the only letter-form emoji (Ll, not So)
 
 
 def _inside_longer_emoji(text: str, start: int, end: int) -> bool:
