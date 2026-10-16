@@ -216,7 +216,7 @@ async def get_contact_chats(contact_id: Union[int, str], account: Optional[str] 
 
         # Look for direct chat
         for dialog in dialogs:
-            if isinstance(dialog.entity, User) and dialog.entity.id == contact_id:
+            if isinstance(dialog.entity, User) and dialog.entity.id == contact.id:
                 record = {"chat_id": get_marked_id(dialog.entity), "type": "Private"}
                 if dialog.unread_count:
                     record["unread"] = dialog.unread_count
