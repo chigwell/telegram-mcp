@@ -585,16 +585,17 @@ def _is_keycap_base(text: str, i: int) -> bool:
 def _is_emoji_char(char: str) -> bool:
     """An emoji code point or an emoji-sequence component (VS16 or ZWJ).
 
-    Emoji blocks, listed instead of the old U+2100 floor: letterlike signs
-    (\u2116 \u2122), math operators and control pictures are not emoji. Coarse on
-    purpose \u2014 not a full Unicode emoji inventory. The keycap mark U+20E3 is
-    deliberately absent: it only counts via its base.
+    Emoji blocks and the RGI emoji scattered between them, listed instead of the
+    old U+2100 floor: letterlike signs (\u2116 \u2122), math operators and control
+    pictures are not emoji. Coarse on purpose \u2014 not a full Unicode emoji
+    inventory. The keycap mark U+20E3 is deliberately absent: it only counts via
+    its base.
     """
     code = ord(char)
-    return char in "\u200d\ufe0f" or (
+    return char in "\u200d\ufe0f\u2139\u2934\u2935\u3030\u303d\u3297\u3299" or (
         0x2190 <= code <= 0x21FF  # arrows (\u2194 \u2195 \u2026, mostly with VS16)
         or 0x2300 <= code <= 0x23FF  # misc technical (\u231a \u231b \u23f0 \u2026)
-        or 0x2460 <= code <= 0x24FF  # enclosed alphanumerics (\u24c2 \u3297 \u3299 \u2026)
+        or 0x2460 <= code <= 0x24FF  # enclosed alphanumerics (\u24c2 \u2026)
         or 0x25A0 <= code <= 0x27BF  # geometric shapes, misc symbols, dingbats
         or 0x2B00 <= code <= 0x2BFF  # misc symbols and arrows (\u2b50 \u2b55 \u2026)
         or 0x1F000 <= code <= 0x1FAFF  # astral emoji blocks
@@ -618,9 +619,10 @@ def _looks_like_emoji(text: str) -> bool:
     ):
         return False  # plain punctuation and signs such as "\u2116" or "#" would just mark text
     return not any(
-        char.isspace() or (char.isalnum() and not _is_keycap_base(text, i))
+        char.isspace()
+        or (char.isalnum() and char != "ℹ" and not _is_keycap_base(text, i))
         for i, char in enumerate(text)
-    )
+    )  # U+2139 INFORMATION SOURCE is the only letter-form emoji (Lo, not So)
 
 
 def _inside_longer_emoji(text: str, start: int, end: int) -> bool:
