@@ -1,0 +1,30 @@
+[flake8]
+# Aligned with [tool.black] line-length = 99 in pyproject.toml: flagging
+# black-formatted lines at 88 produced ~1,000 permanent false positives
+# (see #318).
+#
+# E203/W503 are black-style conflicts (slices, compound statements).
+# F401/F403/F405 come from the deliberate star-import architecture
+# (main.py and runner.py re-export runtime/tools; every tool module
+# resolves names through them) — hundreds of hits, zero signal.
+# runtime.py imports after env/lock setup on purpose -> E402.
+max-line-length = 99
+max-complexity = 10
+extend-ignore =
+    # whitespace before ':' in slices; line break before binary operator
+    E203,
+    W503,
+    # star-import re-export pattern (see comment above)
+    F401,
+    F403,
+    F405
+per-file-ignores =
+    telegram_mcp/runtime.py: E402
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    build,
+    dist,
+    mutants,
+    docs/source/conf.py

@@ -201,7 +201,10 @@ def engine_config_error(engine: str) -> Optional[str]:
     Checked before any download, so a misconfigured engine costs nothing.
     """
     if engine == "groq" and not os.getenv("GROQ_API_KEY"):
-        return "GROQ_API_KEY is not configured on this server. Use another engine or set GROQ_API_KEY."
+        return (
+            "GROQ_API_KEY is not configured on this server. "
+            "Use another engine or set GROQ_API_KEY."
+        )
     if engine == "openai" and not os.getenv("TELEGRAM_TRANSCRIBE_OPENAI_URL", "").strip():
         return (
             "TELEGRAM_TRANSCRIBE_OPENAI_URL is not configured on this server. Set it to the "
@@ -714,9 +717,10 @@ async def transcribe_cached(
 # ---------------------------------------------------------------------------
 #
 # Groq is not a free call like native transcription: each voice message costs
-# a download + upload (and a self-hosted engine costs CPU time). Without a budget, get_history(limit=100) on a chat with
-# a few dozen voice messages would turn into a few dozen downloads/uploads on
-# every read. See TELEGRAM_TRANSCRIBE_MAX_VOICES / _MAX_SECONDS.
+# a download + upload (and a self-hosted engine costs CPU time). Without a
+# budget, get_history(limit=100) on a chat with a few dozen voice messages
+# would turn into a few dozen downloads/uploads on every read.
+# See TELEGRAM_TRANSCRIBE_MAX_VOICES / _MAX_SECONDS.
 
 
 class TranscribeBudget:
@@ -830,7 +834,10 @@ def render_voice_text(info: dict) -> str:
     label = f"voice {format_duration(info['duration'])}"
     status = info["transcript_status"]
     if status == "ready":
-        return f"{label} | transcript ({info['transcript_source']}, not verbatim): {info['transcript']}"
+        return (
+            f"{label} | transcript ({info['transcript_source']}, not verbatim): "
+            f"{info['transcript']}"
+        )
     if status == "pending":
         return f"{label} | transcript pending"
     return label

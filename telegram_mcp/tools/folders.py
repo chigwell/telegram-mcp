@@ -191,7 +191,10 @@ async def get_folder_snapshot(account: Optional[str] = None) -> str:
                 "folders": states,
                 "folder_order": [f["id"] for f in states],
                 "tags_enabled": getattr(result, "tags_enabled", None),
-                "scope": "folder definitions only; shared invite state and chat state are not restorable",
+                "scope": (
+                    "folder definitions only; shared invite state and chat "
+                    "state are not restorable"
+                ),
             },
             indent=2,
         )
@@ -383,7 +386,10 @@ async def update_folder(
         if chats_limit is not None and (
             len(included) > chats_limit or len(excluded) > chats_limit
         ):
-            return f"Error: explicit peer count exceeds the configured per-folder limit ({chats_limit})."
+            return (
+                f"Error: explicit peer count exceeds the configured "
+                f"per-folder limit ({chats_limit})."
+            )
         pin_limit = limits["pinned_per_folder"]
         if pin_limit is not None and len(updated.pinned_peers) > pin_limit:
             return (
@@ -943,7 +949,10 @@ async def delete_folder(folder_id: int, account: Optional[str] = None) -> str:
         await ensure_connected(cl)
         # System folders (id < 2) cannot be deleted
         if folder_id < 2:
-            return f"Cannot delete system folder (ID {folder_id}). Only custom folders can be deleted."
+            return (
+                f"Cannot delete system folder (ID {folder_id}). "
+                "Only custom folders can be deleted."
+            )
 
         # Check if folder exists
         result = await cl(functions.messages.GetDialogFiltersRequest())
@@ -966,7 +975,10 @@ async def delete_folder(folder_id: int, account: Optional[str] = None) -> str:
         # Delete by passing None as filter
         await cl(functions.messages.UpdateDialogFilterRequest(id=folder_id, filter=None))
 
-        return f"Folder '{sanitize_name(folder_title)}' (ID {folder_id}) deleted. Chats are preserved."
+        return (
+            f"Folder '{sanitize_name(folder_title)}' (ID {folder_id}) deleted. "
+            "Chats are preserved."
+        )
     except Exception as e:
         return log_and_format_error("delete_folder", e, ErrorCategory.FOLDER, folder_id=folder_id)
 
