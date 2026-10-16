@@ -39,6 +39,16 @@ def test_apply_alias_passes_through_unknown_values():
 def test_load_aliases_missing_or_corrupt_file(tmp_path):
     assert runtime.load_aliases() == {}
 
+    path = runtime.aliases_file_path()
+    path.write_text("not json")
+    assert runtime.load_aliases() == {}
+
+    path.write_text('["a list, not an object"]')
+    assert runtime.load_aliases() == {}
+
+    path.write_text('{"ok": 5, "bad": {"id": "not-an-int"}}')
+    assert _ids(runtime.load_aliases()) == {"ok": 5}  # bad row skipped, good row kept
+
 
 def test_save_aliases_creates_missing_override_directory(monkeypatch, tmp_path):
     nested = tmp_path / "missing" / "nested" / "aliases.json"
@@ -58,16 +68,6 @@ def test_update_aliases_creates_missing_override_directory(monkeypatch, tmp_path
     runtime.update_aliases(lambda aliases: aliases.setdefault("андрей", 12345))
 
     assert runtime.load_aliases()["андрей"]["id"] == 12345
-
-    path = runtime.aliases_file_path()
-    path.write_text("not json")
-    assert runtime.load_aliases() == {}
-
-    path.write_text('["a list, not an object"]')
-    assert runtime.load_aliases() == {}
-
-    path.write_text('{"ok": 5, "bad": {"id": "not-an-int"}}')
-    assert _ids(runtime.load_aliases()) == {"ok": 5}  # bad row skipped, good row kept
 
 
 def test_save_and_load_roundtrip_normalizes_keys():
