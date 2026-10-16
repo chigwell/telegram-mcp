@@ -773,6 +773,33 @@ async def get_photo_sheet(
         )
 
 
+_INSPECT_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+_INSPECT_TEXT_EXTENSIONS = {
+    ".txt",
+    ".csv",
+    ".json",
+    ".md",
+    ".log",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".html",
+}
+
+
+def _sniff_image_format(data: bytes) -> Optional[str]:
+    """Image format from the file signature, limited to what the Claude API accepts."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Inspect Document",
@@ -806,26 +833,40 @@ async def inspect_document(
         if not msg or not msg.media:
             return "There is no attached document or media file in the specified message."
 
+        filename = getattr(msg.file, "name", "") or ""
+        mime_type = getattr(msg.file, "mime_type", "") or ""
+        ext = Path(filename).suffix.lower()
+
+        is_image = mime_type.startswith("image/") or ext in _INSPECT_IMAGE_EXTENSIONS
+        is_pdf = mime_type == "application/pdf" or ext == ".pdf"
+        is_text = mime_type.startswith("text/") or ext in _INSPECT_TEXT_EXTENSIONS
+        if not (is_image or is_pdf or is_text):
+            # Nothing below can read it, so do not download it just to say so.
+            return (
+                f"File format '{filename}' ({mime_type}) "
+                "is not currently supported for direct text analysis."
+            )
+
         # Downloading the file strictly into memory (bytes)
         data = await cl.download_media(msg, file=bytes)
         if not data:
             return "Failed to read the contents of the document."
 
-        filename = getattr(msg.file, "name", "") or ""
-        mime_type = getattr(msg.file, "mime_type", "") or ""
-        ext = Path(filename).suffix.lower()
-
         # 1. If this is an image or scan
-        if mime_type.startswith("image/") or ext in {".jpg", ".jpeg", ".png", ".webp"}:
-            fmt = (
-                "png"
-                if (ext == ".png" or mime_type == "image/png")
-                else ("webp" if (ext == ".webp" or mime_type == "image/webp") else "jpeg")
-            )
+        if is_image:
+            # The declared type and the extension are not trustworthy (a GIF sent as
+            # "smile.jpg", HEIC, BMP ...), and a wrong media type makes the Claude API
+            # reject the image: name the format from the bytes.
+            fmt = _sniff_image_format(data)
+            if fmt is None:
+                return (
+                    f"Image '{filename}' ({mime_type}) is not in a format Claude can view; "
+                    "supported formats are JPEG, PNG, GIF and WebP."
+                )
             return Image(data=data, format=fmt)
 
         # 2. If this is a PDF
-        if mime_type == "application/pdf" or ext == ".pdf":
+        if is_pdf:
             try:
                 reader = PdfReader(io.BytesIO(data))
                 del data
@@ -857,17 +898,7 @@ async def inspect_document(
                 )
 
         # 3. If this is a text file (TXT, CSV, JSON, MD, LOG, etc.)
-        if mime_type.startswith("text/") or ext in {
-            ".txt",
-            ".csv",
-            ".json",
-            ".md",
-            ".log",
-            ".yaml",
-            ".yml",
-            ".xml",
-            ".html",
-        }:
+        if is_text:
             try:
                 text_content = data.decode("utf-8")
             except UnicodeDecodeError:
