@@ -173,9 +173,7 @@ async def get_direct_chat_by_contact(contact_query: str, account: Optional[str] 
                     records.append(record)
                     break
         if not records:
-            found_names = ", ".join(
-                [sanitize_name(person_name(c)) for c in found_contacts]
-            )
+            found_names = ", ".join([sanitize_name(person_name(c)) for c in found_contacts])
             return f"Found contacts: {found_names}, but no direct chats were found with them."
         return format_tool_result(records)
     except Exception as e:
