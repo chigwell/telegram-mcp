@@ -2640,8 +2640,27 @@ def _parse_allowed_roots_env(value: Optional[str]) -> List[str]:
     if not value or not value.strip():
         return []
     raw = value.strip()
-    tokens = re.split(r"[;,]|(?<!\b[a-zA-Z]):", raw)
+    tokens: List[str] = []
+    start = 0
+    for match in re.finditer(r"[;,:]", raw):
+        index = match.start()
+        if match.group() == ":" and _is_drive_colon(raw, index):
+            continue
+        tokens.append(raw[start:index])
+        start = index + 1
+    tokens.append(raw[start:])
     return [part.strip("\"' \t\r\n") for part in tokens if part.strip("\"' \t\r\n")]
+
+
+def _is_drive_colon(raw: str, index: int) -> bool:
+    """True for the colon of a Windows drive prefix such as C:\\path.
+
+    The single letter must start the value or a list entry; a one-letter folder at the end of
+    a POSIX path (/data/a:/data/b) is just a folder followed by a separator.
+    """
+    if index < 1 or not (raw[index - 1].isascii() and raw[index - 1].isalpha()):
+        return False
+    return index == 1 or raw[index - 2] in ";, \t\r\n\"'"
 
 
 def _configure_allowed_roots_from_cli(argv: Optional[List[str]] = None) -> None:
