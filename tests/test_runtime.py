@@ -88,6 +88,29 @@ def test_get_exposed_tools_mode_rejects_invalid_value(monkeypatch):
     assert "read-only" in message
 
 
+def test_missing_api_credentials_exit_with_readable_error(monkeypatch, capsys):
+    monkeypatch.delenv("TELEGRAM_API_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_API_HASH", raising=False)
+
+    with pytest.raises(SystemExit) as excinfo:
+        runtime._require_api_credentials()
+
+    assert excinfo.value.code == 1
+    err = capsys.readouterr().err
+    assert "TELEGRAM_API_ID and TELEGRAM_API_HASH must be set" in err
+    assert "my.telegram.org" in err  # hint, not a bare traceback
+
+
+def test_non_integer_api_id_exits_with_readable_error(monkeypatch, capsys):
+    monkeypatch.setenv("TELEGRAM_API_ID", "not-a-number")
+    monkeypatch.setenv("TELEGRAM_API_HASH", "hash")
+
+    with pytest.raises(SystemExit):
+        runtime._require_api_credentials()
+
+    assert "TELEGRAM_API_ID must be an integer" in capsys.readouterr().err
+
+
 def _synthetic_mcp_with_two_writes():
     server = _synthetic_mcp()
 
