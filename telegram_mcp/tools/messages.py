@@ -2011,6 +2011,20 @@ async def edit_message(
         )
 
 
+async def _ids_outside_chat(cl, entity, message_ids: List[int]) -> List[int]:
+    """Return the IDs in message_ids that are not messages of this chat.
+
+    Private chats and basic groups share one account-wide message counter, so Telegram
+    deletes there by bare ID and would remove the message from whichever chat holds it,
+    for both sides. Telethon's get_messages(entity, ids=...) yields None for an ID that
+    belongs to another chat. Channel deletes are scoped by Telegram itself.
+    """
+    if isinstance(entity, Channel):
+        return []
+    found = await cl.get_messages(entity, ids=list(message_ids))
+    return [message_id for message_id, msg in zip(message_ids, found) if msg is None]
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Delete Message", openWorldHint=True, destructiveHint=True, idempotentHint=True
@@ -2022,11 +2036,13 @@ async def delete_message(
     chat_id: Union[int, str], message_id: int, account: Optional[str] = None
 ) -> str:
     """
-    Delete a message by ID.
+    Delete a message by ID. The message must belong to chat_id; otherwise nothing is deleted.
     """
     try:
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
+        if await _ids_outside_chat(cl, entity, [message_id]):
+            return f"Message {message_id} is not in chat {chat_id}; nothing was deleted."
         await cl.delete_messages(entity, message_id)
         return f"Message {message_id} deleted."
     except Exception as e:
@@ -2097,7 +2113,8 @@ async def delete_messages_bulk(
     account: Optional[str] = None,
 ) -> str:
     """
-    Delete multiple messages in a single call.
+    Delete multiple messages in a single call. If any ID is not a message of chat_id,
+    nothing is deleted.
 
     Args:
         chat_id: Chat ID or username.
@@ -2108,6 +2125,12 @@ async def delete_messages_bulk(
         cl = get_client(account)
         await ensure_connected(cl)
         entity = await resolve_entity(chat_id, cl)
+        outside = await _ids_outside_chat(cl, entity, message_ids)
+        if outside:
+            return (
+                f"Message(s) {', '.join(map(str, outside))} are not in chat {chat_id}; "
+                "nothing was deleted."
+            )
         if isinstance(entity, Channel):
             result = await cl(
                 functions.channels.DeleteMessagesRequest(channel=entity, id=message_ids)
