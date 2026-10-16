@@ -1092,7 +1092,7 @@ except Exception:
 
 # File-path tool security configuration
 SERVER_ALLOWED_ROOTS: list[Path] = []
-DEFAULT_DOWNLOAD_SUBDIR = "downloads"
+DEFAULT_DOWNLOAD_SUBDIR = os.getenv("TELEGRAM_DOWNLOAD_SUBDIR", "downloads").strip()
 DISALLOWED_PATH_PATTERNS = ("*", "?", "[", "]", "{", "}", "~", "\x00")
 _DEFAULT_EXTENSION_ALLOWLISTS: dict[str, set[str]] = {
     "send_voice": {".ogg", ".opus"},
@@ -2562,7 +2562,15 @@ async def _resolve_writable_file_path(
             candidate = _first_resolution_root(roots) / candidate
     else:
         safe_name = Path(default_filename).name
-        candidate = _first_resolution_root(roots) / DEFAULT_DOWNLOAD_SUBDIR / safe_name
+        first_root = _first_resolution_root(roots)
+        subdir = os.getenv("TELEGRAM_DOWNLOAD_SUBDIR", DEFAULT_DOWNLOAD_SUBDIR).strip()
+        if subdir and subdir != ".":
+            if first_root.name.lower() == subdir.lower():
+                candidate = first_root / safe_name
+            else:
+                candidate = first_root / subdir / safe_name
+        else:
+            candidate = first_root / safe_name
 
     candidate = candidate.resolve(strict=False)
     parent = candidate.parent.resolve(strict=False)

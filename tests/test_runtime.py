@@ -1300,6 +1300,69 @@ async def test_more_file_resolution_edges(tmp_path, monkeypatch):
     assert error == "Path is outside allowed roots."
 
 
+@pytest.mark.asyncio
+async def test_resolve_writable_file_path_default_avoids_nested_downloads(tmp_path, monkeypatch):
+    downloads_root = (tmp_path / "Downloads").resolve()
+    downloads_root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [downloads_root])
+    monkeypatch.delenv("TELEGRAM_DOWNLOAD_SUBDIR", raising=False)
+
+    out_path, error = await runtime._resolve_writable_file_path(
+        raw_path=None,
+        default_filename="photo.jpg",
+        ctx=None,
+        tool_name="download_media",
+    )
+    assert error is None
+    assert out_path == downloads_root / "photo.jpg"
+
+
+@pytest.mark.asyncio
+async def test_resolve_writable_file_path_default_uses_downloads_subdir_on_other_roots(
+    tmp_path, monkeypatch
+):
+    other_root = (tmp_path / "workspace").resolve()
+    other_root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [other_root])
+    monkeypatch.delenv("TELEGRAM_DOWNLOAD_SUBDIR", raising=False)
+
+    out_path, error = await runtime._resolve_writable_file_path(
+        raw_path=None,
+        default_filename="photo.jpg",
+        ctx=None,
+        tool_name="download_media",
+    )
+    assert error is None
+    assert out_path == other_root / "downloads" / "photo.jpg"
+
+
+@pytest.mark.asyncio
+async def test_resolve_writable_file_path_custom_and_empty_download_subdir(tmp_path, monkeypatch):
+    other_root = (tmp_path / "workspace").resolve()
+    other_root.mkdir()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [other_root])
+
+    monkeypatch.setenv("TELEGRAM_DOWNLOAD_SUBDIR", "custom_inbox")
+    out_path, error = await runtime._resolve_writable_file_path(
+        raw_path=None,
+        default_filename="doc.pdf",
+        ctx=None,
+        tool_name="download_media",
+    )
+    assert error is None
+    assert out_path == other_root / "custom_inbox" / "doc.pdf"
+
+    monkeypatch.setenv("TELEGRAM_DOWNLOAD_SUBDIR", "")
+    out_path_empty, error = await runtime._resolve_writable_file_path(
+        raw_path=None,
+        default_filename="doc.pdf",
+        ctx=None,
+        tool_name="download_media",
+    )
+    assert error is None
+    assert out_path_empty == other_root / "doc.pdf"
+
+
 def test_roots_unsupported_detection():
     assert runtime._is_roots_unsupported_error(NotImplementedError()) is True
     assert runtime._is_roots_unsupported_error(AttributeError("missing list_roots")) is True
