@@ -63,6 +63,7 @@ try:
 except ImportError:  # pragma: no cover - Windows fallback
     fcntl = None
 
+from telegram_mcp.account_labels import canonical_account_label
 from telegram_mcp.singleton import try_lock_exclusive
 
 from functools import wraps
@@ -805,10 +806,12 @@ def _discover_accounts() -> dict[str, TelegramClient]:
 
     for key, value in os.environ.items():
         if key.startswith(prefix_str) and value:
-            label = key[len(prefix_str) :].lower()
+            # Fold the suffix so MY-WORK and MY_WORK spellings land on the same
+            # account the migrator and the generator write about.
+            label = canonical_account_label(key[len(prefix_str) :])
             accounts[label] = _build_client(StringSession(value), label)
         elif key.startswith(prefix_name) and value:
-            label = key[len(prefix_name) :].lower()
+            label = canonical_account_label(key[len(prefix_name) :])
             accounts[label] = _build_client(_resolve_session_path(value), label)
 
     # Backward-compatible unsuffixed variables. A pool (TELEGRAM_SESSION_STRINGS)
@@ -847,7 +850,7 @@ def get_client(account: str = None) -> TelegramClient:
         if len(clients) == 1:
             return next(iter(clients.values()))
         raise ValueError(f"Account is required. Available accounts: {', '.join(clients.keys())}")
-    label = account.lower()
+    label = canonical_account_label(account)
     if label not in clients:
         raise ValueError(
             f"Unknown account '{account}'. Available accounts: {', '.join(clients.keys())}"
