@@ -566,6 +566,19 @@ def test_discover_accounts_exits_when_no_sessions_configured(monkeypatch):
         runtime._discover_accounts()
 
 
+def test_discover_accounts_folds_dash_labels_to_underscores(monkeypatch):
+    """MY-WORK and MY_WORK env spellings must land on the same account label."""
+    _clear_session_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_SESSION_STRING_MY-WORK", "work-session")
+    monkeypatch.setattr(runtime, "TelegramClient", _FakeTelegramClient)
+    monkeypatch.setattr(runtime, "StringSession", lambda value: f"StringSession:{value}")
+
+    accounts = runtime._discover_accounts()
+
+    assert list(accounts) == ["my_work"]
+    assert accounts["my_work"].args[0] == "StringSession:work-session"
+
+
 def _clear_proxy_env(monkeypatch):
     for key in list(runtime.os.environ):
         if key.startswith("TELEGRAM_PROXY_"):

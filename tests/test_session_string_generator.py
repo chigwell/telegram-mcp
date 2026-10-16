@@ -300,3 +300,24 @@ def test_env_update_keeps_utf8_file_under_windows_locale(monkeypatch, tmp_path):
     assert env_file.read_text(encoding="utf-8") == (
         original + "TELEGRAM_SESSION_STRING=NEWSESSION\n"
     )
+
+
+def test_dash_account_label_suggests_shell_safe_env_var(monkeypatch, capsys):
+    # The suggested variable must be the one the migrator and the server read:
+    # `export TELEGRAM_SESSION_STRING_MY-WORK=...` is not valid shell syntax.
+    monkeypatch.setattr("sys.argv", ["session_string_generator.py", "--qr"])
+    monkeypatch.setenv("TELEGRAM_API_ID", "1")
+    monkeypatch.setenv("TELEGRAM_API_HASH", "hash")
+    monkeypatch.setattr(session_string_generator, "_harden_stdio", lambda: None)
+    monkeypatch.setattr(session_string_generator, "_check_installation", lambda: None)
+    monkeypatch.setattr(session_string_generator, "client_identity_kwargs", dict)
+    monkeypatch.setattr(session_string_generator, "TelegramClient", _AuthorizedClient)
+    monkeypatch.setattr(session_string_generator, "StringSession", _FakeStringSession)
+    answers = iter(["my-work", "n"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    session_string_generator.main()
+
+    out = capsys.readouterr().out
+    assert "TELEGRAM_SESSION_STRING_MY_WORK=NEWSESSION" in out
+    assert "MY-WORK" not in out

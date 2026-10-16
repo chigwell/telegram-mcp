@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import SQLiteSession, StringSession
 
+from telegram_mcp.account_labels import canonical_account_label
 from telegram_mcp.client_identity import client_identity_kwargs
 from telegram_mcp.install_guard import UnsafeInstallationError, assert_safe_distribution
 
@@ -62,12 +63,11 @@ def _env_names(account: Optional[str]) -> tuple[str, str, str]:
     if not label or not label.replace("-", "").replace("_", "").isalnum():
         raise ValueError("account label may contain only letters, numbers, '-' and '_'")
 
-    suffix = label.upper().replace("-", "_")
-    filename_label = label.lower().replace("-", "_")
+    canonical = canonical_account_label(label)
     return (
-        f"TELEGRAM_SESSION_STRING_{suffix}",
-        f"TELEGRAM_SESSION_NAME_{suffix}",
-        f"telegram_mcp_session_{filename_label}",
+        f"TELEGRAM_SESSION_STRING_{canonical.upper()}",
+        f"TELEGRAM_SESSION_NAME_{canonical.upper()}",
+        f"telegram_mcp_session_{canonical}",
     )
 
 
