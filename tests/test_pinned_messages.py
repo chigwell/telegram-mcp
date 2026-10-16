@@ -44,7 +44,12 @@ class PinnedServer(TelegramClient):
         self.limits.append(request.limit)
         found = self.pinned[: request.limit]
         return types.messages.ChannelMessages(
-            pts=1, count=len(self.pinned), messages=found, topics=[], chats=[CHANNEL], users=[ALICE]
+            pts=1,
+            count=len(self.pinned),
+            messages=found,
+            topics=[],
+            chats=[CHANNEL],
+            users=[ALICE],
         )
 
 
