@@ -526,14 +526,18 @@ async def import_contacts(contacts: list, account: Optional[str] = None) -> str:
     Import a list of contacts. Each contact should be a dict with phone, first_name, last_name.
     """
     try:
+        if not all(
+            isinstance(c, dict) and c.get("phone") and c.get("first_name") for c in contacts
+        ):
+            return "Error: every contact needs a 'phone' and a 'first_name'; nothing was imported."
         cl = get_client(account)
         await ensure_connected(cl)
         input_contacts = [
-            functions.contacts.InputPhoneContact(
+            types.InputPhoneContact(
                 client_id=i,
                 phone=c["phone"],
                 first_name=c["first_name"],
-                last_name=c.get("last_name", ""),
+                last_name=c.get("last_name") or "",
             )
             for i, c in enumerate(contacts)
         ]
