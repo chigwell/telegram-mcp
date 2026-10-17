@@ -686,8 +686,12 @@ async def create_folder(
                     peer = await resolve_input_entity(chat_id, cl)
                 except Exception:
                     return "Failed to resolve a requested chat."
-                if is_chat_allowlist_enabled() and not (
-                    is_chat_allowed(chat_id) or is_chat_allowed(utils.get_peer_id(peer))
+                # Saved Messages (InputPeerSelf) is the account's own chat: no allowlist
+                # check, and utils.get_peer_id() cannot cast that peer anyway.
+                if (
+                    is_chat_allowlist_enabled()
+                    and not isinstance(peer, types.InputPeerSelf)
+                    and not (is_chat_allowed(chat_id) or is_chat_allowed(utils.get_peer_id(peer)))
                 ):
                     return check_chat_access(chat_id)
                 include_peers.append(peer)

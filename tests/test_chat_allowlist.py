@@ -551,6 +551,57 @@ async def test_create_folder_refuses_unallowed_chat_ids(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_group_admin_tool_lets_an_allowlisted_group_through(monkeypatch):
+    # The widened CHAT_PARAM_NAMES must not block a group that is on the allowlist.
+    reached = []
+
+    async def resolve(identifier, cl=None):
+        reached.append(identifier)
+        raise RuntimeError("stop here: the allowlist check has passed")
+
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "-1005550000000")
+    monkeypatch.setattr(groups, "get_client", lambda account=None: object())
+    monkeypatch.setattr(groups, "resolve_entity", resolve)
+
+    res = await groups.invite_to_group(group_id=-1005550000000, user_ids=[101], account=None)
+
+    assert reached == [-1005550000000]
+    assert "restricted by privacy policy" not in res
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowlist", ["", "101"], ids=["no-allowlist", "allowlist"])
+async def test_create_folder_accepts_saved_messages(monkeypatch, allowlist):
+    from telethon.tl.types import InputPeerSelf
+
+    class FolderClient:
+        def __init__(self):
+            self.requests = []
+
+        async def __call__(self, request):
+            self.requests.append(request)
+            return SimpleNamespace(filters=[])
+
+    async def fake_resolve_input(chat_id, cl=None):
+        return InputPeerSelf()
+
+    client = FolderClient()
+    if allowlist:
+        monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", allowlist)
+    else:
+        monkeypatch.delenv("TELEGRAM_ALLOWED_CHAT_IDS", raising=False)
+    monkeypatch.setattr(folders, "get_client", lambda account=None: client)
+    monkeypatch.setattr(folders, "resolve_input_entity", fake_resolve_input)
+
+    res = await folders.create_folder(title="Notes", chat_ids=["me"], account=None)
+
+    assert "restricted by privacy policy" not in res
+    created = [r for r in client.requests if type(r).__name__ == "UpdateDialogFilterRequest"]
+    assert len(created) == 1
+    assert isinstance(created[0].filter.include_peers[0], InputPeerSelf)
+
+
+@pytest.mark.asyncio
 async def test_get_common_chats_hides_unallowed_chats(monkeypatch):
     allowed, forbidden = _channel(1111111111, "Allowed Team"), _channel(2222222222, "Board")
 
