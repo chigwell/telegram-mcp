@@ -107,7 +107,8 @@ The cache lives in `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default `data/transcripts`),
   - `get_folder_snapshot` captures folder definitions/order, including title entities, display fields, flags, stable peer IDs and ordered pins, without access hashes or chat contents. Its private-folder `definition` objects can be passed as restoration patches; shared invites and account/chat state are outside this snapshot's scope.
   - `update_folder(folder_id, patch, expected_revision?)` edits an existing private folder in place, preserving omitted fields. Peer lists replace only the specified list; `[]` clears it. For example, `{"title": "Projects", "exclude_archived": false}` renames the folder and allows archived chats through its rules without unarchiving anything. Save a snapshot before editing and use its `revision` to reject stale plans. Shared/system folders are refused; avoid concurrent folder editors because Telegram has no atomic compare-and-swap.
 
-- **Events:** wait for incoming messages with debounce (`wait_for_new_message`, `wait_for_settled_message`), optionally for one chat only via `chat_id` — without it any unrelated conversation wakes the wait — or enable the opt-in incoming event feed for callback-style delivery (see below).
+- **Events:** wait for incoming private messages with debounce (`wait_for_new_message`, `wait_for_settled_message`), optionally for one chat only via `chat_id` — without it any unrelated conversation wakes the wait. `wait_for_chat_message` blocks on one group or supergroup and returns the message (text, sender, media); `timeout=-1` waits with no deadline, `after_message_id` skips what you already handled. Or enable the opt-in incoming event feed for callback-style private delivery (see below).
+- **Stickers:** `get_sticker_sets` lists installed packs with the `short_name` you need; `get_sticker_pack` shows a pack's stickers with document IDs, 1-based indexes, fallback emoji and format; `preview_sticker` renders one inline; `send_sticker` sends either a local `.webp` or a sticker straight from a pack (`pack` + `index`/`document_id`), with no file path involved in pack mode.
 
 All tool results that include Telegram user-controlled content are sanitized and, where practical, returned as structured JSON.
 
@@ -665,7 +666,7 @@ bypassing the proxy.
 
 ## File Path Security
 
-File-path and media tools (`send_file`, `download_media`, `upload_file`, `send_voice`, `send_sticker`, `set_profile_photo`, `edit_chat_photo`, and `send_album`) are registered and supported, but remain strictly disabled by default until allowed roots are configured (safe-by-default to prevent unauthorized file access).
+File-path and media tools (`send_file`, `download_media`, `upload_file`, `send_voice`, `send_sticker`, `set_profile_photo`, `edit_chat_photo`, and `send_album`) are registered and supported, but remain strictly disabled by default until allowed roots are configured (safe-by-default to prevent unauthorized file access). `send_sticker`'s pack mode (`pack` with `index` or `document_id`) never touches the filesystem and therefore works without allowed roots. `preview_sticker` follows the same rule until `save_path` is passed.
 
 Allowed roots can come from:
 

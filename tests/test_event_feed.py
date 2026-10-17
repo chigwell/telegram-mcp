@@ -6,6 +6,7 @@ import os
 import stat
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,6 +32,7 @@ def _pending_record(last_ts, count=2, name="Client"):
 @pytest.fixture(autouse=True)
 def _clean_state(monkeypatch, tmp_path):
     monkeypatch.setattr(events, "_pending_msgs", {})
+    monkeypatch.setattr(events, "_pending_group_msgs", {})
     monkeypatch.setattr(events, "_feed_task", None)
     monkeypatch.setattr(events, "_activity_event", None)
     monkeypatch.setattr(events, "_feed_settle_ms", 6000)
@@ -315,3 +317,100 @@ def _target(chat_id):
         return chat_id if value is not None else None
 
     return _resolve
+
+
+def _group_event(
+    chat_id, message_id, text="", is_private=False, media=None, sender=None, out=False
+):
+    sender = sender or SimpleNamespace(
+        bot=False, is_self=False, id=111, username="vanya", first_name="Ваня"
+    )
+
+    async def get_sender():
+        return sender
+
+    message = SimpleNamespace(
+        id=message_id,
+        message=text,
+        media=media,
+        photo=media if media == "photo" else None,
+        out=out,
+        reply_to=None,
+        date=None,
+        web_preview=None,
+        sticker=None,
+        voice=None,
+        video_note=None,
+        video=None,
+        audio=None,
+        gif=None,
+        document=None,
+        contact=None,
+        geo=None,
+        poll=None,
+        file=None,
+    )
+    return SimpleNamespace(
+        is_private=is_private,
+        chat_id=chat_id,
+        message=message,
+        get_sender=get_sender,
+    )
+
+
+@pytest.mark.asyncio
+async def test_group_message_is_queued_apart_from_private(monkeypatch):
+    monkeypatch.setattr(events, "_wait_target", _target(-100))
+    await events._on_new_incoming(_group_event(42, 1, "private", is_private=True))
+    await events._on_new_incoming(_group_event(-100, 9, "в чате", media="photo"))
+
+    assert -100 in events._pending_group_msgs
+    assert 42 not in events._pending_group_msgs
+    assert 42 in events._pending_msgs
+
+    hit = json.loads(
+        await events.wait_for_chat_message(chat_id=-100, timeout=0.2, after_message_id=0)
+    )
+    assert hit["event"] is True
+    assert hit["message_id"] == 9
+    assert hit["text"] == "в чате"
+    assert hit["media"] == "photo"
+    assert hit["sender_id"] == 111
+    assert -100 not in events._pending_group_msgs
+
+
+@pytest.mark.asyncio
+async def test_group_wait_skips_seen_self_and_bots(monkeypatch):
+    monkeypatch.setattr(events, "_wait_target", _target(-100))
+    me = SimpleNamespace
+    await events._on_new_incoming(_group_event(-100, 5, "старое"))
+    await events._on_new_incoming(
+        _group_event(-100, 6, "я", sender=me(bot=False, is_self=True, id=1, username="me"))
+    )
+    await events._on_new_incoming(
+        _group_event(-100, 7, "бот", sender=me(bot=True, is_self=False, id=2, username="b"))
+    )
+
+    timed_out = json.loads(
+        await events.wait_for_chat_message(chat_id=-100, timeout=0.15, after_message_id=5)
+    )
+    assert timed_out["event"] is False
+    assert timed_out["reason"] == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_group_wait_negative_timeout_does_not_expire(monkeypatch):
+    monkeypatch.setattr(events, "_wait_target", _target(-100))
+
+    async def speak_later():
+        await asyncio.sleep(0.2)
+        await events._on_new_incoming(_group_event(-100, 3, "позже"))
+
+    task = asyncio.create_task(speak_later())
+    hit = json.loads(
+        await events.wait_for_chat_message(chat_id=-100, timeout=-1, after_message_id=0)
+    )
+    await task
+    assert hit["event"] is True
+    assert hit["message_id"] == 3
+    assert hit["text"] == "позже"

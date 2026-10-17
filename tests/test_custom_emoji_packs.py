@@ -15,13 +15,13 @@ from telegram_mcp.runtime import mcp
 from telegram_mcp.tools import custom_emoji, stickers
 from telegram_mcp.tools.custom_emoji import (
     extract_pack_short_name,
-    get_custom_emoji_pack,
     get_custom_emoji_packs,
     preview_custom_emoji,
 )
+from telegram_mcp.tools.stickers import get_sticker_pack
 
 _get_custom_emoji_packs = inspect.unwrap(get_custom_emoji_packs)
-_get_custom_emoji_pack = inspect.unwrap(get_custom_emoji_pack)
+_get_sticker_pack = inspect.unwrap(get_sticker_pack)
 _preview_custom_emoji = inspect.unwrap(preview_custom_emoji)
 
 EMOJI_DOC_ID = 5368324170671202286
@@ -89,20 +89,25 @@ def _mock_custom_emoji_doc(
 # ---------------------------------------------------------
 def test_tools_are_registered_and_read_only():
     registered = {t.name: t for t in mcp._tool_manager.list_tools()}
-    assert "get_custom_emoji_packs" in registered
-    assert "get_custom_emoji_pack" in registered
-    assert "preview_custom_emoji" in registered
+    readonly = (
+        "get_custom_emoji_packs",
+        "preview_custom_emoji",
+        "get_sticker_sets",
+        "get_sticker_pack",
+        "preview_sticker",
+    )
+    for name in readonly:
+        assert name in registered
+        assert registered[name].annotations.readOnlyHint is True
+    assert registered["send_sticker"].annotations.readOnlyHint is False
 
-    assert registered["get_custom_emoji_packs"].annotations.readOnlyHint is True
-    assert registered["get_custom_emoji_pack"].annotations.readOnlyHint is True
-    assert registered["preview_custom_emoji"].annotations.readOnlyHint is True
 
-
-def test_stickers_alias_exports():
+def test_stickers_module_exports():
     assert stickers.extract_pack_short_name is extract_pack_short_name
-    assert stickers.get_custom_emoji_packs is get_custom_emoji_packs
-    assert stickers.get_custom_emoji_pack is get_custom_emoji_pack
-    assert stickers.preview_custom_emoji is preview_custom_emoji
+    assert stickers.get_sticker_pack is get_sticker_pack
+    assert stickers.get_sticker_sets.__name__ == "get_sticker_sets"
+    assert stickers.preview_sticker.__name__ == "preview_sticker"
+    assert stickers.send_sticker.__name__ == "send_sticker"
 
 
 # ---------------------------------------------------------
@@ -216,10 +221,10 @@ async def test_get_custom_emoji_packs_error(monkeypatch):
 
 
 # ---------------------------------------------------------
-# Test: get_custom_emoji_pack
+# Test: get_sticker_pack
 # ---------------------------------------------------------
 @pytest.mark.asyncio
-async def test_get_custom_emoji_pack_success(monkeypatch):
+async def test_get_sticker_pack_success(monkeypatch):
     cl = AsyncMock()
     s_meta = _mock_sticker_set(
         id=100, title="Duck Pack", short_name="duck_pack", count=2, emojis=True
@@ -236,10 +241,10 @@ async def test_get_custom_emoji_pack_success(monkeypatch):
         set=s_meta, packs=packs, keywords=[], documents=[doc1, doc2]
     )
 
-    monkeypatch.setattr(custom_emoji, "get_client", lambda account=None: cl)
-    monkeypatch.setattr(custom_emoji, "ensure_connected", AsyncMock())
+    monkeypatch.setattr(stickers, "get_client", lambda account=None: cl)
+    monkeypatch.setattr(stickers, "ensure_connected", AsyncMock())
 
-    result_json = await _get_custom_emoji_pack("https://t.me/addemoji/duck_pack")
+    result_json = await _get_sticker_pack("https://t.me/addemoji/duck_pack")
     data = json.loads(result_json)
 
     assert data["pack"]["id"] == "100"
@@ -248,39 +253,39 @@ async def test_get_custom_emoji_pack_success(monkeypatch):
     assert data["pack"]["is_emoji"] is True
     assert data["pack"]["url"] == "https://t.me/addemoji/duck_pack"
 
-    emojis = data["emojis"]
-    assert len(emojis) == 2
+    entries = data["stickers"]
+    assert len(entries) == 2
 
-    assert emojis[0]["document_id"] == "101"
-    assert emojis[0]["alt"] == "🦆"
-    assert emojis[0]["emoji"] == "🦆"
-    assert emojis[0]["free"] is True
-    assert emojis[0]["format"] == "static"
-    assert emojis[0]["mime_type"] == "image/webp"
+    assert entries[0]["index"] == 1
+    assert entries[0]["document_id"] == "101"
+    assert entries[0]["alt"] == "🦆"
+    assert entries[0]["format"] == "static"
+    assert entries[0]["mime_type"] == "image/webp"
+    assert entries[0]["is_emoji"] is True
 
-    assert emojis[1]["document_id"] == "102"
-    assert emojis[1]["alt"] == "🔥"
-    assert emojis[1]["free"] is False
-    assert emojis[1]["format"] == "animated"
-    assert emojis[1]["mime_type"] == "application/x-tgsticker"
+    assert entries[1]["index"] == 2
+    assert entries[1]["document_id"] == "102"
+    assert entries[1]["alt"] == "🔥"
+    assert entries[1]["format"] == "animated"
+    assert entries[1]["mime_type"] == "application/x-tgsticker"
 
 
 @pytest.mark.asyncio
-async def test_get_custom_emoji_pack_invalid_input():
-    res = await _get_custom_emoji_pack("")
+async def test_get_sticker_pack_invalid_input():
+    res = await _get_sticker_pack("")
     assert "Invalid pack name or URL provided." in res
 
 
 @pytest.mark.asyncio
-async def test_get_custom_emoji_pack_not_found(monkeypatch):
+async def test_get_sticker_pack_not_found(monkeypatch):
     cl = AsyncMock()
     cl.side_effect = StickersetInvalidError(request=None)
 
-    monkeypatch.setattr(custom_emoji, "get_client", lambda account=None: cl)
-    monkeypatch.setattr(custom_emoji, "ensure_connected", AsyncMock())
+    monkeypatch.setattr(stickers, "get_client", lambda account=None: cl)
+    monkeypatch.setattr(stickers, "ensure_connected", AsyncMock())
 
-    res = await _get_custom_emoji_pack("NonExistentPack")
-    assert "Emoji pack 'NonExistentPack' not found or is invalid." in res
+    res = await _get_sticker_pack("NonExistentPack")
+    assert "Sticker pack 'NonExistentPack' not found or is invalid." in res
 
 
 # ---------------------------------------------------------
