@@ -70,6 +70,21 @@ Telegram enforces voting permissions and restrictions on changing quiz votes.
 
 - **Contacts:** list, search, add, delete, block, unblock, import, export, inspect direct chats, find recent contact interactions, and remember contacts by the names you actually use (see below).
 
+### Typing indicators
+
+`send_typing(chat_id, seconds=5, topic_id=None, account=None)` sends a temporary typing
+indicator without sending a message. Duration must be 0.5 to 45 seconds; the tool blocks
+until it finishes, so call it before `send_message` or `reply_to_message`, not in parallel.
+It refreshes the indicator at intervals of at most four seconds and attempts to clear it
+on completion, failure, or cancellation. `topic_id` targets a specific forum topic.
+
+Overlapping calls for the same account, peer, and topic are rejected rather than cancelling
+each other's indicators. Flood waits are not slept through automatically for these RPCs;
+the typing phase has a 50-second timeout and cleanup a separate three-second timeout.
+A failed cleanup is reported explicitly. Successful RPC responses confirm Telegram accepted
+the requests, not that another client's UI displayed them. This is a write operation and
+respects the existing account routing and chat allowlist.
+
 ### Remembered contacts
 
 `set_contact_alias` teaches the server what you call someone, and every tool that takes a `chat_id` understands it from then on — `send_message("андрей бекендер", ...)` just works. A contact can carry any number of aliases, which is how tags work: save both `андрей бекендер` and `бекендер` for the same person and either resolves.
