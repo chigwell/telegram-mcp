@@ -278,7 +278,7 @@ async def test_profile_resolution_warning_omits_identifier_and_exception(monkeyp
             key="status", allow_users=["@profile_user_secret"]
         )
 
-    assert result == "Privacy settings for status updated successfully."
+    assert result == "Error: Could not find a requested user; privacy settings were not changed."
     assert "profile-exception-secret" not in caplog.text
     assert "profile_user_secret" not in caplog.text
 
