@@ -3116,14 +3116,15 @@ async def export_unread_messages(
             except Exception:
                 unread_count = 0
 
-            # Retrieve all unread messages in pages of 100
+            # Retrieve all unread messages in pages of 100. With unread_count == 0
+            # nothing is unread: skip the loop instead of walking the whole history.
             exported_msgs: list = []
             collected = 0
 
-            while True:
+            while unread_count:
                 batch = await cl.get_messages(
                     entity,
-                    limit=min(100, max(unread_count - collected, 1) if unread_count else 100),
+                    limit=min(100, max(unread_count - collected, 1)),
                     add_offset=collected,
                 )
                 if not batch:
