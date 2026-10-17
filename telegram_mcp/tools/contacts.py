@@ -150,6 +150,8 @@ async def get_direct_chat_by_contact(contact_query: str, account: Optional[str] 
                 or (phone and contact_query in phone)
             ):
                 found_contacts.append(contact)
+        if is_chat_allowlist_enabled():
+            found_contacts = [c for c in found_contacts if is_chat_allowed(get_marked_id(c), c)]
         if not found_contacts:
             return f"No contacts found matching '{contact_query}'."
         # If we found contacts, look for direct chats with them
@@ -231,6 +233,8 @@ async def get_contact_chats(contact_id: Union[int, str], account: Optional[str] 
         try:
             common = await cl.get_common_chats(contact)
             for chat in common:
+                if is_chat_allowlist_enabled() and not is_chat_allowed(get_marked_id(chat), chat):
+                    continue
                 records.append(
                     {
                         "chat_id": get_marked_id(chat),

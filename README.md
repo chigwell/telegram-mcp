@@ -748,6 +748,7 @@ When `TELEGRAM_ALLOWED_CHAT_IDS` is set:
 - **`list_chats` / `get_chats`:** Only chats matching the allowlist are returned; all other conversations remain completely invisible to the agent.
 - **Messaging & Chat Tools (`send_message`, `get_messages`, `get_chat`, `create_poll`, etc.):** Any attempt to interact with a chat outside the allowlist is rejected with a structured error message: `Access to chat '<chat_id>' is restricted by privacy policy (TELEGRAM_ALLOWED_CHAT_IDS)`.
 - **Search & Drafts (`search_global`, `get_drafts`):** Global searches and draft listings omit unallowed conversations.
+- **Contact, folder & group-admin tools:** a chat named by `contact_id` or `group_id` (`get_last_interaction`, `get_contact_chats`, `invite_to_group`, `promote_admin`, `demote_admin`) is checked like `chat_id`; `get_common_chats`, `get_contact_chats`, `get_direct_chat_by_contact` and `get_folder` leave unallowed chats out of their results; `create_folder` refuses unallowed `chat_ids`.
 - **Incoming Events:** Notifications and debounce feeds only process events from allowed chats.
 
 If `TELEGRAM_ALLOWED_CHAT_IDS` is unset or empty, the server operates in unrestricted mode (default), preserving 100% backward compatibility.
