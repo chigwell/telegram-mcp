@@ -132,11 +132,15 @@ async def get_privacy_settings(account: Optional[str] = None) -> str:
         return log_and_format_error("get_privacy_settings", e)
 
 
+class _PrivacyRefusal(ValueError):
+    """A deliberate refusal; its message is static text that is safe to show to the agent."""
+
+
 def _input_privacy_rule(rule):
     """The Input* form of a non-user PrivacyValue* rule read back from Telegram."""
     twin = getattr(types, "Input" + type(rule).__name__, None)
     if twin is None:
-        raise ValueError("Unsupported privacy rule; refusing to drop it.")
+        raise _PrivacyRefusal("Unsupported privacy rule; refusing to drop it.")
     chats = getattr(rule, "chats", None)
     return twin(chats=list(chats)) if chats is not None else twin()
 
@@ -153,7 +157,7 @@ def _merged_privacy_rules(current, allow, disallow):
     for rule in current.rules:
         if isinstance(rule, (types.PrivacyValueAllowUsers, types.PrivacyValueDisallowUsers)):
             if any(user_id not in known for user_id in rule.users):
-                raise ValueError("Privacy rule names a user Telegram did not return.")
+                raise _PrivacyRefusal("Privacy rule names a user Telegram did not return.")
             bucket = allowed if isinstance(rule, types.PrivacyValueAllowUsers) else disallowed
             bucket.update((user_id, known[user_id]) for user_id in rule.users)
         else:
@@ -191,7 +195,8 @@ async def set_privacy_settings(
     The main choice set in Telegram (everybody / my contacts / nobody) and every
     exception already there are kept. allow_users can see the item even when the main
     choice hides it from them; disallow_users cannot see it even when the main choice
-    shows it. A user named in one list is removed from the other. Nothing changes
+    shows it. A user named in both lists ends up in disallow_users; a user already in
+    the opposite list is moved. Nothing changes
     unless every user is found.
 
     Args:
@@ -225,6 +230,10 @@ async def set_privacy_settings(
                     return None
                 if not isinstance(user, User):
                     return None
+                if user.is_self:
+                    # utils.get_input_user would give InputUserSelf, which has no user_id,
+                    # and an exception for your own account means nothing anyway.
+                    raise _PrivacyRefusal("Your own account cannot be a privacy exception.")
                 users.append(utils.get_input_user(user))
             return users
 
@@ -237,6 +246,13 @@ async def set_privacy_settings(
         rules = _merged_privacy_rules(current, allow, disallow)
         await cl(functions.account.SetPrivacyRequest(key=privacy_key, rules=rules))
         return f"Privacy settings for {key} updated successfully."
+    except _PrivacyRefusal as e:
+        return log_and_format_error(
+            "set_privacy_settings",
+            e,
+            user_message=f"Error: {e} Privacy settings were not changed.",
+            key=key,
+        )
     except Exception as e:
         return log_and_format_error("set_privacy_settings", e, key=key)
 

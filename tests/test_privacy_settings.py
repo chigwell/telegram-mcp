@@ -103,3 +103,46 @@ async def test_without_users_nothing_is_sent(monkeypatch):
 
     assert result.startswith("Error: Pass allow_users and/or disallow_users.")
     assert client.sent == []
+
+
+@pytest.mark.asyncio
+async def test_own_account_is_refused_with_a_reason(monkeypatch):
+    client = install(monkeypatch, [types.PrivacyValueAllowAll()])
+    me = User(id=1, first_name="Me", is_self=True, access_hash=1)
+
+    async def resolve_me(identifier, cl=None):
+        return me
+
+    monkeypatch.setattr(profile, "resolve_entity", resolve_me)
+
+    result = await profile.set_privacy_settings(key="phone", disallow_users=["me"])
+
+    assert result == (
+        "Error: Your own account cannot be a privacy exception. "
+        "Privacy settings were not changed."
+    )
+    assert client.sent == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "current, reason",
+    [
+        (
+            [types.PrivacyValueAllowUsers(users=[999])],
+            "Privacy rule names a user Telegram did not return.",
+        ),
+        ([types.PrivacyValueAllowBots()], "Unsupported privacy rule; refusing to drop it."),
+    ],
+    ids=["unknown-user-in-rule", "unsupported-rule"],
+)
+async def test_refusals_tell_the_agent_why_nothing_changed(monkeypatch, current, reason):
+    client = install(monkeypatch, current)
+    if isinstance(current[0], types.PrivacyValueAllowBots):
+        # make sure this build has no Input twin, otherwise the rule would be accepted
+        monkeypatch.setattr(profile.types, "InputPrivacyValueAllowBots", None, raising=False)
+
+    result = await profile.set_privacy_settings(key="phone", disallow_users=["@ivan_k"])
+
+    assert result == f"Error: {reason} Privacy settings were not changed."
+    assert client.sent == []
