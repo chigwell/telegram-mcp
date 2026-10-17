@@ -127,10 +127,12 @@ async def get_custom_emoji_pack(
     account: Optional[str] = None,
 ) -> str:
     """
-    Open a custom emoji pack (by short name or t.me/addemoji/... link) and get its emoji with document IDs and fallback characters.
+    Open a custom emoji pack (by short name or t.me/addemoji/... link) and
+    get its emoji with document IDs and fallback characters.
 
     Args:
-        pack: The emoji pack short name or URL (e.g. 'AnimatedDogs', 't.me/addemoji/AnimatedDogs', 'https://t.me/addstickers/...').
+        pack: The emoji pack short name or URL (e.g. 'AnimatedDogs',
+            't.me/addemoji/AnimatedDogs', 'https://t.me/addstickers/...').
         account: Optional account alias or phone number.
     """
     try:
@@ -245,8 +247,10 @@ async def preview_custom_emoji(
     Preview or download a custom emoji by its Telegram document ID.
 
     Args:
-        document_id: Telegram document ID of the custom emoji (from get_custom_emoji_pack or message metadata).
-        thumbnail: If True, downloads the static thumbnail image preview (ideal for animated TGS and video WebM emojis).
+        document_id: Telegram document ID of the custom emoji (from
+        get_custom_emoji_pack or message metadata).
+        thumbnail: If True, downloads the static thumbnail image preview
+        (ideal for animated TGS and video WebM emojis).
         save_path: Optional path under allowed roots to save the preview or emoji file.
         account: Optional account alias or phone number.
     """
@@ -318,7 +322,8 @@ async def preview_custom_emoji(
             return f"Custom emoji {doc_id} downloaded and saved to {saved_path_str}."
 
         return (
-            f"Custom emoji {doc_id} has format '{ext.lstrip('.')}' ({getattr(doc, 'mime_type', 'unknown')}) "
+            f"Custom emoji {doc_id} has format '{ext.lstrip('.')}' "
+            f"({getattr(doc, 'mime_type', 'unknown')}) "
             "which cannot be rendered as a static image without thumbnail. "
             "Please call with thumbnail=True or provide save_path to download."
         )

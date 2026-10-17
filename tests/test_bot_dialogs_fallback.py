@@ -65,7 +65,8 @@ async def test_list_chats_bot_method_invalid_error_fallback(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_resolve_with_retries_swallows_bot_dialog_warm_error(monkeypatch):
-    """Verifies that _resolve_with_retries does not crash when get_dialogs raises BotMethodInvalidError."""
+    """Verifies that _resolve_with_retries does not crash when get_dialogs
+    raises BotMethodInvalidError."""
     client = FakeBotClient()
     resolved_entity = SimpleNamespace(id=12345, username="test_bot")
 

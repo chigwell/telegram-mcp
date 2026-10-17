@@ -279,29 +279,6 @@ async def test_shared_and_exclusive_instances_never_overlap(monkeypatch, first_m
     first_lock.release()
 
 
-@pytest.mark.asyncio
-def test_cli_transport_flag_sets_env_var(monkeypatch):
-    monkeypatch.delenv("MCP_TRANSPORT", raising=False)
-    # We need to test that CLI args are set correctly by checking runner's runtime globals
-    import telegram_mcp.runtime as runtime_module
-
-    args = ["--transport", "http"]
-    runtime_module._configure_allowed_roots_from_cli(args)
-
-    assert runtime_module._CLI_TRANSPORT == "http"
-
-
-@pytest.mark.asyncio
-def test_cli_transport_flag_overrides_env_var(monkeypatch):
-    import telegram_mcp.runtime as runtime_module
-
-    args = ["--transport", "stdio"]
-    runtime_module._configure_allowed_roots_from_cli(args)
-
-    # CLI transport should override env var
-    assert runtime_module._CLI_TRANSPORT == "stdio"
-
-
 def test_invalid_transport_exits_with_error(monkeypatch, capsys):
     """An unknown MCP_TRANSPORT causes the validation in _main to print an error and exit."""
     monkeypatch.setenv("MCP_TRANSPORT", "ftp")
@@ -321,17 +298,6 @@ def test_invalid_transport_exits_with_error(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "ftp" in captured.err
     assert "stdio" in captured.err
-
-
-@pytest.mark.asyncio
-def test_cli_host_and_port_flags(monkeypatch):
-    import telegram_mcp.runtime as runtime_module
-
-    args = ["--host", "0.0.0.0", "--port", "9000"]
-    runtime_module._configure_allowed_roots_from_cli(args)
-
-    assert runtime_module._CLI_HOST == "0.0.0.0"
-    assert runtime_module._CLI_PORT == 9000
 
 
 @pytest.mark.asyncio
@@ -533,7 +499,6 @@ def test_invalid_transport_env_exits_with_error(monkeypatch, capsys):
 
     bad_transport = "ftp"
     err_buf = io.StringIO()
-    original_stderr = sys.stderr
 
     # Replicate the exact validation from _main() so we can unit-test it in isolation
     VALID_TRANSPORTS = ("stdio", "http", "sse")

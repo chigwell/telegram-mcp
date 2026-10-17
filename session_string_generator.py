@@ -206,7 +206,8 @@ def main() -> None:
     print("This script will generate a session string for your Telegram account.")
     print("The generated session string can be added to your .env file.")
     print(
-        "\nYour credentials will NOT be stored on any server and are only used for local authentication.\n"
+        "\nYour credentials will NOT be stored on any server and are only "
+        "used for local authentication.\n"
     )
 
     try:
@@ -258,7 +259,8 @@ def main() -> None:
 
         try:
             choice = input(
-                "\nWould you like to automatically update your .env file with this session string? (y/N): "
+                "\nWould you like to automatically update your .env file "
+                "with this session string? (y/N): "
             )
         except EOFError:
             choice = "n"
