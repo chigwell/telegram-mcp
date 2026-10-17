@@ -493,6 +493,11 @@ async def list_folders(account: Optional[str] = None) -> str:
         return log_and_format_error("list_folders", e, ErrorCategory.FOLDER)
 
 
+def _hidden_by_allowlist(entity) -> bool:
+    """A folder lists chat names, so chats outside the allowlist must stay out of it."""
+    return is_chat_allowlist_enabled() and not is_chat_allowed(get_marked_id(entity), entity)
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Get Folder", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
 async def get_folder(folder_id: int, account: Optional[str] = None) -> str:
@@ -522,6 +527,8 @@ async def get_folder(folder_id: int, account: Optional[str] = None) -> str:
         for peer in getattr(target_folder, "include_peers", []):
             try:
                 entity = await resolve_entity(peer, cl)
+                if _hidden_by_allowlist(entity):
+                    continue
                 chat_info = {
                     "id": get_marked_id(entity),
                     "name": sanitize_name(
@@ -533,13 +540,16 @@ async def get_folder(folder_id: int, account: Optional[str] = None) -> str:
                     chat_info["username"] = entity.username
                 included_chats.append(chat_info)
             except Exception:
-                included_chats.append({"id": str(peer), "name": "Unknown", "type": "Unknown"})
+                if not is_chat_allowlist_enabled():  # an unknown chat cannot be checked
+                    included_chats.append({"id": str(peer), "name": "Unknown", "type": "Unknown"})
 
         # Resolve excluded peers
         excluded_chats = []
         for peer in getattr(target_folder, "exclude_peers", []):
             try:
                 entity = await resolve_entity(peer, cl)
+                if _hidden_by_allowlist(entity):
+                    continue
                 chat_info = {
                     "id": get_marked_id(entity),
                     "name": sanitize_name(
@@ -549,13 +559,16 @@ async def get_folder(folder_id: int, account: Optional[str] = None) -> str:
                 }
                 excluded_chats.append(chat_info)
             except Exception:
-                excluded_chats.append({"id": str(peer), "name": "Unknown", "type": "Unknown"})
+                if not is_chat_allowlist_enabled():  # an unknown chat cannot be checked
+                    excluded_chats.append({"id": str(peer), "name": "Unknown", "type": "Unknown"})
 
         # Resolve pinned peers
         pinned_chats = []
         for peer in getattr(target_folder, "pinned_peers", []):
             try:
                 entity = await resolve_entity(peer, cl)
+                if _hidden_by_allowlist(entity):
+                    continue
                 chat_info = {
                     "id": get_marked_id(entity),
                     "name": sanitize_name(
@@ -565,7 +578,8 @@ async def get_folder(folder_id: int, account: Optional[str] = None) -> str:
                 }
                 pinned_chats.append(chat_info)
             except Exception:
-                pinned_chats.append({"id": str(peer), "name": "Unknown", "type": "Unknown"})
+                if not is_chat_allowlist_enabled():  # an unknown chat cannot be checked
+                    pinned_chats.append({"id": str(peer), "name": "Unknown", "type": "Unknown"})
 
         # Handle title which can be str or TextWithEntities
         title = target_folder.title
@@ -670,9 +684,17 @@ async def create_folder(
             for chat_id in chat_ids:
                 try:
                     peer = await resolve_input_entity(chat_id, cl)
-                    include_peers.append(peer)
                 except Exception:
                     return "Failed to resolve a requested chat."
+                # Saved Messages (InputPeerSelf) is the account's own chat: no allowlist
+                # check, and utils.get_peer_id() cannot cast that peer anyway.
+                if (
+                    is_chat_allowlist_enabled()
+                    and not isinstance(peer, types.InputPeerSelf)
+                    and not (is_chat_allowed(chat_id) or is_chat_allowed(utils.get_peer_id(peer)))
+                ):
+                    return check_chat_access(chat_id)
+                include_peers.append(peer)
 
         # Create the folder (title must be TextWithEntities)
         title_obj = TextWithEntities(text=title, entities=[])

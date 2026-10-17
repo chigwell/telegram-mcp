@@ -1157,6 +1157,8 @@ async def get_common_chats(
         )
 
         chats = getattr(result, "chats", []) or []
+        if is_chat_allowlist_enabled():
+            chats = [chat for chat in chats if is_chat_allowed(get_marked_id(chat), chat)]
         if not chats:
             return f"No common chats found with user {user_id}."
 
