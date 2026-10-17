@@ -106,6 +106,40 @@ async def test_delete_messages_bulk_deletes_messages_of_the_chat(account):
 
 
 @pytest.mark.asyncio
+async def test_delete_message_in_a_channel_skips_the_ownership_lookup(monkeypatch):
+    channel = Channel(
+        id=1555000000, title="Team", photo=ChatPhotoEmpty(), date=NOW, megagroup=True
+    )
+
+    class ChannelClient:
+        def __init__(self):
+            self.deleted = None
+
+        async def get_messages(self, *args, **kwargs):
+            raise AssertionError("channel deletes are already scoped by Telegram")
+
+        async def delete_messages(self, entity, message_ids):
+            self.deleted = (entity, message_ids)
+
+    async def fake_resolve(chat_id, cl=None):
+        return channel
+
+    async def connected(cl=None):
+        return None
+
+    client = ChannelClient()
+    monkeypatch.delenv("TELEGRAM_ALLOWED_CHAT_IDS", raising=False)
+    monkeypatch.setattr(messages, "get_client", lambda account=None: client)
+    monkeypatch.setattr(messages, "resolve_entity", fake_resolve)
+    monkeypatch.setattr(messages, "ensure_connected", connected)
+
+    result = await messages.delete_message(chat_id=-1001555000000, message_id=7)
+
+    assert result == "Message 7 deleted."
+    assert client.deleted == (channel, 7)
+
+
+@pytest.mark.asyncio
 async def test_delete_messages_bulk_in_a_channel_skips_the_ownership_lookup(monkeypatch):
     channel = Channel(
         id=1555000000, title="Team", photo=ChatPhotoEmpty(), date=NOW, megagroup=True
