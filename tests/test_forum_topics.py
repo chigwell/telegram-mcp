@@ -111,9 +111,9 @@ async def test_create_forum_topic_requires_forum_enabled(monkeypatch):
 
     result = await chats.create_forum_topic(chat_id=12345, title="Dev")
 
-    assert (
-        result
-        == "The specified supergroup does not have forum topics enabled. Use enable_forum_topics first."
+    assert result == (
+        "The specified supergroup does not have forum topics enabled. "
+        "Use enable_forum_topics first."
     )
     assert client.requests == []
 
@@ -203,9 +203,9 @@ async def test_delete_forum_topic_requires_forum_enabled(monkeypatch):
 
     result = await chats.delete_forum_topic(chat_id=12345, topic_id=42)
 
-    assert (
-        result
-        == "The specified supergroup does not have forum topics enabled. Use enable_forum_topics first."
+    assert result == (
+        "The specified supergroup does not have forum topics enabled. "
+        "Use enable_forum_topics first."
     )
     assert client.requests == []
 

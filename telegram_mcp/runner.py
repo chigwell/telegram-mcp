@@ -222,7 +222,8 @@ async def _main() -> None:
                     await cl.get_dialogs()
                 except BotMethodInvalidError:
                     print(
-                        f"Skipping entity cache pre-warm for bot client '{label}' (dialogs restricted for bots).",
+                        f"Skipping entity cache pre-warm for bot client "
+                        f"'{label}' (dialogs restricted for bots).",
                         file=sys.stderr,
                     )
                 except Exception as exc:
@@ -234,7 +235,7 @@ async def _main() -> None:
             except Exception as warm_exc:
                 print(f"Entity cache warm failed: {warm_exc}", file=sys.stderr)
 
-        warm_task = asyncio.create_task(_warm_caches())
+        asyncio.create_task(_warm_caches())
 
         transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
 
@@ -253,7 +254,8 @@ async def _main() -> None:
             host = os.getenv("MCP_HOST", "127.0.0.1")
             port = os.getenv("MCP_PORT", "8765")
             print(
-                f"Telegram client(s) started ({labels}). Running MCP server ({transport}) on {host}:{port}...",
+                f"Telegram client(s) started ({labels}). Running MCP server "
+                f"({transport}) on {host}:{port}...",
                 file=sys.stderr,
             )
         else:
