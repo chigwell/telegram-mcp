@@ -1,5 +1,7 @@
 """Messages MCP tools."""
 
+import math
+
 from telegram_mcp.runtime import *
 from telegram_mcp import transcription
 from pydantic import StrictInt
@@ -2236,6 +2238,102 @@ async def unpin_all_messages(chat_id: Union[int, str], account: Optional[str] = 
         return log_and_format_error("unpin_all_messages", e, chat_id=chat_id)
 
 
+# Telegram drops a typing indicator after ~5s, so anything longer has to be refreshed. The cap
+# keeps a single call well under the ~55s MCP tool timeout.
+TYPING_REFRESH_SECONDS = 4.0
+TYPING_MAX_SECONDS = 45.0
+TYPING_OPERATION_TIMEOUT = 50.0
+TYPING_CLEANUP_TIMEOUT = 3.0
+_active_typing = set()
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Send Typing", openWorldHint=True, destructiveHint=False, idempotentHint=True
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def send_typing(
+    chat_id: Union[int, str],
+    seconds: float = 5.0,
+    topic_id: Optional[int] = None,
+    account: Optional[str] = None,
+) -> str:
+    """
+    Show the "typing..." indicator in a chat for a number of seconds, then clear it.
+    Call it right before send_message / reply_to_message so the message does not land instantly.
+    It blocks for `seconds`, so run it before the send, not in parallel with it.
+
+    Args:
+        chat_id: The ID or username of the chat.
+        seconds: How long to show the indicator, 0.5 to 45 (default 5).
+        topic_id: Forum topic ID, so the indicator shows inside that topic only.
+    """
+    try:
+        if type(seconds) not in (int, float) or not 0.5 <= seconds <= TYPING_MAX_SECONDS:
+            return f"seconds must be between 0.5 and {TYPING_MAX_SECONDS:g}."
+        if topic_id is not None and (type(topic_id) is not int or topic_id <= 0):
+            return "Error: topic_id must be a positive integer."
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+            err = check_chat_access(chat_id, entity)
+            return log_and_format_error(
+                "send_typing",
+                ChatAccessDeniedError(err),
+                prefix=ErrorCategory.PRIVACY,
+                user_message=err,
+                chat_id=chat_id,
+            )
+
+        peer = await resolve_input_entity(chat_id, cl)
+        typing = functions.messages.SetTypingRequest(
+            peer=peer, action=types.SendMessageTypingAction(), top_msg_id=topic_id
+        )
+        cancel = functions.messages.SetTypingRequest(
+            peer=peer, action=types.SendMessageCancelAction(), top_msg_id=topic_id
+        )
+        # Reject overlapping calls rather than allowing one call's cancel to clear another's
+        # indicator. Resolve first so aliases for the same peer share the same key.
+        key = (id(cl), str(peer), topic_id)
+        if key in _active_typing:
+            return "Error: a typing operation is already active for this chat/topic."
+        _active_typing.add(key)
+        cleanup_ok = False
+
+        async def show_typing():
+            ticks = math.ceil(seconds / TYPING_REFRESH_SECONDS)
+            interval = seconds / ticks
+            for _ in range(ticks):
+                if not await cl(typing, flood_sleep_threshold=0):
+                    raise RuntimeError("Telegram did not accept the typing request")
+                await asyncio.sleep(interval)
+
+        try:
+            try:
+                await asyncio.wait_for(show_typing(), timeout=TYPING_OPERATION_TIMEOUT)
+            finally:
+                try:
+                    cleanup_ok = bool(
+                        await asyncio.wait_for(
+                            cl(cancel, flood_sleep_threshold=0), timeout=TYPING_CLEANUP_TIMEOUT
+                        )
+                    )
+                except Exception:
+                    # Preserve the original failure/cancellation; Telegram also expires the
+                    # indicator automatically. Never log peer details or credentials here.
+                    logging.getLogger("telegram_mcp").warning("Could not clear typing indicator")
+        finally:
+            _active_typing.discard(key)
+        if not cleanup_ok:
+            return "Typing requests accepted, but clearing the indicator could not be confirmed."
+        return f"Typing requests accepted in chat {chat_id} for {seconds:g}s; indicator cleared."
+    except Exception as e:
+        return log_and_format_error("send_typing", e, chat_id=chat_id, seconds=seconds)
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Mark As Read", openWorldHint=True, destructiveHint=True, idempotentHint=True
@@ -3219,6 +3317,7 @@ __all__ = [
     "unpin_message",
     "unpin_all_messages",
     "mark_as_read",
+    "send_typing",
     "reply_to_message",
     "search_messages",
     "search_global",
