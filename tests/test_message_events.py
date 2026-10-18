@@ -10,7 +10,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from telethon.tl import types
+from mcp.server.fastmcp import Image
+from telethon.tl import patched, types
 
 from telegram_mcp.tools import events, messages
 
@@ -427,7 +428,7 @@ def test_invalid_log_size_falls_back_to_the_default(monkeypatch):
 
 def test_tools_are_read_only_and_registered():
     tools = {t.name: t for t in events.mcp._tool_manager.list_tools()}
-    for name in ("wait_for_events", "get_messages_after"):
+    for name in ("wait_for_events", "get_messages_after", "get_profile_photo"):
         assert tools[name].annotations.readOnlyHint is True
 
 
@@ -561,6 +562,136 @@ def test_raw_send_result_id_is_found():
     )
     assert messages._first_sent_message_id(full) == 78
     assert messages._sent_result(None) == "Message sent successfully."
+
+
+# --- profile photos ----------------------------------------------------------
+
+
+GRACE = types.User(id=43, first_name="Grace", photo=types.UserProfilePhoto(photo_id=777, dc_id=2))
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 16
+GROUP_WITH_PHOTO = types.Channel(
+    id=SUPERGROUP_ID,
+    title="Group",
+    photo=types.ChatPhoto(photo_id=555, dc_id=2),
+    date=DATE,
+    megagroup=True,
+)
+
+
+def _sent_by(msg_id, sender):
+    """A message as get_messages returns it: Telethon's message with its sender."""
+    msg = patched.Message(
+        id=msg_id,
+        peer_id=types.PeerChannel(SUPERGROUP_ID),
+        date=DATE,
+        message="hi",
+        from_id=types.PeerUser(sender.id),
+    )
+    msg._finish_init(SimpleNamespace(_self_id=1, _mb_entity_cache=None), {sender.id: sender}, None)
+    return msg
+
+
+@pytest.mark.asyncio
+async def test_messages_after_names_the_senders_photo(client):
+    client.get_messages.return_value = [
+        _sent_by(11, GRACE),
+        _sent_by(12, types.User(id=42, first_name="Ada", photo=types.UserProfilePhotoEmpty())),
+        _sent_by(15, types.User(id=45, first_name="Bob")),  # no photo: Telegram omits the field
+        _sent_by(13, types.User(id=44, first_name="Min", min=True)),  # photo not loaded
+        _group_message(14),  # sender not known
+    ]
+
+    result = json.loads(
+        await events.get_messages_after(MARKED_SUPERGROUP_ID, after_id=10, account="test")
+    )
+
+    grace, plain, no_field, min_sender, unknown = result["messages"]
+    assert grace["sender_photo"] == "777"
+    assert plain["sender_photo"] == ""
+    assert no_field["sender_photo"] == ""
+    assert "sender_photo" not in min_sender
+    assert "sender_photo" not in unknown
+
+
+@pytest.mark.asyncio
+async def test_profile_photo_is_the_small_current_one(client, monkeypatch):
+    monkeypatch.setattr(events, "resolve_entity", AsyncMock(return_value=GRACE))
+    client.download_profile_photo.return_value = JPEG
+
+    summary, image = await events.get_profile_photo(43, account="test")
+
+    assert json.loads(summary) == {"peer_id": 43, "photo_id": "777"}
+    assert isinstance(image, Image) and image.data == JPEG
+    args, kwargs = client.download_profile_photo.call_args
+    assert args == (GRACE,) and kwargs == {"file": bytes, "download_big": False}
+
+
+@pytest.mark.asyncio
+async def test_profile_photo_of_a_peer_without_one(client, monkeypatch):
+    monkeypatch.setattr(
+        events, "resolve_entity", AsyncMock(return_value=types.User(id=42, first_name="Ada"))
+    )
+
+    result = json.loads(await events.get_profile_photo(42, account="test"))
+
+    assert result == {"peer_id": 42, "photo_id": ""}
+    client.download_profile_photo.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_profile_photo_that_does_not_download_is_an_error(client, monkeypatch):
+    monkeypatch.setattr(events, "resolve_entity", AsyncMock(return_value=GRACE))
+    client.download_profile_photo.return_value = None
+
+    result = await events.get_profile_photo(43, account="test")
+
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(result)
+
+
+@pytest.mark.asyncio
+async def test_profile_photo_of_a_channel(client, monkeypatch):
+    monkeypatch.setattr(events, "resolve_entity", AsyncMock(return_value=GROUP_WITH_PHOTO))
+    client.download_profile_photo.return_value = JPEG
+
+    summary, _ = await events.get_profile_photo(MARKED_SUPERGROUP_ID, account="test")
+    result = json.loads(summary)
+
+    assert result["peer_id"] == MARKED_SUPERGROUP_ID and result["photo_id"] == "555"
+
+
+@pytest.mark.asyncio
+async def test_profile_photo_of_a_group_outside_the_allowlist_is_refused(client, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "-1009999999999")
+    monkeypatch.setattr(events, "resolve_entity", AsyncMock(return_value=GROUP_WITH_PHOTO))
+    client.download_profile_photo.return_value = JPEG
+
+    result = await events.get_profile_photo(MARKED_SUPERGROUP_ID, account="test")
+
+    assert "restricted" in result and "555" not in result
+    client.download_profile_photo.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_profile_photo_of_a_user_is_given_with_an_allowlist(client, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "-1009999999999")
+    monkeypatch.setattr(events, "resolve_entity", AsyncMock(return_value=GRACE))
+    client.download_profile_photo.return_value = JPEG
+
+    summary, _ = await events.get_profile_photo(43, account="test")
+
+    assert json.loads(summary)["photo_id"] == "777"
+
+
+@pytest.mark.asyncio
+async def test_profile_photo_errors_are_reported_without_details(client, monkeypatch):
+    monkeypatch.setattr(events, "resolve_entity", AsyncMock(side_effect=ValueError("secret")))
+
+    result = await events.get_profile_photo(43, account="test")
+
+    assert "secret" not in result
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(result)
 
 
 # --- forum topics ----------------------------------------------------------
