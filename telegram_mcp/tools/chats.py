@@ -335,6 +335,54 @@ async def list_topics(
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        title="List Forum Topic Icons", openWorldHint=True, readOnlyHint=True
+    )
+)
+@with_account(readonly=True)
+async def list_forum_topic_icons(account: Optional[str] = None) -> str:
+    """
+    List the custom emoji Telegram allows as forum topic icons.
+
+    Note for LLM: Pass an entry's icon_emoji_id to create_forum_topic or
+    edit_forum_topic to set a topic icon. Other custom emoji are rejected
+    unless the account has Telegram Premium.
+
+    Returns a JSON result with one record per icon: icon_emoji_id (the custom
+    emoji document ID, as a string) and emoji (its fallback character).
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(
+            functions.messages.GetStickerSetRequest(
+                stickerset=types.InputStickerSetEmojiDefaultTopicIcons(), hash=0
+            )
+        )
+
+        # Fallback emoticons from the set's packs, used when a document has no alt.
+        doc_to_emoticon = {}
+        for pack in getattr(result, "packs", None) or []:
+            for doc_id in getattr(pack, "documents", None) or []:
+                doc_to_emoticon.setdefault(doc_id, getattr(pack, "emoticon", ""))
+
+        records = []
+        for doc in getattr(result, "documents", None) or []:
+            doc_id = getattr(doc, "id", None)
+            if doc_id is None:
+                continue
+            alt = doc_to_emoticon.get(doc_id, "")
+            for attr in getattr(doc, "attributes", None) or []:
+                if isinstance(attr, types.DocumentAttributeCustomEmoji):
+                    alt = getattr(attr, "alt", "") or alt
+            records.append({"icon_emoji_id": str(doc_id), "emoji": sanitize_user_content(alt)})
+
+        return format_tool_result(records)
+    except Exception as e:
+        return log_and_format_error("list_forum_topic_icons", e)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         title="Enable Forum Topics", openWorldHint=True, destructiveHint=True, idempotentHint=True
     )
 )
@@ -1327,6 +1375,7 @@ async def get_message_link(
 __all__ = [
     "get_chats",
     "list_topics",
+    "list_forum_topic_icons",
     "enable_forum_topics",
     "create_forum_topic",
     "list_chats",
