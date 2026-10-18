@@ -589,7 +589,7 @@ async def _send_rich(cl, entity, text: str, parse_mode: str, reply_to: Optional[
     if not await account_is_premium(cl):
         return premium_required_result("send_message")
     try:
-        await cl(
+        result = await cl(
             functions.messages.SendMessageRequest(
                 peer=entity,
                 message=text,
@@ -605,7 +605,10 @@ async def _send_rich(cl, entity, text: str, parse_mode: str, reply_to: Optional[
         if is_premium_rpc_error(e):
             return premium_required_result("send_message")
         raise
-    return json.dumps({"sent": True, "rich": True}, ensure_ascii=False)
+    return json.dumps(
+        {"sent": True, "rich": True, "message_id": _first_sent_message_id(result)},
+        ensure_ascii=False,
+    )
 
 
 async def _edit_rich(cl, entity, message_id: int, text: str, parse_mode: str):
@@ -882,9 +885,14 @@ async def send_message(
     format_date: Optional[str] = None,
     custom_emojis: Optional[List[Dict[str, Any]]] = None,
     account: Optional[str] = None,
+    reply_to: Optional[int] = None,
 ) -> str:
     """
     Send a message to a specific chat.
+    Plain, html/markdown, date-chip and custom-emoji sends end their result with
+    "message_id=<id>", the id of the sent message; rich sends (parse_mode rich,
+    rich_md, rich_markdown or rich_html) return JSON with a "message_id" key,
+    null when Telegram's answer does not name it.
     Reuse custom_emojis from message-reading tools with parse_mode='html' and
     <tg-emoji emoji-id="ID">EMOJI</tg-emoji>, using the returned id and emoji.
     HTML-escape the emoji and other literal text. Custom emoji availability is
@@ -912,6 +920,8 @@ async def send_message(
             {"sent": false, "reason": "telegram_premium_required"} result tells you to
             reformat and retry with 'md'/'html'. Premium is re-checked on every call
             (it can expire or be bought at any time).
+        reply_to: Optional id of a message in the same chat to reply to. To post
+            in a forum topic, pass the topic id (from list_topics).
     """
     try:
         cl = get_client(account)
@@ -931,26 +941,55 @@ async def send_message(
         if conflict:
             return conflict
         if parse_mode and parse_mode.lower() in RICH_PARSE_MODES:
-            return await _send_rich(cl, entity, message, parse_mode.lower())
+            return await _send_rich(cl, entity, message, parse_mode.lower(), reply_to=reply_to)
         if format_date or custom_emojis:
             entities, error = _plain_entities(message, format_date, custom_emojis)
             if error:
                 return error
             import random
 
-            await cl(
+            result = await cl(
                 functions.messages.SendMessageRequest(
                     peer=entity,
                     message=message,
                     random_id=random.randint(0, 2**62),
+                    reply_to=(
+                        types.InputReplyToMessage(reply_to_msg_id=reply_to) if reply_to else None
+                    ),
                     entities=entities,
                 )
             )
-            return "Message sent successfully."
-        await cl.send_message(entity, message, parse_mode=parse_mode)
-        return "Message sent successfully."
+            return _sent_result(_first_sent_message_id(result))
+        sent = await cl.send_message(entity, message, parse_mode=parse_mode, reply_to=reply_to)
+        return _sent_result(sent)
     except Exception as e:
         return log_and_format_error("send_message", e, chat_id=chat_id)
+
+
+def _first_sent_message_id(result) -> Optional[int]:
+    """Id of the message a raw SendMessageRequest created, when the result names it."""
+    direct = getattr(result, "id", None)
+    if isinstance(direct, int):
+        return direct  # UpdateShortSentMessage
+    for update in getattr(result, "updates", None) or []:
+        if isinstance(update, types.UpdateMessageID):
+            return update.id
+        msg = getattr(update, "message", None)
+        if isinstance(getattr(msg, "id", None), int):
+            return msg.id
+    return None
+
+
+def _sent_result(sent) -> str:
+    """Result text of a successful send, naming the new message's id when known.
+
+    Integrators (such as chat bridges) need the id to recognise the message when
+    it comes back in history; the text before it stays as it always was.
+    """
+    msg_id = sent if isinstance(sent, int) or sent is None else getattr(sent, "id", None)
+    if isinstance(msg_id, int):
+        return f"Message sent successfully. message_id={msg_id}"
+    return "Message sent successfully."
 
 
 @mcp.tool(
