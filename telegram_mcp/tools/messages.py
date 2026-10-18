@@ -12,6 +12,10 @@ from pydantic import StrictInt
 # telegram.me kept resolving. The domain has been ACTIVE again since 2026-07-14.
 LINK_DOMAIN = os.getenv("TELEGRAM_LINK_DOMAIN", "t.me")
 
+MESSAGE_NOT_MODIFIED = (
+    "Message {message_id} not modified: the new text is the same as the current one."
+)
+
 
 def get_media_label(msg) -> str:
     """Short label of attached media for a message, or "" if none.
@@ -620,6 +624,11 @@ async def _edit_rich(cl, entity, message_id: int, text: str, parse_mode: str):
                 message=text,
                 rich_message=make_rich_input(parse_mode, text),
             )
+        )
+    except telethon.errors.MessageNotModifiedError:
+        return json.dumps(
+            {"sent": False, "rich": True, "edited_message_id": message_id, "not_modified": True},
+            ensure_ascii=False,
         )
     except telethon.errors.RPCError as e:
         if is_premium_rpc_error(e):
@@ -2007,6 +2016,8 @@ async def edit_message(
         extra = {"parse_mode": parse_mode} if parse_mode is not None else {}
         await cl.edit_message(entity, message_id, new_text, **extra)
         return f"Message {message_id} edited."
+    except telethon.errors.MessageNotModifiedError:
+        return MESSAGE_NOT_MODIFIED.format(message_id=message_id)
     except Exception as e:
         return log_and_format_error(
             "edit_message", e, chat_id=chat_id, message_id=message_id, new_text=new_text
