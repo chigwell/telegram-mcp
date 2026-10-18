@@ -625,6 +625,12 @@ async def delete_chat_photo(chat_id: Union[int, str], account: Optional[str] = N
         return log_and_format_error("delete_chat_photo", e, chat_id=chat_id)
 
 
+BASIC_GROUP_ADMIN_NOTE = (
+    "Note: basic groups only support full admin, so the requested rights were not applied. "
+    "Use upgrade_group_to_supergroup for granular admin rights."
+)
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Promote Admin", openWorldHint=True, destructiveHint=True, idempotentHint=True
@@ -641,6 +647,9 @@ async def promote_admin(
     """
     Promote a user to admin in a group/channel.
 
+    Basic groups have no granular admin rights: the user becomes a full admin and any
+    custom rights are ignored. Use upgrade_group_to_supergroup first for granular rights.
+
     Args:
         group_id: ID or username of the group/channel
         user_id: User ID or username to promote
@@ -653,6 +662,25 @@ async def promote_admin(
         cl = get_client(account)
         chat = await resolve_entity(group_id, cl)
         user = await resolve_entity(user_id, cl)
+
+        if isinstance(chat, Chat):
+            try:
+                await cl(
+                    functions.messages.EditChatAdminRequest(
+                        chat_id=chat.id, user_id=user, is_admin=True
+                    )
+                )
+                message = (
+                    f"Successfully promoted user {user_id} to admin in {sanitize_name(chat.title)}"
+                )
+                return f"{message}. {BASIC_GROUP_ADMIN_NOTE}" if rights else message
+            except telethon.errors.rpcerrorlist.UserNotMutualContactError:
+                return (
+                    "Error: Cannot promote users who are not mutual contacts. "
+                    "Please ensure the user is in your contacts and has added you back."
+                )
+            except Exception as e:
+                return log_and_format_error("promote_admin", e, group_id=group_id, user_id=user_id)
 
         # Set default admin rights if not provided
         if not rights:
@@ -716,7 +744,7 @@ async def demote_admin(
     group_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
     """
-    Demote a user from admin in a group/channel.
+    Demote a user from admin in a group/channel (basic groups included).
 
     Args:
         group_id: ID or username of the group/channel
@@ -729,6 +757,26 @@ async def demote_admin(
         cl = get_client(account)
         chat = await resolve_entity(group_id, cl)
         user = await resolve_entity(user_id, cl)
+
+        if isinstance(chat, Chat):
+            try:
+                await cl(
+                    functions.messages.EditChatAdminRequest(
+                        chat_id=chat.id, user_id=user, is_admin=False
+                    )
+                )
+                return (
+                    f"Successfully demoted user {user_id} from admin in "
+                    f"{sanitize_name(chat.title)}"
+                )
+            except telethon.errors.rpcerrorlist.UserNotMutualContactError:
+                return (
+                    "Error: Cannot modify admin status of users who are not mutual "
+                    "contacts. Please ensure the user is in your contacts and has "
+                    "added you back."
+                )
+            except Exception as e:
+                return log_and_format_error("demote_admin", e, group_id=group_id, user_id=user_id)
 
         # Create empty admin rights (regular user)
         admin_rights = ChatAdminRights(
