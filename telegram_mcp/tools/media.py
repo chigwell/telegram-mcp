@@ -33,6 +33,12 @@ def _known_media_size(message) -> Optional[int]:
     return size if isinstance(size, int) and size >= 0 else None
 
 
+def _force_document_kwargs(force_document: bool) -> Dict[str, bool]:
+    # Only pass force_document when the caller set it, so the default call
+    # reaches Telethon exactly as before.
+    return {"force_document": True} if force_document else {}
+
+
 class _DownloadLimitExceeded(Exception):
     """Stop an in-progress media download once it exceeds the configured limit."""
 
@@ -46,6 +52,7 @@ async def send_file(
     caption: Optional[str] = None,
     topic_id: Optional[int] = None,
     schedule_date: Union[str, int, None] = None,
+    force_document: bool = False,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
 ) -> str:
@@ -62,6 +69,9 @@ async def send_file(
             scheduled queue instead of being sent now. Either an ISO-8601 string
             (e.g. "2026-05-01T14:30:00" or "2026-05-01T14:30:00Z") or a Unix
             timestamp (int). Naive datetimes are treated as UTC.
+        force_document: When true, send the original file as a document instead of letting
+            Telegram turn images and videos into compressed photos or streamed videos.
+            Applies to every file of a media group.
     """
     try:
         if isinstance(file_path, list):
@@ -71,6 +81,7 @@ async def send_file(
                 caption=caption,
                 topic_id=topic_id,
                 schedule_date=schedule_date,
+                force_document=force_document,
                 ctx=ctx,
                 account=account,
             )
@@ -90,7 +101,14 @@ async def send_file(
         if path_error:
             return path_error
         entity = await resolve_entity(chat_id, cl)
-        await cl.send_file(entity, str(safe_path), caption=caption, reply_to=topic_id, schedule=dt)
+        await cl.send_file(
+            entity,
+            str(safe_path),
+            caption=caption,
+            reply_to=topic_id,
+            schedule=dt,
+            **_force_document_kwargs(force_document),
+        )
         if dt:
             return f"File from {safe_path} scheduled for {dt.isoformat()} in chat {chat_id}."
         return f"File sent to chat {chat_id} from {safe_path}."
@@ -103,6 +121,7 @@ async def send_file(
             caption=caption,
             topic_id=topic_id,
             schedule_date=str(schedule_date),
+            force_document=force_document,
         )
 
 
@@ -112,6 +131,7 @@ async def _send_album(
     caption: str = None,
     topic_id: Optional[int] = None,
     schedule_date: Union[str, int, None] = None,
+    force_document: bool = False,
     ctx: Optional[Context] = None,
     account: str = None,
 ) -> str:
@@ -137,7 +157,14 @@ async def _send_album(
         safe_paths.append(str(safe_path))
 
     entity = await resolve_entity(chat_id, cl)
-    await cl.send_file(entity, safe_paths, caption=caption, reply_to=topic_id, schedule=dt)
+    await cl.send_file(
+        entity,
+        safe_paths,
+        caption=caption,
+        reply_to=topic_id,
+        schedule=dt,
+        **_force_document_kwargs(force_document),
+    )
     if dt:
         return (
             f"Album of {len(safe_paths)} files scheduled for {dt.isoformat()} in chat {chat_id}."
