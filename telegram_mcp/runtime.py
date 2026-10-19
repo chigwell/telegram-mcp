@@ -34,7 +34,8 @@ from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
 from mcp.shared.exceptions import McpError
 from pythonjsonlogger import jsonlogger
 from telethon import TelegramClient, functions, types, utils
-from telethon.errors import AuthKeyDuplicatedError, FloodWaitError, BotMethodInvalidError
+from telethon.errors import AuthKeyDuplicatedError, FloodWaitError, BotMethodInvalidError, RPCError
+from telethon.errors.rpcerrorlist import rpc_errors_dict
 from telethon.sessions import StringSession
 from telethon.tl.types import (
     User,
@@ -1306,6 +1307,20 @@ def _is_schema_drift(error: Exception) -> bool:
     return isinstance(error, TypeNotFoundError)
 
 
+_RPC_ERROR_NAMES = {error_class: name for name, error_class in rpc_errors_dict.items()}
+_TELEGRAM_ERROR_NAME_RE = re.compile(r"[A-Z0-9_]+")
+
+
+def _telegram_error_name(error: RPCError) -> Optional[str]:
+    """Return Telegram's constant error name (e.g. PEER_FLOOD) without request details."""
+    name = _RPC_ERROR_NAMES.get(type(error))
+    if name is None and type(error).__module__ == "telethon.errors.rpcbaseerrors":
+        name = error.message
+    if isinstance(name, str) and _TELEGRAM_ERROR_NAME_RE.fullmatch(name):
+        return name
+    return None
+
+
 def log_and_format_error(
     function_name: str,
     error: Exception,
@@ -1385,6 +1400,15 @@ def log_and_format_error(
             f"parsing it failed. Upgrade Telethon; if it is already the latest release, its "
             f"schema is behind the current layer (code: {error_code})."
         )
+
+    # A Telegram-side refusal is something the caller must act on, not a bug to retry. Only
+    # the constant error name and the class name are returned: str(error) embeds the request.
+    if isinstance(error, RPCError):
+        telegram_name = _telegram_error_name(error)
+        reported = (
+            f"{telegram_name} ({type(error).__name__})" if telegram_name else type(error).__name__
+        )
+        return f"An error occurred (code: {error_code}): Telegram returned {reported}."
 
     return f"An error occurred (code: {error_code})."
 
