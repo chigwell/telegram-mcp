@@ -70,6 +70,49 @@ def get_media_label(msg) -> str:
         return ""
 
 
+def poll_record(poll, results=None) -> dict:
+    """Question, answers and whatever results Telegram sent for a poll.
+
+    Results are lists aligned with "answers", so an index here is the same
+    zero-based index vote_poll takes. Telegram omits counts it withholds
+    (e.g. hide_results_until_close), and then so does this record.
+    """
+    record = {
+        "question": sanitize_user_content(poll.question.text),
+        "answers": [sanitize_user_content(a.text.text) for a in poll.answers],
+    }
+    for flag in ("closed", "multiple_choice", "quiz", "public_voters"):
+        if getattr(poll, flag, None):
+            record[flag] = True
+
+    answer_results = getattr(results, "results", None)
+    if answer_results:
+        index = {a.option: i for i, a in enumerate(poll.answers)}
+        votes = [0] * len(poll.answers)
+        chosen, correct = [], []
+        for r in answer_results:
+            i = index.get(r.option)
+            if i is None:
+                continue
+            votes[i] = r.voters or 0
+            if r.chosen:
+                chosen.append(i)
+            if r.correct:
+                correct.append(i)
+        record["votes"] = votes
+        if chosen:
+            record["chosen"] = sorted(chosen)
+        if correct:
+            record["correct"] = sorted(correct)
+    total = getattr(results, "total_voters", None)
+    if total is not None:
+        record["total_voters"] = total
+    solution = getattr(results, "solution", None)
+    if solution:
+        record["solution"] = sanitize_user_content(solution)
+    return record
+
+
 def _inline_button_texts(msg):
     """Inline button texts of the message (flat list), [] if none."""
     out = []
@@ -325,10 +368,7 @@ def message_to_dict(msg, chat_id: Optional[int] = None, forum: bool = False) -> 
 
     poll = getattr(msg, "poll", None)
     if poll is not None and getattr(poll, "poll", None) is not None:
-        d["poll"] = {
-            "question": sanitize_user_content(poll.poll.question.text),
-            "answers": [sanitize_user_content(a.text.text) for a in poll.poll.answers],
-        }
+        d["poll"] = poll_record(poll.poll, getattr(poll, "results", None))
 
     if not text:
         voice_info = transcription.voice_attachment_info(msg, chat_id)
@@ -2776,6 +2816,115 @@ async def create_poll(
         )
 
 
+_POLL_VOTES_PAGE = 50
+
+
+async def _poll_voters(cl, entity, message_id, option, limit):
+    """Up to `limit` peers who picked `option`, and Telegram's total for it."""
+    voters, offset, total = [], None, 0
+    while len(voters) < limit:
+        page = await cl(
+            functions.messages.GetPollVotesRequest(
+                peer=entity,
+                id=message_id,
+                option=option,
+                offset=offset,
+                limit=min(_POLL_VOTES_PAGE, limit - len(voters)),
+            )
+        )
+        total = page.count
+        peers = {utils.get_peer_id(e): e for e in [*page.users, *page.chats]}
+        for vote in page.votes:
+            peer_id = utils.get_peer_id(vote.peer)
+            entity_info = peers.get(peer_id)
+            voters.append(format_entity(entity_info) if entity_info else {"id": peer_id})
+        offset = page.next_offset
+        if not offset or not page.votes:
+            break
+    return voters[:limit], total
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Poll Results", openWorldHint=True, readOnlyHint=True, idempotentHint=True
+    )
+)
+@with_account(readonly=True)
+@validate_id("chat_id")
+async def get_poll_results(
+    chat_id: Union[int, str],
+    message_id: StrictInt,
+    include_voters: bool = False,
+    voters_limit: StrictInt = 50,
+    account: Optional[str] = None,
+) -> str:
+    """Get fresh results of a Telegram poll: vote counts per answer, total voters,
+    which answers this account chose, and for quizzes the correct answer.
+
+    Args:
+        chat_id: The ID or username of the chat containing the poll.
+        message_id: The message ID of the poll.
+        include_voters: Also list who voted for each answer. Only possible for
+            polls with public voters; anonymous polls never reveal voters.
+        voters_limit: Maximum voters to list per answer (1-1000, default 50).
+        account: Account name to use (required in multi-account mode).
+
+    "votes", "chosen" and "correct" use the same zero-based answer indices as
+    vote_poll. Telegram may withhold counts (e.g. until the poll closes), in
+    which case "votes" is absent.
+    """
+    try:
+        if type(message_id) is not int or message_id <= 0:
+            return "Error: message_id must be a positive integer."
+        if type(voters_limit) is not int or not 1 <= voters_limit <= 1000:
+            return "Error: voters_limit must be an integer between 1 and 1000."
+
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+            raise ChatAccessDeniedError(check_chat_access(chat_id, entity))
+
+        message = await cl.get_messages(entity, ids=message_id)
+        if message is None or not isinstance(message.media, types.MessageMediaPoll):
+            return "Error: Message not found or does not contain a poll."
+        poll, results = message.media.poll, message.media.results
+
+        # Results on a fetched message can be stale or "min" (no chosen flags);
+        # ask Telegram for the current ones.
+        updates = await cl(
+            functions.messages.GetPollResultsRequest(peer=entity, msg_id=message_id, poll_hash=0)
+        )
+        for update in getattr(updates, "updates", None) or []:
+            if isinstance(update, types.UpdateMessagePoll) and update.poll_id == poll.id:
+                results = update.results
+                poll = update.poll or poll
+
+        record = {"chat_id": str(chat_id), "message_id": message_id}
+        record.update(poll_record(poll, results))
+        if "votes" in record:
+            record.setdefault("chosen", [])  # explicit: this account has not voted
+
+        if include_voters:
+            if not poll.public_voters:
+                record["voters_note"] = "Anonymous poll: Telegram does not reveal voters."
+            else:
+                try:
+                    voters = []
+                    for i, answer in enumerate(poll.answers):
+                        listed, total = await _poll_voters(
+                            cl, entity, message_id, answer.option, voters_limit
+                        )
+                        voters.append({"answer": i, "count": total, "voters": listed})
+                    record["voters"] = voters
+                except telethon.errors.RPCError as e:
+                    # e.g. a quiz hides voters until this account answers.
+                    record["voters_note"] = f"Telegram refused to list voters: {e}"
+
+        return json.dumps(record, indent=2, default=json_serializer)
+    except Exception as e:
+        return log_and_format_error("get_poll_results", e, chat_id=chat_id, message_id=message_id)
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Vote Poll", openWorldHint=True, destructiveHint=True))
 @with_account(readonly=False)
 @validate_id("chat_id")
@@ -2791,7 +2940,7 @@ async def vote_poll(
         chat_id: The ID or username of the chat containing the poll.
         message_id: The message ID of the poll.
         option_indices: Non-empty list of zero-based answer indices, in the order
-            shown by get_messages. Multiple indices require a multiple-choice poll.
+            returned by get_poll_results. Multiple indices require a multiple-choice poll.
             This submits a vote; it does not press an inline keyboard button.
         account: Account name to use (required in multi-account mode).
 
@@ -3324,6 +3473,7 @@ __all__ = [
     "get_history",
     "get_pinned_messages",
     "create_poll",
+    "get_poll_results",
     "vote_poll",
     "send_reaction",
     "remove_reaction",
