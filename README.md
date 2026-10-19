@@ -122,7 +122,7 @@ The cache lives in `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default `data/transcripts`),
   - `get_folder_snapshot` captures folder definitions/order, including title entities, display fields, flags, stable peer IDs and ordered pins, without access hashes or chat contents. Its private-folder `definition` objects can be passed as restoration patches; shared invites and account/chat state are outside this snapshot's scope.
   - `update_folder(folder_id, patch, expected_revision?)` edits an existing private folder in place, preserving omitted fields. Peer lists replace only the specified list; `[]` clears it. For example, `{"title": "Projects", "exclude_archived": false}` renames the folder and allows archived chats through its rules without unarchiving anything. Save a snapshot before editing and use its `revision` to reject stale plans. Shared/system folders are refused; avoid concurrent folder editors because Telegram has no atomic compare-and-swap.
 
-- **Events:** wait for incoming messages with debounce (`wait_for_new_message`, `wait_for_settled_message`), optionally for one chat only via `chat_id` — without it any unrelated conversation wakes the wait — or enable the opt-in incoming event feed for callback-style delivery (see below).
+- **Events:** wait for incoming messages with debounce (`wait_for_new_message`, `wait_for_settled_message`), optionally for one chat only via `chat_id` — without it any unrelated conversation wakes the wait — or enable the opt-in incoming event feed for callback-style delivery (see below). Integrators that follow chats (such as chat bridges) use the per-message event log instead (see below).
 
 All tool results that include Telegram user-controlled content are sanitized and, where practical, returned as structured JSON.
 
@@ -184,6 +184,16 @@ Clients that can wake an agent on external output (Claude Code's persistent `Mon
 2. The agent arms a persistent Monitor with the `watch_command` returned by the tool. Every new line re-invokes the agent with the burst summary; no blocking tool call is held open, and the chat stays free.
 
 `disable_incoming_feed` switches back; `incoming_feed_status` reports the current mode. While the feed is enabled it consumes settled bursts, so don't combine it with `wait_for_settled_message`. Feed lines contain user-generated `name` fields — treat them as untrusted data.
+
+### Per-message events (chat bridges)
+
+Every new message of a private chat, basic group or supergroup gets one numbered event in a bounded in-memory log (`TELEGRAM_EVENT_LOG_SIZE`, default 2000; `0` turns it off). Incoming messages count, and so do the owner's own messages sent from another device; messages this server sent itself do not. Broadcast channels are left out, and so are chats outside `TELEGRAM_ALLOWED_CHAT_IDS` when it is set. Events carry no text and nothing is written to disk.
+
+- `wait_for_events(chat_id?, after_seq, boot?, timeout, limit, account?)` long-polls: it returns as soon as there are events after `after_seq` (at most 100 s, under typical proxy timeouts; keep `timeout` under your MCP client's request timeout). `after_seq=-1` starts from now without replaying the log. An event has `seq`, `chat_id`, `chat_type`, `message_id`, `sender_id`, `sender_name`, `sender_bot`, `out`, `addressed` (private chats always, groups when Telegram marks the message as mentioning the account or replying to it; never the owner's own), `topic` (the forum topic's id, 1 for General; absent outside forums), `reply_to`, `service` and `date`; with several accounts it also names its `account`. Always pass back `boot` and `last_seq`; `reset` (the server restarted) or `gap` (the log overflowed; global, not per chat) means: read every chat you follow from your last message id, then continue.
+- `get_messages_after(chat_id, after_id?, limit)` returns the messages after an id, oldest first, as the `list_messages` records plus `out`, `mentioned`, `addressed`, `date`, `topic` in forums and `action` for service messages. The result has `chat_id`, `chat_type`, `has_more` (newer messages remain with `after_id`, older ones exist without it), `messages` and, in a forum, one `topics` map of topic id to title. A negative `after_id` is rejected.
+- `send_message` takes `reply_to` (a topic id posts in that forum topic) and names the sent message: plain sends end with `message_id=<id>`, rich sends (`rich*` parse modes) return JSON with a `message_id` key (`null` when Telegram's answer does not name it), so a bridge can recognise its own message when it comes back in history.
+
+The debounce tools above keep their private-only behaviour.
 
 ## Requirements
 
