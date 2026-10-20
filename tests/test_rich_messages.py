@@ -1,6 +1,7 @@
 """Tests for rich message sending (Telegram Premium gated)."""
 
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -51,10 +52,24 @@ async def test_send_rich_with_premium_sends_rich_request():
     cl = _FakeClient(premium=True)
     result = json.loads(await messages._send_rich(cl, "peer", "| a |", "rich", reply_to=5))
 
-    assert result == {"sent": True, "rich": True}
+    assert result == {"sent": True, "rich": True, "message_id": None}
     (req,) = cl.requests
     assert isinstance(req.rich_message, runtime.types.InputRichMessageMarkdown)
     assert req.reply_to.reply_to_msg_id == 5
+
+
+@pytest.mark.asyncio
+async def test_send_rich_names_the_sent_id():
+    class _SentClient(_FakeClient):
+        async def __call__(self, request):
+            await super().__call__(request)
+            return messages.types.UpdateShortSentMessage(
+                id=77, pts=1, pts_count=1, date=datetime(2026, 10, 10, tzinfo=timezone.utc)
+            )
+
+    result = json.loads(await messages._send_rich(_SentClient(), "peer", "| a |", "rich"))
+
+    assert result == {"sent": True, "rich": True, "message_id": 77}
 
 
 @pytest.mark.asyncio
