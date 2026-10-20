@@ -32,7 +32,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
 from mcp.shared.exceptions import McpError
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 from telethon import TelegramClient, functions, types, utils
 from telethon.errors import AuthKeyDuplicatedError, FloodWaitError, BotMethodInvalidError, RPCError
 from telethon.errors.rpcerrorlist import rpc_errors_dict
@@ -1075,7 +1075,7 @@ try:
     console_handler.setFormatter(console_formatter)
 
     # File formatter is now JSON
-    json_formatter = jsonlogger.JsonFormatter(
+    json_formatter = JsonFormatter(
         "%(asctime)s %(name)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
