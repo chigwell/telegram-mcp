@@ -1,6 +1,9 @@
 """Regression tests for privacy-safe Telegram MCP error logging."""
 
 import ast
+import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -330,3 +333,24 @@ async def test_gif_fallback_error_omits_exception_and_query_payload(monkeypatch)
     assert result.startswith("An error occurred (code:")
     assert "exception-payload-secret" not in result
     assert "gif-query-secret" not in result
+
+
+def test_error_code_is_stable_across_processes():
+    # The code is derived from the tool name. str hash() is salted per process, so it used
+    # to change after every server restart; two processes must now agree.
+    code = (
+        "from telegram_mcp import runtime;"
+        "print(runtime.log_and_format_error('leave_chat', RuntimeError('boom')))"
+    )
+    outputs = {
+        subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+            check=True,
+        ).stdout.strip()
+        for seed in ("1", "2", "3")
+    }
+
+    assert outputs == {"An error occurred (code: CHAT-ERR-954)."}
