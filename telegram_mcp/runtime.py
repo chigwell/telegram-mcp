@@ -2172,6 +2172,19 @@ def format_message(message) -> Dict[str, Any]:
     return result
 
 
+def person_name(entity) -> str:
+    """First and last name of a user, skipping parts Telegram leaves out.
+
+    Telegram omits last_name (and, for deleted accounts, both names), so the attributes
+    exist but are None: formatting them directly gives "Ivan None".
+    """
+    parts = (getattr(entity, "first_name", None), getattr(entity, "last_name", None))
+    name = " ".join(part for part in parts if part)
+    if not name and getattr(entity, "deleted", False):
+        return "Deleted Account"
+    return name
+
+
 def get_sender_name(message) -> str:
     """Helper function to get sender name from a message.
 
@@ -2186,9 +2199,7 @@ def get_sender_name(message) -> str:
         return sanitize_name(message.sender.title)
     elif hasattr(message.sender, "first_name"):
         # User sender
-        first_name = getattr(message.sender, "first_name", "") or ""
-        last_name = getattr(message.sender, "last_name", "") or ""
-        full_name = f"{first_name} {last_name}".strip()
+        full_name = person_name(message.sender)
         return sanitize_name(full_name) if full_name else "Unknown"
     else:
         return "Unknown"

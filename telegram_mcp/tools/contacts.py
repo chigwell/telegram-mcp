@@ -24,7 +24,7 @@ async def list_contacts(account: Optional[str] = None) -> str:
             return "No contacts found."
         records = []
         for user in users:
-            name = f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}".strip()
+            name = person_name(user)
             record = {
                 "id": user.id,
                 "name": sanitize_name(name),
@@ -77,7 +77,7 @@ async def search_contacts(query: str, account: Optional[str] = None) -> str:
             return f"No contacts found matching '{query}'."
         records = alias_records
         for user in users:
-            name = f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}".strip()
+            name = person_name(user)
             record = {
                 "id": user.id,
                 "name": sanitize_name(name),
@@ -139,9 +139,7 @@ async def get_direct_chat_by_contact(contact_query: str, account: Optional[str] 
         for contact in contacts:
             if not contact:
                 continue
-            name = (
-                f"{getattr(contact, 'first_name', '')} {getattr(contact, 'last_name', '')}".strip()
-            )
+            name = person_name(contact)
             username = getattr(contact, "username", "")
             phone = getattr(contact, "phone", "")
             if (
@@ -161,9 +159,7 @@ async def get_direct_chat_by_contact(contact_query: str, account: Optional[str] 
         except BotMethodInvalidError:
             dialogs = []
         for contact in found_contacts:
-            contact_name = sanitize_name(
-                f"{getattr(contact, 'first_name', '')} {getattr(contact, 'last_name', '')}".strip()
-            )
+            contact_name = sanitize_name(person_name(contact))
             for dialog in dialogs:
                 if isinstance(dialog.entity, User) and dialog.entity.id == contact.id:
                     record = {
@@ -177,9 +173,7 @@ async def get_direct_chat_by_contact(contact_query: str, account: Optional[str] 
                     records.append(record)
                     break
         if not records:
-            found_names = ", ".join(
-                [sanitize_name(f"{c.first_name} {c.last_name}".strip()) for c in found_contacts]
-            )
+            found_names = ", ".join([sanitize_name(person_name(c)) for c in found_contacts])
             return f"Found contacts: {found_names}, but no direct chats were found with them."
         return format_tool_result(records)
     except Exception as e:
@@ -208,9 +202,7 @@ async def get_contact_chats(contact_id: Union[int, str], account: Optional[str] 
         if not isinstance(contact, User):
             return f"ID {contact_id} is not a user/contact."
 
-        contact_name = sanitize_name(
-            f"{getattr(contact, 'first_name', '')} {getattr(contact, 'last_name', '')}".strip()
-        )
+        contact_name = sanitize_name(person_name(contact))
 
         # Find direct chat
         try:
@@ -283,9 +275,7 @@ async def get_last_interaction(contact_id: Union[int, str], account: Optional[st
         if not isinstance(contact, User):
             return f"ID {contact_id} is not a user/contact."
 
-        contact_name = sanitize_name(
-            f"{getattr(contact, 'first_name', '')} {getattr(contact, 'last_name', '')}".strip()
-        )
+        contact_name = sanitize_name(person_name(contact))
 
         # Get the last few messages
         messages = await cl.get_messages(contact, limit=5)
