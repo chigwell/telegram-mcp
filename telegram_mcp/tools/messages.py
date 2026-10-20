@@ -2646,9 +2646,7 @@ async def get_pinned_messages(chat_id: Union[int, str], account: Optional[str] =
 
             # get_messages() without a limit returns a single message. Telegram allows
             # at most 100 pinned messages per chat.
-            messages = await cl.get_messages(
-                entity, filter=InputMessagesFilterPinned(), limit=100
-            )
+            messages = await cl.get_messages(entity, filter=InputMessagesFilterPinned(), limit=100)
         except (ImportError, AttributeError):
             # Fallback - try without filter and manually filter pinned
             all_messages = await cl.get_messages(entity, limit=50)
