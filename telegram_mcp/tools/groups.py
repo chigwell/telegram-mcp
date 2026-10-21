@@ -1,5 +1,7 @@
 """Groups MCP tools."""
 
+from typing import Literal, get_args
+
 from mcp.server.fastmcp.exceptions import ToolError
 
 from telegram_mcp.runtime import *
@@ -1170,6 +1172,137 @@ async def toggle_slow_mode(
         return log_and_format_error("toggle_slow_mode", e, chat_id=chat_id, seconds=seconds)
 
 
+# edit_admin_rights modes: "replace" sends exactly the rights passed as True, "patch"
+# changes only the rights passed and keeps the rest of the user's current rights.
+AdminRightsMode = Literal["replace", "patch"]
+# The only right the creator can change on their own account (besides the rank):
+# Telegram's own apps disable every other right in the creator's admin settings.
+CREATOR_SELF_EDITABLE_RIGHTS = ("anonymous",)
+
+
+def _admin_right_names() -> List[str]:
+    """Every right of the installed ChatAdminRights schema, in constructor order."""
+    return [key for key in ChatAdminRights().to_dict() if key != "_"]
+
+
+def _rank_text(rank: str) -> str:
+    return repr(sanitize_name(rank)) if rank else "none"
+
+
+def _admin_rights_change(
+    before: Dict[str, bool], after: Dict[str, bool], rank_before: str, rank_after: Optional[str]
+) -> str:
+    """The rights turned on and off and the rank change, or "" when nothing changes."""
+    parts = []
+    turned_on = [name for name in after if after[name] and not before[name]]
+    turned_off = [name for name in after if before[name] and not after[name]]
+    if turned_on:
+        parts.append(f"Turned on: {', '.join(turned_on)}.")
+    if turned_off:
+        parts.append(f"Turned off: {', '.join(turned_off)}.")
+    if rank_after is not None and rank_after != rank_before:
+        parts.append(f"Rank: {_rank_text(rank_before)} -> {_rank_text(rank_after)}.")
+    return " ".join(parts)
+
+
+_NOT_CREATOR_SELF = (
+    "Error: {user_id} is your own account, and you are not this chat's creator. "
+    "Telegram lets only the creator change their own admin settings. Nothing was changed."
+)
+
+
+async def _admin_to_patch(cl, chat, user, user_id, changes: Dict[str, bool]):
+    """Return (current participant, None) for an admin whose rights may be patched, or
+    (None, refusal). Your own account qualifies only as the chat's creator, and then
+    only CREATOR_SELF_EDITABLE_RIGHTS may change."""
+    is_self = getattr(user, "is_self", False)
+    try:
+        result = await cl(
+            functions.channels.GetParticipantRequest(
+                channel=chat, participant=types.InputPeerSelf() if is_self else user
+            )
+        )
+    except telethon.errors.rpcerrorlist.UserNotParticipantError:
+        who = "you are" if is_self else f"{user_id} is"
+        return None, (
+            f"Error: {who} not in this chat, so there are no admin rights to patch. "
+            "Nothing was changed."
+        )
+    participant = result.participant
+    if is_self:
+        if not isinstance(participant, types.ChannelParticipantCreator):
+            return None, _NOT_CREATOR_SELF.format(user_id=user_id)
+        fixed = sorted(name for name in changes if name not in CREATOR_SELF_EDITABLE_RIGHTS)
+        if fixed:
+            editable = ", ".join(CREATOR_SELF_EDITABLE_RIGHTS)
+            return None, (
+                f"Error: as the creator you hold every right; on your own account only "
+                f"{editable} and rank can be changed. Leave out {', '.join(fixed)}. "
+                "Nothing was changed."
+            )
+        return participant, None
+    if isinstance(participant, types.ChannelParticipantCreator):
+        return None, (
+            f"Error: {user_id} is the chat's creator, whose admin settings only the "
+            "creator can change. Nothing was changed."
+        )
+    if not isinstance(participant, types.ChannelParticipantAdmin):
+        return None, (
+            f"Error: {user_id} is not an admin of this chat, so there are no rights to "
+            "patch. Promote them with promote_admin first. Nothing was changed."
+        )
+    if participant.is_self:  # your own account under another id or username
+        return None, _NOT_CREATOR_SELF.format(user_id=user_id)
+    return participant, None
+
+
+async def _patch_admin_rights(
+    cl, chat, user, user_id, changes: Dict[str, bool], rank: Optional[str]
+) -> str:
+    """Change only `changes` (and rank, if given) on top of the user's current rights.
+
+    The current rights and rank are read with channels.getParticipant and the merged
+    full set is sent with channels.editAdmin, as Telegram's own apps do. Rights of the
+    installed layer that are not parameters of edit_admin_rights are kept too.
+    """
+    if not changes and rank is None:
+        return (
+            'Error: mode="patch" changes only the rights and rank passed, and none were. '
+            "Pass at least one right (True or False) or rank."
+        )
+    if not isinstance(chat, Channel):
+        return 'Error: mode="patch" works in supergroups and channels only.'
+    participant, error = await _admin_to_patch(cl, chat, user, user_id, changes)
+    if error:
+        return error
+
+    before = {
+        name: bool(getattr(participant.admin_rights, name, False)) for name in _admin_right_names()
+    }
+    after = {**before, **changes}
+    if not any(after.values()):
+        return (
+            "Error: the patch would turn off every right, which demotes the user; "
+            "use demote_admin for that. Nothing was changed."
+        )
+    rank_before = participant.rank or ""
+    changed = _admin_rights_change(before, after, rank_before, rank)
+    if not changed:
+        return (
+            f"Nothing to change for user {user_id} in {sanitize_name(chat.title)}: the "
+            "rights and rank passed are already set. Nothing was sent."
+        )
+    await cl(
+        functions.channels.EditAdminRequest(
+            channel=chat,
+            user_id=user,
+            admin_rights=ChatAdminRights(**after),
+            rank=rank,  # None leaves the current rank unchanged
+        )
+    )
+    return f"Admin rights patched for user {user_id} in {sanitize_name(chat.title)}. {changed}"
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Edit Admin Rights",
@@ -1183,32 +1316,48 @@ async def toggle_slow_mode(
 async def edit_admin_rights(
     chat_id: Union[int, str],
     user_id: Union[int, str],
-    rank: str = "",
-    change_info: bool = False,
-    post_messages: bool = False,
-    edit_messages: bool = False,
-    delete_messages: bool = False,
-    ban_users: bool = False,
-    invite_users: bool = False,
-    pin_messages: bool = False,
-    add_admins: bool = False,
-    anonymous: bool = False,
-    manage_call: bool = False,
-    manage_topics: bool = False,
-    other: bool = False,
+    rank: Optional[str] = None,
+    change_info: Optional[bool] = None,
+    post_messages: Optional[bool] = None,
+    edit_messages: Optional[bool] = None,
+    delete_messages: Optional[bool] = None,
+    ban_users: Optional[bool] = None,
+    invite_users: Optional[bool] = None,
+    pin_messages: Optional[bool] = None,
+    add_admins: Optional[bool] = None,
+    anonymous: Optional[bool] = None,
+    manage_call: Optional[bool] = None,
+    manage_topics: Optional[bool] = None,
+    other: Optional[bool] = None,
+    mode: AdminRightsMode = "replace",
     account: Optional[str] = None,
 ) -> str:
     """
     Set granular admin rights for a user in a supergroup or channel.
 
     Extends `promote_admin` (which uses a default set) by letting each right
-    be specified individually. Pass True to grant, False to revoke. Passing
-    all False revokes admin status (equivalent to `demote_admin`).
+    be specified individually.
+
+    mode="replace" (default): pass True to grant, False or nothing to revoke; the
+    rights passed become the user's whole set. Passing all False revokes admin
+    status (equivalent to `demote_admin`). rank omitted clears the custom title.
+
+    mode="patch": only the rights passed (True or False) and rank, if passed,
+    change. The user's current rights and rank are looked up first and everything
+    else is kept, including rights that are not parameters here. The user must
+    already be an admin, and a patch that would turn off every right is refused
+    (use demote_admin). The result lists what changed; if nothing would change,
+    nothing is sent. Patch mode can also edit your own account, but only if you
+    are the chat's creator, and then only anonymous and rank (the creator holds
+    every other right). In a group, anonymous=False makes your messages show your
+    name instead of the group's; in a channel, it shows you in the admin list.
+    Telegram does not let other admins edit their own rights.
 
     Args:
         chat_id: ID or username of the supergroup/channel.
         user_id: User ID or username.
-        rank: Custom admin title (max 16 chars). Empty = no custom title.
+        rank: Custom admin title (max 16 chars). In replace mode, omitted or ""
+            means no custom title; in patch mode, omitted keeps the current one.
         change_info: can change chat info (title, photo, description)
         post_messages: can post in channel (channel-only)
         edit_messages: can edit other users' messages
@@ -1222,29 +1371,37 @@ async def edit_admin_rights(
         manage_topics: can create, edit, close and reopen forum topics
         (forum-enabled supergroups only)
         other: reserved for future rights
+        mode: "replace" (default) or "patch", see above.
     """
+    flags = {
+        "change_info": change_info,
+        "post_messages": post_messages,
+        "edit_messages": edit_messages,
+        "delete_messages": delete_messages,
+        "ban_users": ban_users,
+        "invite_users": invite_users,
+        "pin_messages": pin_messages,
+        "add_admins": add_admins,
+        "anonymous": anonymous,
+        "manage_call": manage_call,
+        "manage_topics": manage_topics,
+        "other": other,
+    }
     try:
+        if mode not in get_args(AdminRightsMode):
+            known = ", ".join(get_args(AdminRightsMode))
+            return f"Error: unknown mode {mode!r}. Known modes: {known}."
         cl = get_client(account)
         await ensure_connected(cl)
         entity = await resolve_entity(chat_id, cl)
         user = await resolve_entity(user_id, cl)
-        admin_rights = ChatAdminRights(
-            change_info=change_info,
-            post_messages=post_messages,
-            edit_messages=edit_messages,
-            delete_messages=delete_messages,
-            ban_users=ban_users,
-            invite_users=invite_users,
-            pin_messages=pin_messages,
-            add_admins=add_admins,
-            anonymous=anonymous,
-            manage_call=manage_call,
-            manage_topics=manage_topics,
-            other=other,
-        )
+        if mode == "patch":
+            changes = {name: value for name, value in flags.items() if value is not None}
+            return await _patch_admin_rights(cl, entity, user, user_id, changes, rank)
+        admin_rights = ChatAdminRights(**{name: bool(value) for name, value in flags.items()})
         await cl(
             functions.channels.EditAdminRequest(
-                channel=entity, user_id=user, admin_rights=admin_rights, rank=rank
+                channel=entity, user_id=user, admin_rights=admin_rights, rank=rank or ""
             )
         )
         return f"Admin rights updated for user {user_id} in chat {chat_id}."
