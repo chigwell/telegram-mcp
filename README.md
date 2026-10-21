@@ -115,7 +115,7 @@ The engine is chosen per call via the `engine` argument, or otherwise defaults t
 - `on-demand` (default): listings show cached transcripts but never spend an API call fetching a new one.
 - `auto`: `get_history`, `get_messages`, `list_messages`, and `search_messages` also prefetch missing transcripts, bounded per call by `TELEGRAM_TRANSCRIBE_MAX_VOICES`/`TELEGRAM_TRANSCRIBE_MAX_SECONDS` (Groq isn't free, so this prefetch is budgeted rather than unbounded).
 
-The cache lives in `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default `data/transcripts`), written as a 700 directory / 600 file since it holds personal-chat text in plaintext — see [Docker](#docker) for why this needs its own volume mount in a container.
+The cache lives in `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default `data/transcripts` in the working directory, or `~/.cache/telegram-mcp/transcripts` when that is not writable), written as a 700 directory / 600 file since it holds personal-chat text in plaintext — see [Docker](#docker) for why this needs its own volume mount in a container.
 - **Profile and privacy:** get your own account info, update profile fields, set or delete profile photos, inspect privacy settings, get user info/photos/status, and manage bot commands.
 - **Folders and drafts:** list, create, update, reorder, and delete Telegram folders; preview a shared folder invite (`t.me/addlist/...`) without joining it; save, list, and clear drafts.
   - `get_folder_limits` reports current Premium-aware folder, explicit-chat and pin limits from Telegram app config; unavailable limits are `null`.
