@@ -68,6 +68,12 @@ This may replace an existing vote; empty selections, duplicate or out-of-range
 indices, closed polls, and multiple answers in single-choice polls are rejected.
 Telegram enforces voting permissions and restrictions on changing quiz votes.
 
+In supergroups where you can post as more than one identity (for example as a channel you
+own), `get_send_as(chat_id)` lists the allowed senders and `set_default_send_as(chat_id,
+send_as)` saves which one your later messages use: `"me"` for your own account, or the ID or
+username of an allowed sender. The saved sender applies in all your Telegram clients.
+Anonymous posting as an admin is an admin right and is not changed by it.
+
 - **Contacts:** list, search, add, delete, block, unblock, import, export, inspect direct chats, find recent contact interactions, and remember contacts by the names you actually use (see below).
 
 ### Typing indicators

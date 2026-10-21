@@ -16,6 +16,20 @@ MESSAGE_NOT_MODIFIED = (
     "Message {message_id} not modified: the new text is the same as the current one."
 )
 
+SEND_AS_SELF_LABEL = "your own account"
+SEND_AS_UNSUPPORTED_CHAT = (
+    "Chat {chat_id} has no send-as choice: Telegram offers it only in supergroups. "
+    "Nothing changed."
+)
+SEND_AS_PEER_REFUSED = (
+    "Telegram refused {send_as} as the sender in chat {chat_id}: this account cannot "
+    "post as it there. Call get_send_as to list the allowed senders. Nothing changed."
+)
+SEND_AS_PREMIUM_REQUIRED = (
+    "Posting as {send_as} in chat {chat_id} requires Telegram Premium on this account. "
+    "Nothing changed."
+)
+
 
 def get_media_label(msg) -> str:
     """Short label of attached media for a message, or "" if none.
@@ -1766,7 +1780,8 @@ async def get_send_as(chat_id: Union[int, str], account: Optional[str] = None) -
     """List Telegram's allowed send-as peers for this destination where supported.
 
     Returns peer IDs, names and premium_required; does not change the saved sender.
-    Use a returned ID as forward_message.send_as. Names are untrusted user content.
+    Use a returned ID as forward_message.send_as, or save it as the chat's default
+    sender with set_default_send_as. Names are untrusted user content.
     """
     try:
         cl = get_client(account)
@@ -1795,6 +1810,48 @@ async def get_send_as(chat_id: Union[int, str], account: Optional[str] = None) -
         return format_tool_result(records)
     except Exception as e:
         return log_and_format_error("get_send_as", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Set Default Send As",
+        openWorldHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id", "send_as")
+async def set_default_send_as(
+    chat_id: Union[int, str], send_as: Union[int, str], account: Optional[str] = None
+) -> str:
+    """Save which identity this account posts as in a supergroup.
+
+    Telegram applies the saved sender to every later message from this account in
+    that chat, in all clients, until it is changed again. Discover the choices with
+    get_send_as. Anonymous posting as an admin is an admin right, not a send-as
+    choice, and is not changed here.
+
+    Args:
+        chat_id: Supergroup ID or username.
+        send_as: "me" for your own account, or the ID or username of an allowed
+            sender (for example a channel you own) returned by get_send_as.
+    """
+    try:
+        cl = get_client(account)
+        peer = await resolve_input_entity(chat_id, cl)
+        if not isinstance(peer, types.InputPeerChannel):
+            return SEND_AS_UNSUPPORTED_CHAT.format(chat_id=chat_id)
+        sender = await resolve_input_entity(send_as, cl)
+        sender_label = SEND_AS_SELF_LABEL if isinstance(sender, types.InputPeerSelf) else send_as
+        await cl(functions.messages.SaveDefaultSendAsRequest(peer=peer, send_as=sender))
+        return f"Default sender in chat {chat_id} set to {sender_label}."
+    except telethon.errors.SendAsPeerInvalidError:
+        return SEND_AS_PEER_REFUSED.format(send_as=send_as, chat_id=chat_id)
+    except Exception as e:
+        if isinstance(e, telethon.errors.RPCError) and is_premium_rpc_error(e):
+            return SEND_AS_PREMIUM_REQUIRED.format(send_as=send_as, chat_id=chat_id)
+        return log_and_format_error("set_default_send_as", e, chat_id=chat_id, send_as=send_as)
 
 
 @mcp.tool(
@@ -3361,6 +3418,7 @@ __all__ = [
     "list_messages",
     "get_message_context",
     "forward_message",
+    "set_default_send_as",
     "edit_message",
     "delete_message",
     "delete_chat_history",
