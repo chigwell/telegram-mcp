@@ -805,6 +805,10 @@ def _acquire_session(pool: List[str]) -> str:
     )
 
 
+# Accounts the runner may skip at startup instead of refusing to start; see below.
+OPTIONAL_ACCOUNTS: set[str] = set()
+
+
 def _discover_accounts() -> dict[str, TelegramClient]:
     """Scan env vars to build account label -> TelegramClient mapping.
 
@@ -814,7 +818,8 @@ def _discover_accounts() -> dict[str, TelegramClient]:
       of interchangeable sessions for the default account; each process claims a
       free slot to avoid AuthKeyDuplicatedError (takes precedence for "default")
     - Unsuffixed TELEGRAM_SESSION_STRING / TELEGRAM_SESSION_NAME -> label "default"
-    - If both suffixed and unsuffixed exist -> unsuffixed becomes "default"
+    - If both suffixed and unsuffixed exist -> unsuffixed becomes "default"; a file
+      session from TELEGRAM_SESSION_NAME is then optional (see OPTIONAL_ACCOUNTS)
 
     Each client is constructed via :func:`_build_client`, which applies any
     matching ``TELEGRAM_PROXY_*`` configuration (optionally per-label).
@@ -849,6 +854,11 @@ def _discover_accounts() -> dict[str, TelegramClient]:
             accounts["default"] = _build_client(StringSession(session_string), "default")
         elif session_name:
             accounts["default"] = _build_client(_resolve_session_path(session_name), "default")
+            if len(accounts) > 1:
+                # The Docker image and .env.example preset TELEGRAM_SESSION_NAME, so next to
+                # labelled accounts it often names a session nobody logged in to. The runner
+                # skips such a default account instead of refusing to start.
+                OPTIONAL_ACCOUNTS.add("default")
 
     if not accounts:
         print(

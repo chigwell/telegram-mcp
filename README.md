@@ -561,6 +561,10 @@ TELEGRAM_SESSION_STRING_PERSONAL=session_string_for_personal
 
 Labels are lowercased and become the `account` parameter value in tools.
 
+If `TELEGRAM_SESSION_NAME` is set as well (the Docker image and `.env.example` set it), that
+session becomes an extra `default` account when it is logged in; when it is not, the server
+skips it with a warning on stderr instead of refusing to start.
+
 - In single-account mode, `account` is optional.
 - In multi-account mode, write tools require `account`.
 - Read-only tools fan out to all accounts when `account` is omitted.
