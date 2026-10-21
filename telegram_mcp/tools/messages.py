@@ -2592,7 +2592,10 @@ async def search_global(
         cl = get_client(account)
         await ensure_connected(cl)
         offset = (page - 1) * page_size
-        messages = await cl.get_messages(None, limit=page_size, search=query, add_offset=offset)
+        # messages.searchGlobal has no add_offset (Telethon silently ignores it for a global
+        # search), so every page would be the first one. Fetch up to the end of the requested
+        # page - Telethon pages through the results itself - and keep only that page.
+        messages = (await cl.get_messages(None, limit=offset + page_size, search=query))[offset:]
 
         if not messages:
             return "No messages found for this page."
