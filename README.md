@@ -770,6 +770,12 @@ From an MCP client configuration, you can pass roots via `env` or as arguments a
 }
 ```
 
+## Chat Notification State
+
+`get_chat_notification_settings(chat_id, account)` reads chat-wide server mute state without message history. The result includes `muted` (true/false/null for unknown), effective `mute_until` and `peer_mute_until` (Unix seconds), and `source` (`chat` or `default:users/groups/broadcasts`). Device-local and individual forum-topic settings are not covered.
+
+`get_chats`, `list_chats`, and `get_chat` include the same notification fields. Missing per-chat mute values inherit category defaults; explicit zero overrides them. `unmuted_only` excludes unknown states as well as muted chats. Each category default is fetched at most once per list call, scoped to its selected account.
+
 ## Chat Access Privacy (Allowlist)
 
 To restrict AI agents or MCP clients to specific chats only (preventing access to all private or corporate conversations), configure `TELEGRAM_ALLOWED_CHAT_IDS`:
