@@ -163,7 +163,9 @@ async def get_folder_limits(account: Optional[str] = None) -> str:
     Missing/unusable values are null, never invented defaults. Title limit uses UTF-16 units.
     """
     try:
-        return json.dumps(await _read_folder_limits(get_client(account)), indent=2)
+        return json.dumps(
+            await _read_folder_limits(get_client(account)), indent=2, ensure_ascii=False
+        )
     except Exception as e:
         return log_and_format_error("get_folder_limits", e, ErrorCategory.FOLDER)
 
@@ -199,6 +201,7 @@ async def get_folder_snapshot(account: Optional[str] = None) -> str:
                 ),
             },
             indent=2,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error("get_folder_snapshot", e, ErrorCategory.FOLDER)
@@ -405,7 +408,8 @@ async def update_folder(
                     "folder_id": folder_id,
                     "changed": False,
                     "revision": before["revision"],
-                }
+                },
+                ensure_ascii=False,
             )
         latest = await cl(functions.messages.GetDialogFiltersRequest())
         current = next((f for f in latest.filters if getattr(f, "id", None) == folder_id), None)
@@ -421,7 +425,8 @@ async def update_folder(
                 "folder_id": folder_id,
                 "changed": True,
                 "revision": after["revision"],
-            }
+            },
+            ensure_ascii=False,
         )
     except _FolderValidationError as e:
         return log_and_format_error("update_folder", e, ErrorCategory.FOLDER, user_message=str(e))
@@ -489,7 +494,10 @@ async def list_folders(account: Optional[str] = None) -> str:
             return "No folders found. Create one with create_folder tool."
 
         return json.dumps(
-            {"folders": folders, "count": len(folders)}, indent=2, default=json_serializer
+            {"folders": folders, "count": len(folders)},
+            indent=2,
+            default=json_serializer,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error("list_folders", e, ErrorCategory.FOLDER)
@@ -611,7 +619,7 @@ async def get_folder(folder_id: int, account: Optional[str] = None) -> str:
                 "exclude_archived": getattr(target_folder, "exclude_archived", False),
             }
 
-        return json.dumps(folder_data, indent=2, default=json_serializer)
+        return json.dumps(folder_data, indent=2, default=json_serializer, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("get_folder", e, ErrorCategory.FOLDER, folder_id=folder_id)
 
@@ -738,6 +746,7 @@ async def create_folder(
                 "included_chats_count": len(include_peers),
             },
             indent=2,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error("create_folder", e, ErrorCategory.FOLDER, title=title)

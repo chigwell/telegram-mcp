@@ -935,7 +935,7 @@ async def search_public_chats(query: str, limit: int = 20, account: Optional[str
         if is_chat_allowlist_enabled():
             all_entities = [e for e in all_entities if is_chat_allowed(get_marked_id(e), e)]
         entities = [format_entity(e) for e in all_entities]
-        return json.dumps(entities, indent=2)
+        return json.dumps(entities, indent=2, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("search_public_chats", e, query=query, limit=limit)
 
@@ -1296,6 +1296,7 @@ async def get_message_read_by(
             },
             indent=2,
             default=json_serializer,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error(

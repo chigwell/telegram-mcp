@@ -1821,6 +1821,7 @@ async def get_recent_actions(chat_id: Union[int, str], account: Optional[str] = 
             sanitize_dict([e.to_dict() for e in result.events]),
             indent=2,
             default=json_serializer,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error("get_recent_actions", e, chat_id=chat_id)

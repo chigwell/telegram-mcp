@@ -13,7 +13,7 @@ async def get_me(account: Optional[str] = None) -> str:
         cl = get_client(account)
         await ensure_connected(cl)
         me = await cl.get_me()
-        return json.dumps(format_entity(me), indent=2)
+        return json.dumps(format_entity(me), indent=2, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("get_me", e)
 
@@ -443,7 +443,7 @@ async def get_bot_info(bot_username: str, account: Optional[str] = None) -> str:
             info["bot_info"]["about"] = sanitize_user_content(
                 result.full_user.about, max_length=1024
             )
-        return json.dumps(info, indent=2)
+        return json.dumps(info, indent=2, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("get_bot_info", e, bot_username=bot_username)
 
@@ -521,7 +521,7 @@ async def get_user_photos(
         photos = await cl(
             functions.photos.GetUserPhotosRequest(user_id=user, offset=0, max_id=0, limit=limit)
         )
-        return json.dumps([p.id for p in photos.photos], indent=2)
+        return json.dumps([p.id for p in photos.photos], indent=2, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("get_user_photos", e, user_id=user_id, limit=limit)
 
