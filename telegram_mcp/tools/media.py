@@ -33,6 +33,12 @@ def _known_media_size(message) -> Optional[int]:
     return size if isinstance(size, int) and size >= 0 else None
 
 
+def _force_document_kwargs(force_document: bool) -> Dict[str, bool]:
+    # Only pass force_document when the caller set it, so the default call
+    # reaches Telethon exactly as before.
+    return {"force_document": True} if force_document else {}
+
+
 class _DownloadLimitExceeded(Exception):
     """Stop an in-progress media download once it exceeds the configured limit."""
 
@@ -46,6 +52,7 @@ async def send_file(
     caption: Optional[str] = None,
     topic_id: Optional[int] = None,
     schedule_date: Union[str, int, None] = None,
+    force_document: bool = False,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
 ) -> str:
@@ -62,6 +69,9 @@ async def send_file(
             scheduled queue instead of being sent now. Either an ISO-8601 string
             (e.g. "2026-05-01T14:30:00" or "2026-05-01T14:30:00Z") or a Unix
             timestamp (int). Naive datetimes are treated as UTC.
+        force_document: When true, send the original file as a document instead of letting
+            Telegram turn images and videos into compressed photos or streamed videos.
+            Applies to every file of a media group.
     """
     try:
         if isinstance(file_path, list):
@@ -71,6 +81,7 @@ async def send_file(
                 caption=caption,
                 topic_id=topic_id,
                 schedule_date=schedule_date,
+                force_document=force_document,
                 ctx=ctx,
                 account=account,
             )
@@ -90,7 +101,14 @@ async def send_file(
         if path_error:
             return path_error
         entity = await resolve_entity(chat_id, cl)
-        await cl.send_file(entity, str(safe_path), caption=caption, reply_to=topic_id, schedule=dt)
+        await cl.send_file(
+            entity,
+            str(safe_path),
+            caption=caption,
+            reply_to=topic_id,
+            schedule=dt,
+            **_force_document_kwargs(force_document),
+        )
         if dt:
             return f"File from {safe_path} scheduled for {dt.isoformat()} in chat {chat_id}."
         return f"File sent to chat {chat_id} from {safe_path}."
@@ -103,6 +121,7 @@ async def send_file(
             caption=caption,
             topic_id=topic_id,
             schedule_date=str(schedule_date),
+            force_document=force_document,
         )
 
 
@@ -112,6 +131,7 @@ async def _send_album(
     caption: str = None,
     topic_id: Optional[int] = None,
     schedule_date: Union[str, int, None] = None,
+    force_document: bool = False,
     ctx: Optional[Context] = None,
     account: str = None,
 ) -> str:
@@ -137,7 +157,14 @@ async def _send_album(
         safe_paths.append(str(safe_path))
 
     entity = await resolve_entity(chat_id, cl)
-    await cl.send_file(entity, safe_paths, caption=caption, reply_to=topic_id, schedule=dt)
+    await cl.send_file(
+        entity,
+        safe_paths,
+        caption=caption,
+        reply_to=topic_id,
+        schedule=dt,
+        **_force_document_kwargs(force_document),
+    )
     if dt:
         return (
             f"Album of {len(safe_paths)} files scheduled for {dt.isoformat()} in chat {chat_id}."
@@ -375,7 +402,7 @@ async def upload_file(
             "size": getattr(uploaded, "size", safe_path.stat().st_size),
             "md5_checksum": getattr(uploaded, "md5_checksum", None),
         }
-        return json.dumps(payload, indent=2, default=json_serializer)
+        return json.dumps(payload, indent=2, default=json_serializer, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("upload_file", e, file_path=file_path)
 
@@ -431,7 +458,10 @@ async def get_gif_search(query: str, limit: int = 10, account: Optional[str] = N
             if not result.gifs:
                 return "[]"
             return json.dumps(
-                [g.document.id for g in result.gifs], indent=2, default=json_serializer
+                [g.document.id for g in result.gifs],
+                indent=2,
+                default=json_serializer,
+                ensure_ascii=False,
             )
         except (AttributeError, ImportError):
             # Fallback approach: Use SearchRequest with GIF filter
@@ -460,7 +490,7 @@ async def get_gif_search(query: str, limit: int = 10, account: Optional[str] = N
                 for msg in result.messages:
                     if hasattr(msg, "media") and msg.media and hasattr(msg.media, "document"):
                         gif_ids.append(msg.media.document.id)
-                return json.dumps(gif_ids, default=json_serializer)
+                return json.dumps(gif_ids, default=json_serializer, ensure_ascii=False)
             except Exception as inner_e:
                 return log_and_format_error("get_gif_search", inner_e, query=query, limit=limit)
     except Exception as e:
@@ -686,6 +716,33 @@ async def get_photo_sheet(
         )
 
 
+_INSPECT_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+_INSPECT_TEXT_EXTENSIONS = {
+    ".txt",
+    ".csv",
+    ".json",
+    ".md",
+    ".log",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".html",
+}
+
+
+def _sniff_image_format(data: bytes) -> Optional[str]:
+    """Image format from the file signature, limited to what the Claude API accepts."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Inspect Document",
@@ -719,26 +776,40 @@ async def inspect_document(
         if not msg or not msg.media:
             return "There is no attached document or media file in the specified message."
 
+        filename = getattr(msg.file, "name", "") or ""
+        mime_type = getattr(msg.file, "mime_type", "") or ""
+        ext = Path(filename).suffix.lower()
+
+        is_image = mime_type.startswith("image/") or ext in _INSPECT_IMAGE_EXTENSIONS
+        is_pdf = mime_type == "application/pdf" or ext == ".pdf"
+        is_text = mime_type.startswith("text/") or ext in _INSPECT_TEXT_EXTENSIONS
+        if not (is_image or is_pdf or is_text):
+            # Nothing below can read it, so do not download it just to say so.
+            return (
+                f"File format '{filename}' ({mime_type}) "
+                "is not currently supported for direct text analysis."
+            )
+
         # Downloading the file strictly into memory (bytes)
         data = await cl.download_media(msg, file=bytes)
         if not data:
             return "Failed to read the contents of the document."
 
-        filename = getattr(msg.file, "name", "") or ""
-        mime_type = getattr(msg.file, "mime_type", "") or ""
-        ext = Path(filename).suffix.lower()
-
         # 1. If this is an image or scan
-        if mime_type.startswith("image/") or ext in {".jpg", ".jpeg", ".png", ".webp"}:
-            fmt = (
-                "png"
-                if (ext == ".png" or mime_type == "image/png")
-                else ("webp" if (ext == ".webp" or mime_type == "image/webp") else "jpeg")
-            )
+        if is_image:
+            # The declared type and the extension are not trustworthy (a GIF sent as
+            # "smile.jpg", HEIC, BMP ...), and a wrong media type makes the Claude API
+            # reject the image: name the format from the bytes.
+            fmt = _sniff_image_format(data)
+            if fmt is None:
+                return (
+                    f"Image '{filename}' ({mime_type}) is not in a format Claude can view; "
+                    "supported formats are JPEG, PNG, GIF and WebP."
+                )
             return Image(data=data, format=fmt)
 
         # 2. If this is a PDF
-        if mime_type == "application/pdf" or ext == ".pdf":
+        if is_pdf:
             try:
                 reader = PdfReader(io.BytesIO(data))
                 del data
@@ -770,17 +841,7 @@ async def inspect_document(
                 )
 
         # 3. If this is a text file (TXT, CSV, JSON, MD, LOG, etc.)
-        if mime_type.startswith("text/") or ext in {
-            ".txt",
-            ".csv",
-            ".json",
-            ".md",
-            ".log",
-            ".yaml",
-            ".yml",
-            ".xml",
-            ".html",
-        }:
+        if is_text:
             try:
                 text_content = data.decode("utf-8")
             except UnicodeDecodeError:

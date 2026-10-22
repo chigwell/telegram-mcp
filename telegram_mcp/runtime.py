@@ -32,9 +32,10 @@ from mcp.server.fastmcp.exceptions import ToolError
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
 from mcp.shared.exceptions import McpError
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 from telethon import TelegramClient, functions, types, utils
-from telethon.errors import AuthKeyDuplicatedError, FloodWaitError, BotMethodInvalidError
+from telethon.errors import AuthKeyDuplicatedError, FloodWaitError, BotMethodInvalidError, RPCError
+from telethon.errors.rpcerrorlist import rpc_errors_dict
 from telethon.sessions import StringSession
 from telethon.tl.types import (
     User,
@@ -56,6 +57,7 @@ from telethon.tl.types import (
     TextWithEntities,
 )
 import hashlib
+import zlib
 import tempfile
 
 try:
@@ -803,6 +805,10 @@ def _acquire_session(pool: List[str]) -> str:
     )
 
 
+# Accounts the runner may skip at startup instead of refusing to start; see below.
+OPTIONAL_ACCOUNTS: set[str] = set()
+
+
 def _discover_accounts() -> dict[str, TelegramClient]:
     """Scan env vars to build account label -> TelegramClient mapping.
 
@@ -812,7 +818,8 @@ def _discover_accounts() -> dict[str, TelegramClient]:
       of interchangeable sessions for the default account; each process claims a
       free slot to avoid AuthKeyDuplicatedError (takes precedence for "default")
     - Unsuffixed TELEGRAM_SESSION_STRING / TELEGRAM_SESSION_NAME -> label "default"
-    - If both suffixed and unsuffixed exist -> unsuffixed becomes "default"
+    - If both suffixed and unsuffixed exist -> unsuffixed becomes "default"; a file
+      session from TELEGRAM_SESSION_NAME is then optional (see OPTIONAL_ACCOUNTS)
 
     Each client is constructed via :func:`_build_client`, which applies any
     matching ``TELEGRAM_PROXY_*`` configuration (optionally per-label).
@@ -847,6 +854,11 @@ def _discover_accounts() -> dict[str, TelegramClient]:
             accounts["default"] = _build_client(StringSession(session_string), "default")
         elif session_name:
             accounts["default"] = _build_client(_resolve_session_path(session_name), "default")
+            if len(accounts) > 1:
+                # The Docker image and .env.example preset TELEGRAM_SESSION_NAME, so next to
+                # labelled accounts it often names a session nobody logged in to. The runner
+                # skips such a default account instead of refusing to start.
+                OPTIONAL_ACCOUNTS.add("default")
 
     if not accounts:
         print(
@@ -1074,7 +1086,7 @@ try:
     console_handler.setFormatter(console_formatter)
 
     # File formatter is now JSON
-    json_formatter = jsonlogger.JsonFormatter(
+    json_formatter = JsonFormatter(
         "%(asctime)s %(name)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
@@ -1306,6 +1318,20 @@ def _is_schema_drift(error: Exception) -> bool:
     return isinstance(error, TypeNotFoundError)
 
 
+_RPC_ERROR_NAMES = {error_class: name for name, error_class in rpc_errors_dict.items()}
+_TELEGRAM_ERROR_NAME_RE = re.compile(r"[A-Z0-9_]+")
+
+
+def _telegram_error_name(error: RPCError) -> Optional[str]:
+    """Return Telegram's constant error name (e.g. PEER_FLOOD) without request details."""
+    name = _RPC_ERROR_NAMES.get(type(error))
+    if name is None and type(error).__module__ == "telethon.errors.rpcbaseerrors":
+        name = error.message
+    if isinstance(name, str) and _TELEGRAM_ERROR_NAME_RE.fullmatch(name):
+        return name
+    return None
+
+
 def log_and_format_error(
     function_name: str,
     error: Exception,
@@ -1347,7 +1373,9 @@ def log_and_format_error(
                     break
 
         prefix_str = prefix.value if isinstance(prefix, ErrorCategory) else (prefix or "GEN")
-        error_code = f"{prefix_str}-ERR-{abs(hash(function_name)) % 1000:03d}"
+        # str hash() is salted per process, which would give the same failure a new code
+        # after every restart; crc32 is stable.
+        error_code = f"{prefix_str}-ERR-{zlib.crc32(function_name.encode()) % 1000:03d}"
 
     # Telegram FloodWait (Rate Limiting) must be explicitly formatted for LLM agents.
     # LLMs will blindly retry generic errors, escalating the flood penalty and risking bans.
@@ -1385,6 +1413,15 @@ def log_and_format_error(
             f"parsing it failed. Upgrade Telethon; if it is already the latest release, its "
             f"schema is behind the current layer (code: {error_code})."
         )
+
+    # A Telegram-side refusal is something the caller must act on, not a bug to retry. Only
+    # the constant error name and the class name are returned: str(error) embeds the request.
+    if isinstance(error, RPCError):
+        telegram_name = _telegram_error_name(error)
+        reported = (
+            f"{telegram_name} ({type(error).__name__})" if telegram_name else type(error).__name__
+        )
+        return f"An error occurred (code: {error_code}): Telegram returned {reported}."
 
     return f"An error occurred (code: {error_code})."
 
@@ -2145,6 +2182,19 @@ def format_message(message) -> Dict[str, Any]:
     return result
 
 
+def person_name(entity) -> str:
+    """First and last name of a user, skipping parts Telegram leaves out.
+
+    Telegram omits last_name (and, for deleted accounts, both names), so the attributes
+    exist but are None: formatting them directly gives "Ivan None".
+    """
+    parts = (getattr(entity, "first_name", None), getattr(entity, "last_name", None))
+    name = " ".join(part for part in parts if part)
+    if not name and getattr(entity, "deleted", False):
+        return "Deleted Account"
+    return name
+
+
 def get_sender_name(message) -> str:
     """Helper function to get sender name from a message.
 
@@ -2159,9 +2209,7 @@ def get_sender_name(message) -> str:
         return sanitize_name(message.sender.title)
     elif hasattr(message.sender, "first_name"):
         # User sender
-        first_name = getattr(message.sender, "first_name", "") or ""
-        last_name = getattr(message.sender, "last_name", "") or ""
-        full_name = f"{first_name} {last_name}".strip()
+        full_name = person_name(message.sender)
         return sanitize_name(full_name) if full_name else "Unknown"
     else:
         return "Unknown"
@@ -2616,8 +2664,27 @@ def _parse_allowed_roots_env(value: Optional[str]) -> List[str]:
     if not value or not value.strip():
         return []
     raw = value.strip()
-    tokens = re.split(r"[;,]|(?<!\b[a-zA-Z]):", raw)
+    tokens: List[str] = []
+    start = 0
+    for match in re.finditer(r"[;,:]", raw):
+        index = match.start()
+        if match.group() == ":" and _is_drive_colon(raw, index):
+            continue
+        tokens.append(raw[start:index])
+        start = index + 1
+    tokens.append(raw[start:])
     return [part.strip("\"' \t\r\n") for part in tokens if part.strip("\"' \t\r\n")]
+
+
+def _is_drive_colon(raw: str, index: int) -> bool:
+    """True for the colon of a Windows drive prefix such as C:\\path.
+
+    The single letter must start the value or a list entry; a one-letter folder at the end of
+    a POSIX path (/data/a:/data/b) is just a folder followed by a separator.
+    """
+    if index < 1 or not (raw[index - 1].isascii() and raw[index - 1].isalpha()):
+        return False
+    return index == 1 or raw[index - 2] in ";, \t\r\n\"'"
 
 
 def _configure_allowed_roots_from_cli(argv: Optional[List[str]] = None) -> None:

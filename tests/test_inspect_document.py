@@ -180,3 +180,70 @@ async def test_inspect_document_zero_disk_footprint(monkeypatch, tmp_path):
     assert res == "Line 1\nLine 2"
     assert download_targets == [bytes]  # Strict RAM-only download
     assert before_files == after_files  # Zero disk pollution
+
+
+GIF = b"GIF89a\x01\x00\x01\x00\x00\x00\x00;"
+JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF"
+WEBP = b"RIFF\x04\x00\x00\x00WEBPVP8 "
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name, mime, data, expected",
+    [
+        ("smile.gif", "image/gif", GIF, "gif"),
+        ("renamed.jpg", "image/jpeg", GIF, "gif"),  # declared type is wrong, bytes decide
+        ("photo.jpg", "image/jpeg", JPEG, "jpeg"),
+        ("sticker.webp", "image/webp", WEBP, "webp"),
+    ],
+)
+async def test_inspect_document_names_the_image_format_from_its_bytes(
+    monkeypatch, name, mime, data, expected
+):
+    msg = SimpleNamespace(id=31, media=object(), file=SimpleNamespace(name=name, mime_type=mime))
+    monkeypatch.setattr(media, "get_client", lambda account=None: MockClient(msg, data))
+    monkeypatch.setattr(media, "resolve_entity", AsyncMock(return_value="entity"))
+
+    result = await _inspect_document(123, 31)
+
+    assert isinstance(result, Image)
+    assert result._format == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name, mime, data",
+    [
+        ("scan.bmp", "image/bmp", b"BM6\x00\x00\x00"),
+        ("IMG.heic", "image/heic", b"\x00\x00\x00\x18ftypheic"),
+    ],
+)
+async def test_inspect_document_refuses_images_the_claude_api_cannot_take(
+    monkeypatch, name, mime, data
+):
+    msg = SimpleNamespace(id=32, media=object(), file=SimpleNamespace(name=name, mime_type=mime))
+    monkeypatch.setattr(media, "get_client", lambda account=None: MockClient(msg, data))
+    monkeypatch.setattr(media, "resolve_entity", AsyncMock(return_value="entity"))
+
+    result = await _inspect_document(123, 32)
+
+    assert isinstance(result, str)
+    assert "supported formats are JPEG, PNG, GIF and WebP" in result
+
+
+@pytest.mark.asyncio
+async def test_inspect_document_does_not_download_a_file_it_cannot_read(monkeypatch):
+    msg = SimpleNamespace(
+        id=33,
+        media=object(),
+        file=SimpleNamespace(name="backup.zip", mime_type="application/zip", size=3_145_728),
+    )
+    client = MockClient(msg, b"zip")
+    client.download_media = AsyncMock()
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+    monkeypatch.setattr(media, "resolve_entity", AsyncMock(return_value="entity"))
+
+    result = await _inspect_document(123, 33)
+
+    assert "is not currently supported" in result
+    client.download_media.assert_not_called()

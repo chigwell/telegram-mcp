@@ -101,6 +101,10 @@ async def _verify_expected_username(label: str, client) -> None:
     )
 
 
+class _NotAuthorized(RuntimeError):
+    """The session connects but was never logged in."""
+
+
 async def _connect_authorized_client(label, client) -> None:
     # First, prevent our own duplicate-spawn case outright: a per-session lock
     # means a second instance of this server never even attempts to connect
@@ -147,13 +151,36 @@ async def _connect_authorized_client(label, client) -> None:
         await _verify_expected_username(label, client)
         return
 
-    raise RuntimeError(
+    raise _NotAuthorized(
         f"Telegram client '{label}' is not authorized. Interactive phone login "
         "is disabled for the MCP server because it runs over stdio. Generate a "
         "session string with `uv run session_string_generator.py`, then set "
         "TELEGRAM_SESSION_STRING or TELEGRAM_SESSION_STRING_<LABEL> in .env. "
         "For existing file sessions, run the login outside the MCP server first."
     )
+
+
+async def _connect_or_skip(label, client) -> None:
+    """Connect one account; drop an optional one that was never logged in."""
+    try:
+        await _connect_authorized_client(label, client)
+    except _NotAuthorized:
+        if label not in _runtime.OPTIONAL_ACCOUNTS:
+            raise
+        lock = _session_locks.pop(label, None)
+        if lock is not None:
+            lock.release()
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        clients.pop(label, None)
+        print(
+            f"Skipping account '{label}': TELEGRAM_SESSION_NAME names a session that is not "
+            "logged in, and labelled accounts are configured. Unset TELEGRAM_SESSION_NAME "
+            "or log that session in to use it as the default account.",
+            file=sys.stderr,
+        )
 
 
 def _configure_transport_security() -> None:
@@ -205,9 +232,8 @@ async def _main() -> None:
     try:
         labels = ", ".join(clients.keys())
         print(f"Starting {len(clients)} Telegram client(s) ({labels})...", file=sys.stderr)
-        await asyncio.gather(
-            *(_connect_authorized_client(label, cl) for label, cl in clients.items())
-        )
+        await asyncio.gather(*(_connect_or_skip(label, cl) for label, cl in list(clients.items())))
+        labels = ", ".join(clients.keys())
 
         # Warm entity caches — StringSession has no persistent cache,
         # so fetch all dialogs once per client to populate them.

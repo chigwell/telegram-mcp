@@ -190,9 +190,7 @@ async def get_chats(account: Optional[str] = None, page: int = 1, page_size: int
             if not title:
                 # Match list_chats: users are titled by first + last name
                 # (empty/None parts are skipped, so "Bob" stays "Bob").
-                first = getattr(entity, "first_name", "") or ""
-                last = getattr(entity, "last_name", "") or ""
-                title = f"{first} {last}".strip() or "Unknown"
+                title = person_name(entity) or "Unknown"
             records.append(
                 {
                     "chat_id": get_marked_id(entity),
@@ -331,6 +329,54 @@ async def list_topics(
             offset_topic=offset_topic,
             search_query=search_query,
         )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Forum Topic Icons", openWorldHint=True, readOnlyHint=True
+    )
+)
+@with_account(readonly=True)
+async def list_forum_topic_icons(account: Optional[str] = None) -> str:
+    """
+    List the custom emoji Telegram allows as forum topic icons.
+
+    Note for LLM: Pass an entry's icon_emoji_id to create_forum_topic or
+    edit_forum_topic to set a topic icon. Other custom emoji are rejected
+    unless the account has Telegram Premium.
+
+    Returns a JSON result with one record per icon: icon_emoji_id (the custom
+    emoji document ID, as a string) and emoji (its fallback character).
+    """
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        result = await cl(
+            functions.messages.GetStickerSetRequest(
+                stickerset=types.InputStickerSetEmojiDefaultTopicIcons(), hash=0
+            )
+        )
+
+        # Fallback emoticons from the set's packs, used when a document has no alt.
+        doc_to_emoticon = {}
+        for pack in getattr(result, "packs", None) or []:
+            for doc_id in getattr(pack, "documents", None) or []:
+                doc_to_emoticon.setdefault(doc_id, getattr(pack, "emoticon", ""))
+
+        records = []
+        for doc in getattr(result, "documents", None) or []:
+            doc_id = getattr(doc, "id", None)
+            if doc_id is None:
+                continue
+            alt = doc_to_emoticon.get(doc_id, "")
+            for attr in getattr(doc, "attributes", None) or []:
+                if isinstance(attr, types.DocumentAttributeCustomEmoji):
+                    alt = getattr(attr, "alt", "") or alt
+            records.append({"icon_emoji_id": str(doc_id), "emoji": sanitize_user_content(alt)})
+
+        return format_tool_result(records)
+    except Exception as e:
+        return log_and_format_error("list_forum_topic_icons", e)
 
 
 @mcp.tool(
@@ -682,10 +728,7 @@ async def list_chats(
             if hasattr(entity, "title"):
                 record["title"] = sanitize_name(entity.title)
             elif hasattr(entity, "first_name"):
-                name = f"{entity.first_name}"
-                if hasattr(entity, "last_name") and entity.last_name:
-                    name += f" {entity.last_name}"
-                record["name"] = sanitize_name(name)
+                record["name"] = sanitize_name(person_name(entity))
 
             record["type"] = get_entity_type(entity)
 
@@ -815,10 +858,7 @@ async def get_chat(chat_id: Union[int, str], account: Optional[str] = None) -> s
                 record["participants"] = None
 
         elif is_user:
-            name = f"{entity.first_name}"
-            if entity.last_name:
-                name += f" {entity.last_name}"
-            record["name"] = sanitize_name(name)
+            record["name"] = sanitize_name(person_name(entity))
             record["type"] = get_entity_type(entity)
             if entity.username:
                 record["username"] = entity.username
@@ -864,11 +904,7 @@ async def get_chat(chat_id: Union[int, str], account: Optional[str] = None) -> s
                 sender_name = "Unknown"
                 sender = getattr(last_msg, "sender", None)
                 if sender:
-                    sender_name = getattr(sender, "first_name", "") or getattr(
-                        sender, "title", "Unknown"
-                    )
-                    if getattr(sender, "last_name", None):
-                        sender_name += f" {sender.last_name}"
+                    sender_name = person_name(sender) or getattr(sender, "title", "Unknown")
                 sender_name = sanitize_name(sender_name.strip() or "Unknown")
                 record["last_message"] = {
                     "sender": sender_name,
@@ -899,7 +935,7 @@ async def search_public_chats(query: str, limit: int = 20, account: Optional[str
         if is_chat_allowlist_enabled():
             all_entities = [e for e in all_entities if is_chat_allowed(get_marked_id(e), e)]
         entities = [format_entity(e) for e in all_entities]
-        return json.dumps(entities, indent=2)
+        return json.dumps(entities, indent=2, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("search_public_chats", e, query=query, limit=limit)
 
@@ -1260,6 +1296,7 @@ async def get_message_read_by(
             },
             indent=2,
             default=json_serializer,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error(
@@ -1327,6 +1364,7 @@ async def get_message_link(
 __all__ = [
     "get_chats",
     "list_topics",
+    "list_forum_topic_icons",
     "enable_forum_topics",
     "create_forum_topic",
     "list_chats",

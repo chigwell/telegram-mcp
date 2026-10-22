@@ -1,5 +1,7 @@
 """Messages MCP tools."""
 
+import math
+
 from telegram_mcp.runtime import *
 from telegram_mcp import transcription
 from pydantic import StrictInt
@@ -9,6 +11,24 @@ from pydantic import StrictInt
 # over an OFAC listing and every t.me link on earth broke for about a day, while
 # telegram.me kept resolving. The domain has been ACTIVE again since 2026-07-14.
 LINK_DOMAIN = os.getenv("TELEGRAM_LINK_DOMAIN", "t.me")
+
+MESSAGE_NOT_MODIFIED = (
+    "Message {message_id} not modified: the new text is the same as the current one."
+)
+
+SEND_AS_SELF_LABEL = "your own account"
+SEND_AS_UNSUPPORTED_CHAT = (
+    "Chat {chat_id} has no send-as choice: Telegram offers it only in supergroups. "
+    "Nothing changed."
+)
+SEND_AS_PEER_REFUSED = (
+    "Telegram refused {send_as} as the sender in chat {chat_id}: this account cannot "
+    "post as it there. Call get_send_as to list the allowed senders. Nothing changed."
+)
+SEND_AS_PREMIUM_REQUIRED = (
+    "Posting as {send_as} in chat {chat_id} requires Telegram Premium on this account. "
+    "Nothing changed."
+)
 
 
 def get_media_label(msg) -> str:
@@ -587,7 +607,7 @@ async def _send_rich(cl, entity, text: str, parse_mode: str, reply_to: Optional[
     if not await account_is_premium(cl):
         return premium_required_result("send_message")
     try:
-        await cl(
+        result = await cl(
             functions.messages.SendMessageRequest(
                 peer=entity,
                 message=text,
@@ -603,7 +623,10 @@ async def _send_rich(cl, entity, text: str, parse_mode: str, reply_to: Optional[
         if is_premium_rpc_error(e):
             return premium_required_result("send_message")
         raise
-    return json.dumps({"sent": True, "rich": True}, ensure_ascii=False)
+    return json.dumps(
+        {"sent": True, "rich": True, "message_id": _first_sent_message_id(result)},
+        ensure_ascii=False,
+    )
 
 
 async def _edit_rich(cl, entity, message_id: int, text: str, parse_mode: str):
@@ -618,6 +641,11 @@ async def _edit_rich(cl, entity, message_id: int, text: str, parse_mode: str):
                 message=text,
                 rich_message=make_rich_input(parse_mode, text),
             )
+        )
+    except telethon.errors.MessageNotModifiedError:
+        return json.dumps(
+            {"sent": False, "rich": True, "edited_message_id": message_id, "not_modified": True},
+            ensure_ascii=False,
         )
     except telethon.errors.RPCError as e:
         if is_premium_rpc_error(e):
@@ -880,9 +908,14 @@ async def send_message(
     format_date: Optional[str] = None,
     custom_emojis: Optional[List[Dict[str, Any]]] = None,
     account: Optional[str] = None,
+    reply_to: Optional[int] = None,
 ) -> str:
     """
     Send a message to a specific chat.
+    Plain, html/markdown, date-chip and custom-emoji sends end their result with
+    "message_id=<id>", the id of the sent message; rich sends (parse_mode rich,
+    rich_md, rich_markdown or rich_html) return JSON with a "message_id" key,
+    null when Telegram's answer does not name it.
     Reuse custom_emojis from message-reading tools with parse_mode='html' and
     <tg-emoji emoji-id="ID">EMOJI</tg-emoji>, using the returned id and emoji.
     HTML-escape the emoji and other literal text. Custom emoji availability is
@@ -910,6 +943,8 @@ async def send_message(
             {"sent": false, "reason": "telegram_premium_required"} result tells you to
             reformat and retry with 'md'/'html'. Premium is re-checked on every call
             (it can expire or be bought at any time).
+        reply_to: Optional id of a message in the same chat to reply to. To post
+            in a forum topic, pass the topic id (from list_topics).
     """
     try:
         cl = get_client(account)
@@ -929,26 +964,55 @@ async def send_message(
         if conflict:
             return conflict
         if parse_mode and parse_mode.lower() in RICH_PARSE_MODES:
-            return await _send_rich(cl, entity, message, parse_mode.lower())
+            return await _send_rich(cl, entity, message, parse_mode.lower(), reply_to=reply_to)
         if format_date or custom_emojis:
             entities, error = _plain_entities(message, format_date, custom_emojis)
             if error:
                 return error
             import random
 
-            await cl(
+            result = await cl(
                 functions.messages.SendMessageRequest(
                     peer=entity,
                     message=message,
                     random_id=random.randint(0, 2**62),
+                    reply_to=(
+                        types.InputReplyToMessage(reply_to_msg_id=reply_to) if reply_to else None
+                    ),
                     entities=entities,
                 )
             )
-            return "Message sent successfully."
-        await cl.send_message(entity, message, parse_mode=parse_mode)
-        return "Message sent successfully."
+            return _sent_result(_first_sent_message_id(result))
+        sent = await cl.send_message(entity, message, parse_mode=parse_mode, reply_to=reply_to)
+        return _sent_result(sent)
     except Exception as e:
         return log_and_format_error("send_message", e, chat_id=chat_id)
+
+
+def _first_sent_message_id(result) -> Optional[int]:
+    """Id of the message a raw SendMessageRequest created, when the result names it."""
+    direct = getattr(result, "id", None)
+    if isinstance(direct, int):
+        return direct  # UpdateShortSentMessage
+    for update in getattr(result, "updates", None) or []:
+        if isinstance(update, types.UpdateMessageID):
+            return update.id
+        msg = getattr(update, "message", None)
+        if isinstance(getattr(msg, "id", None), int):
+            return msg.id
+    return None
+
+
+def _sent_result(sent) -> str:
+    """Result text of a successful send, naming the new message's id when known.
+
+    Integrators (such as chat bridges) need the id to recognise the message when
+    it comes back in history; the text before it stays as it always was.
+    """
+    msg_id = sent if isinstance(sent, int) or sent is None else getattr(sent, "id", None)
+    if isinstance(msg_id, int):
+        return f"Message sent successfully. message_id={msg_id}"
+    return "Message sent successfully."
 
 
 @mcp.tool(
@@ -1716,7 +1780,8 @@ async def get_send_as(chat_id: Union[int, str], account: Optional[str] = None) -
     """List Telegram's allowed send-as peers for this destination where supported.
 
     Returns peer IDs, names and premium_required; does not change the saved sender.
-    Use a returned ID as forward_message.send_as. Names are untrusted user content.
+    Use a returned ID as forward_message.send_as, or save it as the chat's default
+    sender with set_default_send_as. Names are untrusted user content.
     """
     try:
         cl = get_client(account)
@@ -1745,6 +1810,48 @@ async def get_send_as(chat_id: Union[int, str], account: Optional[str] = None) -
         return format_tool_result(records)
     except Exception as e:
         return log_and_format_error("get_send_as", e, chat_id=chat_id)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Set Default Send As",
+        openWorldHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id", "send_as")
+async def set_default_send_as(
+    chat_id: Union[int, str], send_as: Union[int, str], account: Optional[str] = None
+) -> str:
+    """Save which identity this account posts as in a supergroup.
+
+    Telegram applies the saved sender to every later message from this account in
+    that chat, in all clients, until it is changed again. Discover the choices with
+    get_send_as. Anonymous posting as an admin is an admin right, not a send-as
+    choice, and is not changed here.
+
+    Args:
+        chat_id: Supergroup ID or username.
+        send_as: "me" for your own account, or the ID or username of an allowed
+            sender (for example a channel you own) returned by get_send_as.
+    """
+    try:
+        cl = get_client(account)
+        peer = await resolve_input_entity(chat_id, cl)
+        if not isinstance(peer, types.InputPeerChannel):
+            return SEND_AS_UNSUPPORTED_CHAT.format(chat_id=chat_id)
+        sender = await resolve_input_entity(send_as, cl)
+        sender_label = SEND_AS_SELF_LABEL if isinstance(sender, types.InputPeerSelf) else send_as
+        await cl(functions.messages.SaveDefaultSendAsRequest(peer=peer, send_as=sender))
+        return f"Default sender in chat {chat_id} set to {sender_label}."
+    except telethon.errors.SendAsPeerInvalidError:
+        return SEND_AS_PEER_REFUSED.format(send_as=send_as, chat_id=chat_id)
+    except Exception as e:
+        if isinstance(e, telethon.errors.RPCError) and is_premium_rpc_error(e):
+            return SEND_AS_PREMIUM_REQUIRED.format(send_as=send_as, chat_id=chat_id)
+        return log_and_format_error("set_default_send_as", e, chat_id=chat_id, send_as=send_as)
 
 
 @mcp.tool(
@@ -2005,6 +2112,8 @@ async def edit_message(
         extra = {"parse_mode": parse_mode} if parse_mode is not None else {}
         await cl.edit_message(entity, message_id, new_text, **extra)
         return f"Message {message_id} edited."
+    except telethon.errors.MessageNotModifiedError:
+        return MESSAGE_NOT_MODIFIED.format(message_id=message_id)
     except Exception as e:
         return log_and_format_error(
             "edit_message", e, chat_id=chat_id, message_id=message_id, new_text=new_text
@@ -2236,6 +2345,102 @@ async def unpin_all_messages(chat_id: Union[int, str], account: Optional[str] = 
         return log_and_format_error("unpin_all_messages", e, chat_id=chat_id)
 
 
+# Telegram drops a typing indicator after ~5s, so anything longer has to be refreshed. The cap
+# keeps a single call well under the ~55s MCP tool timeout.
+TYPING_REFRESH_SECONDS = 4.0
+TYPING_MAX_SECONDS = 45.0
+TYPING_OPERATION_TIMEOUT = 50.0
+TYPING_CLEANUP_TIMEOUT = 3.0
+_active_typing = set()
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Send Typing", openWorldHint=True, destructiveHint=False, idempotentHint=True
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def send_typing(
+    chat_id: Union[int, str],
+    seconds: float = 5.0,
+    topic_id: Optional[int] = None,
+    account: Optional[str] = None,
+) -> str:
+    """
+    Show the "typing..." indicator in a chat for a number of seconds, then clear it.
+    Call it right before send_message / reply_to_message so the message does not land instantly.
+    It blocks for `seconds`, so run it before the send, not in parallel with it.
+
+    Args:
+        chat_id: The ID or username of the chat.
+        seconds: How long to show the indicator, 0.5 to 45 (default 5).
+        topic_id: Forum topic ID, so the indicator shows inside that topic only.
+    """
+    try:
+        if type(seconds) not in (int, float) or not 0.5 <= seconds <= TYPING_MAX_SECONDS:
+            return f"seconds must be between 0.5 and {TYPING_MAX_SECONDS:g}."
+        if topic_id is not None and (type(topic_id) is not int or topic_id <= 0):
+            return "Error: topic_id must be a positive integer."
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+            err = check_chat_access(chat_id, entity)
+            return log_and_format_error(
+                "send_typing",
+                ChatAccessDeniedError(err),
+                prefix=ErrorCategory.PRIVACY,
+                user_message=err,
+                chat_id=chat_id,
+            )
+
+        peer = await resolve_input_entity(chat_id, cl)
+        typing = functions.messages.SetTypingRequest(
+            peer=peer, action=types.SendMessageTypingAction(), top_msg_id=topic_id
+        )
+        cancel = functions.messages.SetTypingRequest(
+            peer=peer, action=types.SendMessageCancelAction(), top_msg_id=topic_id
+        )
+        # Reject overlapping calls rather than allowing one call's cancel to clear another's
+        # indicator. Resolve first so aliases for the same peer share the same key.
+        key = (id(cl), str(peer), topic_id)
+        if key in _active_typing:
+            return "Error: a typing operation is already active for this chat/topic."
+        _active_typing.add(key)
+        cleanup_ok = False
+
+        async def show_typing():
+            ticks = math.ceil(seconds / TYPING_REFRESH_SECONDS)
+            interval = seconds / ticks
+            for _ in range(ticks):
+                if not await cl(typing, flood_sleep_threshold=0):
+                    raise RuntimeError("Telegram did not accept the typing request")
+                await asyncio.sleep(interval)
+
+        try:
+            try:
+                await asyncio.wait_for(show_typing(), timeout=TYPING_OPERATION_TIMEOUT)
+            finally:
+                try:
+                    cleanup_ok = bool(
+                        await asyncio.wait_for(
+                            cl(cancel, flood_sleep_threshold=0), timeout=TYPING_CLEANUP_TIMEOUT
+                        )
+                    )
+                except Exception:
+                    # Preserve the original failure/cancellation; Telegram also expires the
+                    # indicator automatically. Never log peer details or credentials here.
+                    logging.getLogger("telegram_mcp").warning("Could not clear typing indicator")
+        finally:
+            _active_typing.discard(key)
+        if not cleanup_ok:
+            return "Typing requests accepted, but clearing the indicator could not be confirmed."
+        return f"Typing requests accepted in chat {chat_id} for {seconds:g}s; indicator cleared."
+    except Exception as e:
+        return log_and_format_error("send_typing", e, chat_id=chat_id, seconds=seconds)
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Mark As Read", openWorldHint=True, destructiveHint=True, idempotentHint=True
@@ -2387,7 +2592,10 @@ async def search_global(
         cl = get_client(account)
         await ensure_connected(cl)
         offset = (page - 1) * page_size
-        messages = await cl.get_messages(None, limit=page_size, search=query, add_offset=offset)
+        # messages.searchGlobal has no add_offset (Telethon silently ignores it for a global
+        # search), so every page would be the first one. Fetch up to the end of the requested
+        # page - Telethon pages through the results itself - and keep only that page.
+        messages = (await cl.get_messages(None, limit=offset + page_size, search=query))[offset:]
 
         if not messages:
             return "No messages found for this page."
@@ -2496,7 +2704,9 @@ async def get_pinned_messages(chat_id: Union[int, str], account: Optional[str] =
             # Try newer Telethon approach
             from telethon.tl.types import InputMessagesFilterPinned
 
-            messages = await cl.get_messages(entity, filter=InputMessagesFilterPinned())
+            # get_messages() without a limit returns a single message. Telegram allows
+            # at most 100 pinned messages per chat.
+            messages = await cl.get_messages(entity, filter=InputMessagesFilterPinned(), limit=100)
         except (ImportError, AttributeError):
             # Fallback - try without filter and manually filter pinned
             all_messages = await cl.get_messages(entity, limit=50)
@@ -2854,6 +3064,7 @@ async def get_message_reactions(
             return json.dumps(
                 {"message_id": message_id, "chat_id": str(chat_id), "reactions": [], "count": 0},
                 indent=2,
+                ensure_ascii=False,
             )
 
         result = await cl(
@@ -2890,6 +3101,7 @@ async def get_message_reactions(
             },
             indent=2,
             default=json_serializer,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error(
@@ -3012,7 +3224,10 @@ async def get_drafts(account: Optional[str] = None) -> str:
             return "No drafts found."
 
         return json.dumps(
-            {"drafts": drafts_info, "count": len(drafts_info)}, indent=2, default=json_serializer
+            {"drafts": drafts_info, "count": len(drafts_info)},
+            indent=2,
+            default=json_serializer,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error("get_drafts", e)
@@ -3190,6 +3405,7 @@ async def export_unread_messages(
                 "messages_exported": stats["messages_exported"],
             },
             indent=2,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error(
@@ -3211,6 +3427,7 @@ __all__ = [
     "list_messages",
     "get_message_context",
     "forward_message",
+    "set_default_send_as",
     "edit_message",
     "delete_message",
     "delete_chat_history",
@@ -3219,6 +3436,7 @@ __all__ = [
     "unpin_message",
     "unpin_all_messages",
     "mark_as_read",
+    "send_typing",
     "reply_to_message",
     "search_messages",
     "search_global",

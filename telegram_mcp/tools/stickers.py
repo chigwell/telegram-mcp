@@ -251,7 +251,7 @@ async def get_sticker_sets(account: Optional[str] = None) -> str:
                 for sticker_set in getattr(result, "sets", []) or []
             },
         )
-        return json.dumps(sets, indent=2, default=json_serializer)
+        return json.dumps(sets, indent=2, default=json_serializer, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("get_sticker_sets", e)
 
@@ -308,6 +308,7 @@ async def get_sticker_pack(pack: str, account: Optional[str] = None) -> str:
             {"pack": pack_info(set_meta), "stickers": stickers},
             indent=2,
             default=json_serializer,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error("get_sticker_pack", e, pack=pack)
@@ -459,7 +460,7 @@ def _sticker_manifest(fetched, alt_by_id: Dict[int, str]) -> str:
         for position, doc, data in fetched
         if data
     ]
-    return json.dumps(manifest, separators=(",", ":"), default=json_serializer)
+    return json.dumps(manifest, separators=(",", ":"), default=json_serializer, ensure_ascii=False)
 
 
 @mcp.tool(
