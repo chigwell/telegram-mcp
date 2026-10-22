@@ -3,6 +3,7 @@
 import io
 import os
 import shutil
+import subprocess
 import tempfile
 from uuid import uuid4
 
@@ -22,6 +23,72 @@ from telegram_mcp.photo_source import (
 
 PHOTO_IDENTIFIER_SEARCH_DEPTH = 100
 PHOTO_SHEET_MAXIMUM_TILES = 12
+
+
+# Containers Telegram clients play inline; other files keep going out as documents.
+VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v"}
+FFMPEG_TIMEOUT_SECONDS = 30
+THUMB_MAX_SIDE = 320
+
+
+def _probe_video(path: Path) -> Optional[types.DocumentAttributeVideo]:
+    """Read the displayed size and duration of a video with ffprobe, None if unavailable.
+
+    Without hachoir Telethon sends videos with w=1, h=1, duration=0, so clients
+    draw them as squares.
+    """
+    options = "-v error -select_streams v:0 -show_streams -show_format -of json".split()
+    try:
+        completed = subprocess.run(
+            ["ffprobe", *options, str(path)],
+            capture_output=True,
+            text=True,
+            timeout=FFMPEG_TIMEOUT_SECONDS,
+            check=True,
+        )
+        probe = json.loads(completed.stdout)
+        stream = probe["streams"][0]
+        width, height = int(stream["width"]), int(stream["height"])
+        duration = float(stream.get("duration") or probe.get("format", {}).get("duration") or 0)
+        rotation = next(
+            (side["rotation"] for side in stream.get("side_data_list", []) if "rotation" in side),
+            stream.get("tags", {}).get("rotate", 0),
+        )
+        rotation = int(float(rotation))
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError, TypeError):
+        return None
+    if rotation % 180 == 90:
+        width, height = height, width
+    return types.DocumentAttributeVideo(
+        duration=duration, w=width, h=height, supports_streaming=True
+    )
+
+
+def _render_video_thumb(path: Path, duration: float) -> Optional[bytes]:
+    """Render a JPEG frame that fits Telegram's 320px thumbnail box, None if ffmpeg fails."""
+    scale = f"scale={THUMB_MAX_SIDE}:{THUMB_MAX_SIDE}:force_original_aspect_ratio=decrease"
+    seek = f"{min(1.0, duration / 2):.2f}"
+    command = ["ffmpeg", "-v", "error", "-ss", seek, "-i", str(path), "-frames:v", "1"]
+    command += ["-vf", scale, "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"]
+    try:
+        completed = subprocess.run(
+            command, capture_output=True, timeout=FFMPEG_TIMEOUT_SECONDS, check=True
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return completed.stdout or None
+
+
+async def _video_send_kwargs(path: Path) -> Dict[str, Any]:
+    """Telethon send_file kwargs that make a local video play with its real shape and preview."""
+    video = await asyncio.to_thread(_probe_video, path)
+    if video is None:
+        return {}
+    kwargs: Dict[str, Any] = {"attributes": [video]}
+    thumb = await asyncio.to_thread(_render_video_thumb, path, video.duration)
+    if thumb:
+        kwargs["thumb"] = thumb
+    return kwargs
 
 
 def _known_media_size(message) -> Optional[int]:
@@ -101,6 +168,8 @@ async def send_file(
         if path_error:
             return path_error
         entity = await resolve_entity(chat_id, cl)
+        is_inline_video = safe_path.suffix.lower() in VIDEO_SUFFIXES and not force_document
+        video_kwargs = await _video_send_kwargs(safe_path) if is_inline_video else {}
         await cl.send_file(
             entity,
             str(safe_path),
@@ -108,6 +177,7 @@ async def send_file(
             reply_to=topic_id,
             schedule=dt,
             **_force_document_kwargs(force_document),
+            **video_kwargs,
         )
         if dt:
             return f"File from {safe_path} scheduled for {dt.isoformat()} in chat {chat_id}."
