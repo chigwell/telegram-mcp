@@ -3109,6 +3109,102 @@ async def get_message_reactions(
         )
 
 
+def chat_reactions_info(available) -> Optional[Dict[str, Any]]:
+    """What a chat's ChatReactions setting allows, or None if Telegram sent no setting.
+
+    Custom reactions are reported as custom:<document_id>, as get_message_reactions
+    does and send_reaction accepts.
+    """
+    if isinstance(available, types.ChatReactionsAll):
+        return {
+            "allowed": "all",
+            "allow_custom": bool(available.allow_custom),
+            "standard_reactions": [],
+            "custom_emoji_reactions": [],
+        }
+    if isinstance(available, types.ChatReactionsSome):
+        standard, custom = [], []
+        for reaction in available.reactions:
+            if isinstance(reaction, types.ReactionEmoji):
+                standard.append(reaction.emoticon)
+            elif isinstance(reaction, types.ReactionCustomEmoji):
+                custom.append(f"custom:{reaction.document_id}")
+        return {
+            "allowed": "some",
+            "allow_custom": False,
+            "standard_reactions": standard,
+            "custom_emoji_reactions": custom,
+        }
+    if isinstance(available, types.ChatReactionsNone):
+        return {
+            "allowed": "none",
+            "allow_custom": False,
+            "standard_reactions": [],
+            "custom_emoji_reactions": [],
+        }
+    return None
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Available Reactions", openWorldHint=True, readOnlyHint=True, idempotentHint=True
+    )
+)
+@with_account(readonly=True)
+@validate_id("chat_id")
+async def get_available_reactions(
+    chat_id: Union[int, str],
+    account: Optional[str] = None,
+) -> str:
+    """
+    Get the reactions a group or channel allows, to choose one for send_reaction.
+
+    "allowed" is "all" (every standard reaction, and any custom emoji when "allow_custom"
+    is true), "some" (only those listed in "standard_reactions" and
+    "custom_emoji_reactions") or "none" (reactions are turned off).
+
+    Args:
+        chat_id: The chat ID or username
+    """
+    try:
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+            err = check_chat_access(chat_id, entity)
+            return log_and_format_error(
+                "get_available_reactions",
+                ChatAccessDeniedError(err),
+                prefix=ErrorCategory.PRIVACY,
+                user_message=err,
+                chat_id=chat_id,
+            )
+
+        if isinstance(entity, User):
+            return f"Chat {chat_id} is a private chat: only groups and channels set reactions."
+
+        # The setting is on the full chat, not on the Chat/Channel entity. Basic groups
+        # are not channels: GetFullChannelRequest cannot cast an InputPeerChat.
+        if isinstance(entity, (Chat, InputPeerChat)):
+            basic_id = getattr(entity, "chat_id", None) or getattr(entity, "id", None)
+            full = await cl(functions.messages.GetFullChatRequest(chat_id=basic_id))
+        else:
+            full = await cl(functions.channels.GetFullChannelRequest(channel=entity))
+
+        info = chat_reactions_info(getattr(full.full_chat, "available_reactions", None))
+        if info is None:
+            return f"Telegram returned no reaction settings for chat {chat_id}."
+
+        return json.dumps(
+            {"chat_id": str(chat_id), **info},
+            indent=2,
+            default=json_serializer,
+            ensure_ascii=False,
+        )
+    except Exception as e:
+        return log_and_format_error("get_available_reactions", e, chat_id=chat_id)
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Save Draft", openWorldHint=True, destructiveHint=False, idempotentHint=True
@@ -3447,6 +3543,7 @@ __all__ = [
     "send_reaction",
     "remove_reaction",
     "get_message_reactions",
+    "get_available_reactions",
     "save_draft",
     "get_drafts",
     "clear_draft",

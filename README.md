@@ -61,6 +61,8 @@ The server currently includes 80+ MCP tools grouped into these areas:
 
 `get_message_reactions` returns an empty list for a message with no reactions. To reuse a custom reaction, pass the returned `custom:<document_id>` value to `send_reaction`.
 
+`get_available_reactions(chat_id)` reports which reactions a group or channel allows: `all`, `some` (the lists in `standard_reactions` and `custom_emoji_reactions`, the latter as `custom:<document_id>` values) or `none`. Private chats have no such setting.
+
 `vote_poll(chat_id, message_id, option_indices, account=None)` votes in an existing poll.
 Read the poll with `get_messages` first, then select zero-based answer indices: `[0]`
 for the first answer, or `[0, 2]` for the first and third in a multiple-choice poll.
@@ -169,6 +171,12 @@ emoji, including ones inside URLs or code; to keep one plain, use
 does not look like an emoji (pure ASCII/Latin punctuation such as `#` is refused),
 an `id` is not a positive 64-bit integer, two marked spans overlap, or `parse_mode`
 is set. It combines with `format_date`.
+
+`search_custom_emoji(query, limit=20, lang_code=None)` finds custom emoji to reuse. It
+takes a word (`snow`) or an emoji (`❄️`); a word is turned into emoji through Telegram's
+emoji keywords first, and the result is `custom_emojis` entries as described above, ready
+to pass to `send_message`. `lang_code` (e.g. `ru`) picks the language of the word, and
+`TELEGRAM_EMOJI_SEARCH_LANGUAGE` sets the default (`en`).
 
 ### Tappable dates and times
 
