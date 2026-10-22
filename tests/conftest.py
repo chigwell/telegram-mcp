@@ -32,6 +32,7 @@ def _reset_floodgate():
     from telegram_mcp import runtime
 
     yield
+    runtime._FLOOD_SEEN.set(False)  # direct report_flood calls otherwise leak
     if runtime._floodgate_gate is not None:
         runtime._floodgate_gate.reset()
     if runtime._floodgate_breaker is not None:

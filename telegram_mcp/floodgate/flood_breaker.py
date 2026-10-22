@@ -154,7 +154,12 @@ class FloodCircuitBreaker:
         # suspended: letting everyone through would send the whole backlog at
         # an account Telegram is actively throttling.
         if key in self._probe_in_flight:
-            raise TelegramOperationSuspendedError(operation, phone, self._cooldown_seconds)
+            # The probe usually resolves within seconds: a short honest hint
+            # beats the flat cooldown, which would idle an agent out of a
+            # suspension that is already lifting.
+            raise TelegramOperationSuspendedError(
+                operation, phone, min(self._cooldown_seconds, 2.0)
+            )
 
     def record_flood(self, operation: str, phone: str | None) -> None:
         """Count a flood wait against this (operation, phone)."""

@@ -341,3 +341,61 @@ async def test_shipped_history_bucket_defers_call_25(monkeypatch):
     assert results[:24] == ["ok"] * 24
     assert "Rate limit exceeded (FloodGate)" in results[24]
     assert len(calls) == 24  # the deferred call made no RPC
+
+
+@pytest.mark.asyncio
+async def test_breaker_suspension_outlives_a_single_retry(monkeypatch):
+    """The breaker's own refusal must not settle the pair as a success: an
+    OPEN suspension has to block more than one retry (real gate+breaker)."""
+    monkeypatch.setattr(runtime, "_floodgate_gate", None)
+    monkeypatch.setattr(runtime, "_floodgate_breaker", None)
+    _, breaker = runtime._floodgate()  # the shipped pair
+    for _ in range(3):
+        breaker.record_flood("get_history", _sole_label())
+    calls = []
+    tool = _tool(calls)
+    tool.__name__ = "get_history"
+    wrapped = runtime.with_account(readonly=True)(tool)
+
+    first = await wrapped(chat_id=1)
+    second = await wrapped(chat_id=1)
+
+    assert "Rate limit exceeded" in first
+    assert "Rate limit exceeded" in second  # still suspended after the first refusal
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_result_quoting_flood_text_does_not_wedge_the_trial(monkeypatch):
+    """A successful call whose OUTPUT merely contains the FloodWait prefix
+    (chat content quoting an old error) must still release the trial."""
+
+    class _TrialBreaker(_FakeBreaker):
+        def __init__(self):
+            super().__init__()
+            self.trial_open = False
+
+        def check(self, operation, label):
+            if self.trial_open:
+                raise runtime.TelegramOperationSuspendedError(operation, label, 1.0)
+            self.trial_open = True  # grant one trial, pinned until record_success
+
+        def record_success(self, operation, label):
+            super().record_success(operation, label)
+            self.trial_open = False
+
+    breaker = _TrialBreaker()
+    _install(monkeypatch, breaker=breaker)
+    wrapped = runtime.with_account(readonly=True)(
+        _tool([], body=f"{runtime._FLOOD_WAIT_REPLY_PREFIX}: stale bot reply quoted in chat")
+    )
+
+    first = await wrapped(chat_id=1)
+    second = await wrapped(chat_id=1)
+
+    assert "stale bot reply" in first
+    # The second call reached the tool again (no breaker refusal, which would
+    # say "FloodGate"): the trial was released despite the misleading text.
+    assert "FloodGate" not in second
+    assert "stale bot reply" in second
+    assert breaker.floods == []

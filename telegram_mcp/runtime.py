@@ -916,6 +916,11 @@ _floodgate_breaker: Optional[FloodCircuitBreaker] = None
 # only place a real FloodWaitError surfaces) does not — the contextvar bridges
 # that without touching any of the ~140 tool call sites.
 _CURRENT_ACCOUNT: ContextVar[Optional[str]] = ContextVar("current_account", default=None)
+# Set by _floodgate_report_flood when THIS completion hit a real FloodWait;
+# consumed (and cleared) by _floodgate_settle. Sniffing result text instead
+# wedged the breaker on successful calls whose output merely quoted the
+# FloodWait reply prefix.
+_FLOOD_SEEN: ContextVar[bool] = ContextVar("floodgate_flood_seen", default=False)
 
 # Prefix of the reply log_and_format_error returns for a real FloodWaitError;
 # the wrapper uses it to tell flooded results from working ones.
@@ -948,8 +953,12 @@ def _floodgate():
     return _floodgate_gate, _floodgate_breaker
 
 
-def _floodgate_defer(tool_name: str, account: Optional[str]) -> Optional[float]:
+def _floodgate_defer(tool_name: str, account: Optional[str]) -> Optional[tuple[float, bool]]:
     """Seconds the local floodgate defers this tool call, or None to proceed.
+
+    The bool separates a breaker suspension from a gate deferral: a suspension
+    granted nothing, so the caller must not settle the pair as a success —
+    that would close an OPEN breaker after a single refusal.
 
     Never raises: a broken gate must never take a tool down.
     """
@@ -961,11 +970,12 @@ def _floodgate_defer(tool_name: str, account: Optional[str]) -> Optional[float]:
         # The breaker refuses first (no slots burned while suspended), then the
         # proactive window reserves the slot.
         breaker.check(tool_name, label)
-        return gate.try_acquire(label, category_for_tool(tool_name)) or None
+        wait = gate.try_acquire(label, category_for_tool(tool_name))
+        return (wait, False) if wait else None
     except TelegramOperationSuspendedError as exc:
         # Suspended by the breaker: the pair sits out its cooldown.
         defer_seconds = exc.retry_after_sec
-        return defer_seconds
+        return defer_seconds, True
     except Exception:
         logger.warning("Floodgate check failed; letting the tool call through.")
         return None
@@ -987,6 +997,9 @@ def _floodgate_rate_limited_message(tool_name: str, retry_after: float) -> str:
 
 def _floodgate_report_flood(tool_name: str, seconds: float) -> None:
     """Feed a real FloodWaitError into the gate backoff and the breaker."""
+    # Flag this completion before any guard: settle must treat the
+    # FloodWait-shaped reply as a flood, never as a success.
+    _FLOOD_SEEN.set(True)
     if not _get_floodgate_enabled():
         return
     label = _CURRENT_ACCOUNT.get()
@@ -1003,14 +1016,20 @@ def _floodgate_report_flood(tool_name: str, seconds: float) -> None:
 def _floodgate_settle(tool_name: str, label: Optional[str], result: Any) -> None:
     """Resolve a pending breaker trial after a tool call.
 
-    A FloodWait reply keeps the flood that log_and_format_error already
-    recorded; every other completion — errors that are not floods included,
-    and gate deferrals that made no call — is evidence the RPC path works and
+    A completion flagged by _floodgate_report_flood keeps the flood
+    log_and_format_error already recorded; every other completion — errors
+    that are not floods included, and gate deferrals that made no call —
     releases the trial, so a granted probe can never wedge the pair.
+    Completions that made no RPC at all (validation rejections, allowlist
+    denials) are indistinguishable from successes at this boundary and reset
+    the consecutive-flood count — the same success-clears-counter rule the
+    vendored engine ships.
     """
+    flooded = _FLOOD_SEEN.get()
+    _FLOOD_SEEN.set(False)
     if not label or not _get_floodgate_enabled():
         return
-    if isinstance(result, str) and _FLOOD_WAIT_REPLY_PREFIX in result:
+    if flooded:
         return
     try:
         _, breaker = _floodgate()
@@ -1051,10 +1070,12 @@ def with_account(readonly=False):
                 gate_label = next(iter(clients))
             defer = _floodgate_defer(fn.__name__, gate_label) if gate_label else None
             if defer is not None:
+                seconds, suspended = defer
                 logger.warning("Floodgate defers the tool call; returning a rate-limit reply.")
-                # No call was made: release a breaker trial this check granted.
-                _floodgate_settle(fn.__name__, gate_label, "")
-                return _floodgate_rate_limited_message(fn.__name__, defer)
+                if not suspended:
+                    # No call was made: release a breaker trial this check granted.
+                    _floodgate_settle(fn.__name__, gate_label, "")
+                return _floodgate_rate_limited_message(fn.__name__, seconds)
 
             token = _CURRENT_ACCOUNT.set(gate_label)
             try:
@@ -1080,16 +1101,18 @@ def with_account(readonly=False):
                     try:
                         per_account_defer = _floodgate_defer(fn.__name__, label)
                         if per_account_defer is not None:
+                            seconds, suspended = per_account_defer
                             logger.warning(
                                 "Floodgate defers the tool call for one account; "
                                 "returning a rate-limit reply."
                             )
                             # Not failed: pacing is not an error, and a deferral
                             # on every account must not raise a ToolError.
-                            _floodgate_settle(fn.__name__, label, "")
+                            if not suspended:
+                                _floodgate_settle(fn.__name__, label, "")
                             return (
                                 label,
-                                _floodgate_rate_limited_message(fn.__name__, per_account_defer),
+                                _floodgate_rate_limited_message(fn.__name__, seconds),
                                 False,
                             )
                         result = None
