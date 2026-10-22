@@ -2,14 +2,13 @@
 
 import json
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Optional, Union
 
-from mcp.server.fastmcp import Context, FastMCP, Image
+from mcp.server.fastmcp import Context, Image
 from mcp.types import ToolAnnotations
-from telethon import functions, types
-from telethon.errors.rpcerrorlist import StickersetInvalidError
+from telethon import functions
 
-from sanitize import sanitize_name, sanitize_user_content
+from sanitize import sanitize_name
 from telegram_mcp.runtime import (
     _resolve_writable_file_path,
     ensure_connected,
@@ -49,6 +48,21 @@ def extract_pack_short_name(pack: str) -> str:
     clean = s.rstrip("/").split("/")[-1]
     clean = re.sub(r"[^a-zA-Z0-9_]", "", clean)
     return clean
+
+
+def image_format(data: bytes):
+    """Classify downloaded bytes as (extension, Pillow format or None)."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return ".jpg", "jpeg"
+    if data.startswith(b"\x89PNG"):
+        return ".png", "png"
+    if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WEBP":
+        return ".webp", "webp"
+    if data.startswith(b"\x1f\x8b"):
+        return ".tgs", None
+    if data.startswith(b"\x1aE\xdf\xa3"):
+        return ".webm", None
+    return ".webp", None
 
 
 @mcp.tool(
@@ -118,125 +132,6 @@ async def get_custom_emoji_packs(
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        title="Get Custom Emoji Pack", openWorldHint=True, readOnlyHint=True
-    )
-)
-@with_account(readonly=True)
-async def get_custom_emoji_pack(
-    pack: str,
-    account: Optional[str] = None,
-) -> str:
-    """
-    Open a custom emoji pack (by short name or t.me/addemoji/... link) and
-    get its emoji with document IDs and fallback characters.
-
-    Args:
-        pack: The emoji pack short name or URL (e.g. 'AnimatedDogs',
-            't.me/addemoji/AnimatedDogs', 'https://t.me/addstickers/...').
-        account: Optional account alias or phone number.
-    """
-    try:
-        short_name = extract_pack_short_name(pack)
-        if not short_name:
-            return "Invalid pack name or URL provided."
-
-        cl = get_client(account)
-        await ensure_connected(cl)
-
-        try:
-            result = await cl(
-                functions.messages.GetStickerSetRequest(
-                    stickerset=types.InputStickerSetShortName(short_name=short_name),
-                    hash=0,
-                )
-            )
-        except StickersetInvalidError:
-            return f"Emoji pack '{short_name}' not found or is invalid."
-
-        set_meta = getattr(result, "set", None)
-        if not set_meta:
-            return f"Emoji pack '{short_name}' has no set metadata."
-
-        is_emoji = bool(getattr(set_meta, "emojis", False))
-        url_prefix = "addemoji" if is_emoji else "addstickers"
-        pack_info = {
-            "id": str(getattr(set_meta, "id", "")),
-            "title": sanitize_name(getattr(set_meta, "title", "")),
-            "short_name": getattr(set_meta, "short_name", short_name),
-            "count": getattr(set_meta, "count", 0),
-            "is_emoji": is_emoji,
-            "archived": bool(getattr(set_meta, "archived", False)),
-            "official": bool(getattr(set_meta, "official", False)),
-            "url": (
-                f"https://t.me/{url_prefix}/{set_meta.short_name}"
-                if getattr(set_meta, "short_name", None)
-                else None
-            ),
-        }
-
-        # Build emoticon mapping from packs
-        doc_to_emoticon: Dict[int, str] = {}
-        for sp in getattr(result, "packs", []) or []:
-            emoticon = getattr(sp, "emoticon", "")
-            for doc_id in getattr(sp, "documents", []) or []:
-                if doc_id not in doc_to_emoticon:
-                    doc_to_emoticon[doc_id] = emoticon
-
-        emojis = []
-        for doc in getattr(result, "documents", []) or []:
-            doc_id = getattr(doc, "id", None)
-            if doc_id is None:
-                continue
-
-            alt = doc_to_emoticon.get(doc_id, "")
-            free = False
-            for attr in getattr(doc, "attributes", []) or []:
-                if isinstance(attr, types.DocumentAttributeCustomEmoji):
-                    alt = getattr(attr, "alt", alt) or alt
-                    free = bool(getattr(attr, "free", False))
-                elif isinstance(attr, types.DocumentAttributeSticker):
-                    alt = getattr(attr, "alt", alt) or alt
-
-            mime_type = getattr(doc, "mime_type", "")
-            is_animated = mime_type == "application/x-tgsticker" or any(
-                isinstance(a, types.DocumentAttributeAnimated)
-                for a in getattr(doc, "attributes", []) or []
-            )
-            is_video = mime_type == "video/webm" or any(
-                isinstance(a, types.DocumentAttributeVideo)
-                for a in getattr(doc, "attributes", []) or []
-            )
-            if is_animated:
-                fmt = "animated"
-            elif is_video:
-                fmt = "video"
-            else:
-                fmt = "static"
-
-            emojis.append(
-                {
-                    "document_id": str(doc_id),
-                    "id": str(doc_id),
-                    "alt": sanitize_user_content(alt),
-                    "emoji": sanitize_user_content(alt),
-                    "free": free,
-                    "format": fmt,
-                    "mime_type": mime_type,
-                }
-            )
-
-        return json.dumps(
-            {"pack": pack_info, "emojis": emojis},
-            indent=2,
-            default=json_serializer,
-            ensure_ascii=False,
-        )
-    except Exception as e:
-        return log_and_format_error("get_custom_emoji_pack", e, pack=pack)
-
-
-@mcp.tool(
-    annotations=ToolAnnotations(
         title="Preview Custom Emoji", openWorldHint=True, readOnlyHint=True
     )
 )
@@ -253,7 +148,7 @@ async def preview_custom_emoji(
 
     Args:
         document_id: Telegram document ID of the custom emoji (from
-        get_custom_emoji_pack or message metadata).
+        get_sticker_pack or message metadata).
         thumbnail: If True, downloads the static thumbnail image preview
         (ideal for animated TGS and video WebM emojis).
         save_path: Optional path under allowed roots to save the preview or emoji file.
@@ -288,21 +183,7 @@ async def preview_custom_emoji(
         if not data:
             return f"Failed to download media for custom emoji {doc_id}."
 
-        ext = ".webp"
-        img_format = None
-        if data.startswith(b"\xff\xd8\xff"):
-            ext = ".jpg"
-            img_format = "jpeg"
-        elif data.startswith(b"\x89PNG"):
-            ext = ".png"
-            img_format = "png"
-        elif data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WEBP":
-            ext = ".webp"
-            img_format = "webp"
-        elif data.startswith(b"\x1f\x8b"):
-            ext = ".tgs"
-        elif data.startswith(b"\x1aE\xdf\xa3"):
-            ext = ".webm"
+        ext, img_format = image_format(data)
 
         saved_path_str = None
         if save_path:
@@ -341,6 +222,6 @@ async def preview_custom_emoji(
 __all__ = [
     "extract_pack_short_name",
     "get_custom_emoji_packs",
-    "get_custom_emoji_pack",
     "preview_custom_emoji",
+    "image_format",
 ]
