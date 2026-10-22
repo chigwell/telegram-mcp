@@ -69,6 +69,7 @@ except ImportError:  # pragma: no cover - Windows fallback
 from telegram_mcp.account_labels import canonical_account_label
 from telegram_mcp.floodgate import (
     FloodCircuitBreaker,
+    RateLimitSpec,
     TelegramOperationSuspendedError,
     TelegramRateLimitGate,
     category_for_tool,
@@ -916,6 +917,10 @@ _floodgate_breaker: Optional[FloodCircuitBreaker] = None
 # that without touching any of the ~140 tool call sites.
 _CURRENT_ACCOUNT: ContextVar[Optional[str]] = ContextVar("current_account", default=None)
 
+# Prefix of the reply log_and_format_error returns for a real FloodWaitError;
+# the wrapper uses it to tell flooded results from working ones.
+_FLOOD_WAIT_REPLY_PREFIX = "Rate limit exceeded (FloodWait)"
+
 
 def _get_floodgate_enabled() -> bool:
     """Read TELEGRAM_FLOODGATE from environment (default: on; 0/false/no/off disables)."""
@@ -932,7 +937,13 @@ def _floodgate():
     """Lazily build the shared gate+breaker pair (module globals so tests can patch)."""
     global _floodgate_gate, _floodgate_breaker
     if _floodgate_gate is None or _floodgate_breaker is None:
-        _floodgate_gate = TelegramRateLimitGate()
+        # resolve is a deliberate no-op category in the vendored gate (upstream
+        # owns live resolution elsewhere), so username resolution gets its own
+        # bucket at the calibrated 20/60s (auth.resolveUsername escalates to
+        # 15-18h bans; see telegram_mcp/floodgate/rate_limiter.py).
+        _floodgate_gate = TelegramRateLimitGate(
+            category_limits={"resolve_guard": RateLimitSpec(max_calls=20, window_sec=60.0)}
+        )
         _floodgate_breaker = FloodCircuitBreaker()
     return _floodgate_gate, _floodgate_breaker
 
@@ -976,6 +987,8 @@ def _floodgate_rate_limited_message(tool_name: str, retry_after: float) -> str:
 
 def _floodgate_report_flood(tool_name: str, seconds: float) -> None:
     """Feed a real FloodWaitError into the gate backoff and the breaker."""
+    if not _get_floodgate_enabled():
+        return
     label = _CURRENT_ACCOUNT.get()
     if not label:
         return
@@ -983,6 +996,25 @@ def _floodgate_report_flood(tool_name: str, seconds: float) -> None:
         gate, breaker = _floodgate()
         gate.note_flood(label, seconds)  # inert unless flood_backoff is enabled
         breaker.record_flood(tool_name, label)
+    except Exception:
+        pass
+
+
+def _floodgate_settle(tool_name: str, label: Optional[str], result: Any) -> None:
+    """Resolve a pending breaker trial after a tool call.
+
+    A FloodWait reply keeps the flood that log_and_format_error already
+    recorded; every other completion — errors that are not floods included,
+    and gate deferrals that made no call — is evidence the RPC path works and
+    releases the trial, so a granted probe can never wedge the pair.
+    """
+    if not label or not _get_floodgate_enabled():
+        return
+    if isinstance(result, str) and _FLOOD_WAIT_REPLY_PREFIX in result:
+        return
+    try:
+        _, breaker = _floodgate()
+        breaker.record_success(tool_name, label)
     except Exception:
         pass
 
@@ -1011,21 +1043,29 @@ def with_account(readonly=False):
             # sole label stands in for a missing account argument. In the
             # multi-mode fan-out path the label is only known per account, so
             # the top-level check is skipped (_call_for gates each label).
-            gate_account = account
-            if gate_account is None and not is_multi_mode() and clients:
-                gate_account = next(iter(clients))
-            defer = (
-                _floodgate_defer(fn.__name__, gate_account) if gate_account is not None else None
-            )
+            # The canonical label is what every gate/breaker/state key uses.
+            gate_label = None
+            if account is not None:
+                gate_label = canonical_account_label(account)
+            elif not is_multi_mode() and clients:
+                gate_label = next(iter(clients))
+            defer = _floodgate_defer(fn.__name__, gate_label) if gate_label else None
             if defer is not None:
                 logger.warning("Floodgate defers the tool call; returning a rate-limit reply.")
+                # No call was made: release a breaker trial this check granted.
+                _floodgate_settle(fn.__name__, gate_label, "")
                 return _floodgate_rate_limited_message(fn.__name__, defer)
 
-            token = _CURRENT_ACCOUNT.set(gate_account)
+            token = _CURRENT_ACCOUNT.set(gate_label)
             try:
                 # Explicit account OR single-mode -> call once
                 if account is not None or not is_multi_mode():
-                    return await fn(*args, **kwargs)
+                    result = None
+                    try:
+                        result = await fn(*args, **kwargs)
+                        return result
+                    finally:
+                        _floodgate_settle(fn.__name__, gate_label, result)
 
                 # account is None AND multi-mode
                 if not readonly:
@@ -1044,19 +1084,26 @@ def with_account(readonly=False):
                                 "Floodgate defers the tool call for one account; "
                                 "returning a rate-limit reply."
                             )
+                            # Not failed: pacing is not an error, and a deferral
+                            # on every account must not raise a ToolError.
+                            _floodgate_settle(fn.__name__, label, "")
                             return (
                                 label,
                                 _floodgate_rate_limited_message(fn.__name__, per_account_defer),
-                                True,
+                                False,
                             )
-                        result = await fn(*args, **kw)
-                        failed = False
-                    except ToolError as error:
-                        result = str(error)
-                        failed = True
+                        result = None
+                        try:
+                            result = await fn(*args, **kw)
+                            failed = False
+                        except ToolError as error:
+                            result = str(error)
+                            failed = True
+                        finally:
+                            _floodgate_settle(fn.__name__, label, result)
+                        return label, result, failed
                     finally:
                         _CURRENT_ACCOUNT.reset(account_token)
-                    return label, result, failed
 
                 results = await asyncio.gather(*(_call_for(label) for label in clients))
                 if all(failed for _, _, failed in results):
@@ -1520,7 +1567,7 @@ def log_and_format_error(
             return user_message
         wait_clause = f"{seconds} seconds" if seconds > 0 else "an unknown duration"
         return (
-            f"Rate limit exceeded (FloodWait): Telegram requires waiting {wait_clause} "
+            f"{_FLOOD_WAIT_REPLY_PREFIX}: Telegram requires waiting {wait_clause} "
             f"before repeating this operation. Do NOT retry immediately (code: {error_code})."
         )
 

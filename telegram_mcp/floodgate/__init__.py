@@ -135,6 +135,17 @@ TOOL_CATEGORIES = {
     "edit_chat_photo": "admin_action",
     "edit_chat_about": "admin_action",
     "delete_chat_photo": "admin_action",
+    "create_forum_topic": "admin_action",
+    "delete_forum_topic": "admin_action",
+    "edit_forum_topic": "admin_action",
+    "export_chat_invite": "admin_action",
+    # resolve_guard (20/60s, built in runtime._floodgate): username resolution
+    # is the operation production showed escalating to 15-18h flood bans
+    # (160+ auth.resolveUsername calls in seconds). NOT the vendored "resolve"
+    # category — that one is a deliberate no-op reserved for upstream's
+    # ResolveGuardMixin, which this server does not have.
+    "resolve_username": "resolve_guard",
+    "search_public_chats": "resolve_guard",
     # channel_lifecycle (3/5min): creating/joining/leaving/destroying chats
     "create_channel": "channel_lifecycle",
     "create_group": "channel_lifecycle",
