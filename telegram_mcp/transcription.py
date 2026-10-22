@@ -1,6 +1,6 @@
 """Voice/video-note transcription: engines, SQLite cache, and batch budget.
 
-Four engines behind one interface (see ``transcribe``):
+Five engines behind one interface (see ``transcribe``):
 
 * ``telegram`` - native Premium ``messages.transcribeAudio``. Free, but drops
   the last speech segment in roughly 2 of 3 real recordings (proven with
@@ -17,9 +17,14 @@ Four engines behind one interface (see ``transcribe``):
   API key.
 * ``whisper`` - a local faster-whisper model loaded in this process. Never
   leaves the machine; needs the ``whisper`` extra installed.
+* ``gemini`` - Google Gemini audio understanding through ``generateContent``.
+  Sends the audio to Google. Takes recordings far beyond the groq upload
+  limit (long meetings and lectures).
 
 ``groq`` and ``openai`` share one HTTP path
 (:func:`_transcribe_via_openai_compatible`); only their settings differ.
+``gemini`` is not an OpenAI-style endpoint and has its own path
+(:func:`_transcribe_via_gemini`).
 
 Every transcript is a machine reading, not a verbatim quote (proper names and
 punctuation drift under both engines) - callers must surface ``source``
@@ -27,6 +32,7 @@ alongside ``text`` rather than presenting it as exact speech.
 """
 
 import asyncio
+import base64
 import importlib.util
 import io
 import os
@@ -47,12 +53,28 @@ from telegram_mcp.runtime import account_is_premium, get_marked_id, is_premium_r
 # ---------------------------------------------------------------------------
 
 _TRANSCRIBE_MODES = {"off", "on-demand", "auto"}
-ENGINES = {"telegram", "groq", "openai", "whisper"}
+ENGINES = {"telegram", "groq", "openai", "whisper", "gemini"}
 
 GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3-turbo"
 
 OPENAI_DEFAULT_MODEL = "whisper-1"
+
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com"
+# An alias rather than a dated model name, so the default keeps working as Google
+# retires older models. Pin one with TELEGRAM_TRANSCRIBE_GEMINI_MODEL.
+GEMINI_DEFAULT_MODEL = "gemini-flash-latest"
+# generateContent rejects a request body above roughly 20 MB, and base64 inflates the
+# audio by a third. Up to this size the recording travels inline in the request; above
+# it, through the Files API.
+GEMINI_INLINE_MAX_BYTES = 10 * 1024 * 1024
+# In-memory ceiling, like the other engines. Gemini itself takes up to 9.5 hours of
+# audio per request, which is far more than a Telegram voice note usually reaches.
+GEMINI_DEFAULT_MAX_MB = 100.0
+# Transcribing an hour of speech takes minutes, not seconds.
+GEMINI_DEFAULT_TIMEOUT_SECONDS = 600.0
+GEMINI_FILE_POLL_ATTEMPTS = 30
+GEMINI_FILE_POLL_INTERVAL_SECONDS = 2.0
 
 WHISPER_DEFAULT_MODEL = "small"
 
@@ -84,7 +106,7 @@ def transcribe_mode() -> str:
 
 
 def default_engine() -> str:
-    """``TELEGRAM_TRANSCRIBE_ENGINE``: telegram | groq | openai | whisper
+    """``TELEGRAM_TRANSCRIBE_ENGINE``: telegram | groq | openai | whisper | gemini
     (default groq).
 
     Groq is the primary engine (owner decision 2026-08-20: native Telegram
@@ -188,6 +210,22 @@ def http_engine_config(engine: str) -> Optional[HttpEngineConfig]:
             max_mb_env="TELEGRAM_TRANSCRIBE_OPENAI_MAX_MB",
             timeout=_http_timeout(),
         )
+    if engine == "gemini":
+        model = os.getenv("TELEGRAM_TRANSCRIBE_GEMINI_MODEL", "").strip() or GEMINI_DEFAULT_MODEL
+        model = model.removeprefix("models/")
+        max_mb = _env_float("TELEGRAM_TRANSCRIBE_GEMINI_MAX_MB", GEMINI_DEFAULT_MAX_MB)
+        return HttpEngineConfig(
+            engine="gemini",
+            label="Gemini",
+            url=f"{GEMINI_API_BASE}/v1beta/models/{model}:generateContent",
+            api_key=os.getenv("GEMINI_API_KEY") or None,
+            model=model,
+            # Not used: generateContent has no response-format switch for plain text.
+            response_format="text",
+            max_bytes=int(max_mb * 1048576),
+            max_mb_env="TELEGRAM_TRANSCRIBE_GEMINI_MAX_MB",
+            timeout=_env_float("TELEGRAM_TRANSCRIBE_TIMEOUT", GEMINI_DEFAULT_TIMEOUT_SECONDS),
+        )
     return None
 
 
@@ -209,6 +247,11 @@ def engine_config_error(engine: str) -> Optional[str]:
         return (
             "TELEGRAM_TRANSCRIBE_OPENAI_URL is not configured on this server. Set it to the "
             "base URL of an OpenAI-compatible API (e.g. https://api.openai.com/v1)."
+        )
+    if engine == "gemini" and not os.getenv("GEMINI_API_KEY"):
+        return (
+            "GEMINI_API_KEY is not configured on this server. "
+            "Use another engine or set GEMINI_API_KEY."
         )
     if engine == "whisper" and not whisper_available():
         return (
@@ -555,6 +598,141 @@ async def _transcribe_via_groq(cl, msg) -> dict:
     return await _transcribe_via_openai_compatible(cl, msg, http_engine_config("groq"))
 
 
+def _gemini_prompt(language: Optional[str]) -> str:
+    prompt = (
+        "Transcribe this audio recording verbatim. Reply with the transcript text only: "
+        "no introduction, no summary, no timestamps, no speaker labels, no markdown. "
+        "Keep every passage in the language and script it was spoken in. "
+        "If there is no speech, reply with nothing."
+    )
+    if language:
+        prompt += f" The speech is mainly in the language with ISO 639-1 code '{language}'."
+    return prompt
+
+
+async def _gemini_upload_file(client, api_key: str, data: bytes, mime: str) -> dict:
+    """Resumable upload to the Gemini Files API; returns the ``file`` resource."""
+    start = await client.post(
+        f"{GEMINI_API_BASE}/upload/v1beta/files",
+        headers={
+            "x-goog-api-key": api_key,
+            "X-Goog-Upload-Protocol": "resumable",
+            "X-Goog-Upload-Command": "start",
+            "X-Goog-Upload-Header-Content-Length": str(len(data)),
+            "X-Goog-Upload-Header-Content-Type": mime,
+        },
+        json={"file": {"display_name": "voice"}},
+    )
+    start.raise_for_status()
+    upload_url = start.headers.get("x-goog-upload-url")
+    if not upload_url:
+        raise RuntimeError("Gemini Files API returned no upload URL")
+    done = await client.post(
+        upload_url,
+        headers={"X-Goog-Upload-Offset": "0", "X-Goog-Upload-Command": "upload, finalize"},
+        content=data,
+    )
+    done.raise_for_status()
+    return done.json()["file"]
+
+
+async def _gemini_wait_until_active(client, api_key: str, file: dict) -> dict:
+    """Poll the file resource until Gemini has finished processing the upload."""
+    attempts = 0
+    while file.get("state") == "PROCESSING" and attempts < GEMINI_FILE_POLL_ATTEMPTS:
+        await asyncio.sleep(GEMINI_FILE_POLL_INTERVAL_SECONDS)
+        attempts += 1
+        resp = await client.get(
+            f"{GEMINI_API_BASE}/v1beta/{file['name']}", headers={"x-goog-api-key": api_key}
+        )
+        resp.raise_for_status()
+        file = resp.json()
+    if file.get("state", "ACTIVE") != "ACTIVE":
+        raise RuntimeError(f"Gemini file is {file.get('state')}, not ACTIVE")
+    return file
+
+
+async def _gemini_delete_file(client, api_key: str, name: str) -> None:
+    """Remove an uploaded recording right away instead of waiting for its expiry."""
+    try:
+        await client.delete(
+            f"{GEMINI_API_BASE}/v1beta/{name}", headers={"x-goog-api-key": api_key}
+        )
+    except Exception:
+        # Best effort: Gemini deletes uploaded files on its own after 48 hours, and a
+        # failed cleanup must not turn a finished transcript into an error.
+        pass
+
+
+async def _gemini_generate(
+    client, cfg: HttpEngineConfig, audio_part: dict, language: Optional[str]
+) -> dict:
+    parts = [{"text": _gemini_prompt(language)}, audio_part]
+    resp = await client.post(
+        cfg.url,
+        headers={"x-goog-api-key": cfg.api_key},
+        json={"contents": [{"role": "user", "parts": parts}]},
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def _gemini_transcribe_bytes(
+    client, cfg: HttpEngineConfig, data: bytes, mime: str, language: Optional[str]
+) -> dict:
+    if len(data) <= GEMINI_INLINE_MAX_BYTES:
+        part = {"inline_data": {"mime_type": mime, "data": base64.b64encode(data).decode()}}
+        return await _gemini_generate(client, cfg, part, language)
+
+    file = await _gemini_upload_file(client, cfg.api_key, data, mime)
+    try:
+        file = await _gemini_wait_until_active(client, cfg.api_key, file)
+        part = {"file_data": {"mime_type": mime, "file_uri": file["uri"]}}
+        return await _gemini_generate(client, cfg, part, language)
+    finally:
+        await _gemini_delete_file(client, cfg.api_key, file["name"])
+
+
+def _gemini_text(payload: dict) -> str:
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        return ""
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    return "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
+
+
+async def _transcribe_via_gemini(cl, msg) -> dict:
+    """Google Gemini: ``generateContent`` with the recording attached.
+
+    Recordings up to ``GEMINI_INLINE_MAX_BYTES`` go inline; larger ones are uploaded
+    through the Files API and deleted again once the transcript is back.
+    """
+    cfg = http_engine_config("gemini")
+    if not cfg.api_key:
+        return {"status": "error", "error": engine_config_error("gemini")}
+
+    data, error = await _download_audio(cl, msg, cfg.max_bytes, cfg)
+    if error is not None:
+        return error
+
+    _, mime = _upload_name(msg)
+    language = transcribe_language()
+    try:
+        async with httpx.AsyncClient(timeout=cfg.timeout) as client:
+            payload = await _gemini_transcribe_bytes(client, cfg, bytes(data), mime, language)
+    except Exception as e:
+        return {"status": "error", "error": f"gemini request failed: {e}"}
+    finally:
+        del data
+
+    text = _gemini_text(payload)
+    if not text:
+        reason = (payload.get("promptFeedback") or {}).get("blockReason")
+        blocked = f" (blocked: {reason})" if reason else ""
+        return {"status": "error", "error": f"empty transcript from gemini{blocked}"}
+    return {"status": "ok", "text": text, "lang": language}
+
+
 # Local faster-whisper. Loading a model takes seconds and hundreds of MB, so
 # one instance per (model, device, compute type) lives for the process. The
 # semaphore runs one inference at a time: two concurrent CPU transcriptions
@@ -635,6 +813,8 @@ async def transcribe(cl, entity, msg, engine: str) -> dict:
         return await _transcribe_via_groq(cl, msg)
     if engine == "whisper":
         return await _transcribe_via_whisper(cl, msg)
+    if engine == "gemini":
+        return await _transcribe_via_gemini(cl, msg)
     cfg = http_engine_config(engine)
     if cfg is not None:
         return await _transcribe_via_openai_compatible(cl, msg, cfg)

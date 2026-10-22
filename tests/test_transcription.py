@@ -1,6 +1,7 @@
 """Tests for telegram_mcp/transcription.py: config, cache, engines, budget, render."""
 
 import asyncio
+import base64
 import os
 import stat
 from pathlib import Path
@@ -850,7 +851,7 @@ def _bytes_client(payload=b"raw-audio-bytes"):
     return SimpleNamespace(download_media=_download_media)
 
 
-@pytest.mark.parametrize("engine", ["openai", "whisper"])
+@pytest.mark.parametrize("engine", ["openai", "whisper", "gemini"])
 def test_default_engine_accepts_new_engines(monkeypatch, engine):
     monkeypatch.setenv("TELEGRAM_TRANSCRIBE_ENGINE", engine)
     assert transcription.default_engine() == engine
@@ -968,13 +969,351 @@ async def test_openai_compatible_http_failure_is_error(monkeypatch):
 
 def test_engine_config_error(monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("TELEGRAM_TRANSCRIBE_OPENAI_URL", raising=False)
     monkeypatch.setattr(transcription, "whisper_available", lambda: False)
 
     assert "GROQ_API_KEY" in transcription.engine_config_error("groq")
+    assert "GEMINI_API_KEY" in transcription.engine_config_error("gemini")
     assert "TELEGRAM_TRANSCRIBE_OPENAI_URL" in transcription.engine_config_error("openai")
     assert "faster-whisper" in transcription.engine_config_error("whisper")
     assert transcription.engine_config_error("telegram") is None
+
+
+# ---------------------------------------------------------------------------
+# Gemini engine: inline for small recordings, Files API for large ones
+# ---------------------------------------------------------------------------
+
+
+class _GeminiResponse:
+    def __init__(self, payload=None, headers=None, status_code=200):
+        self._payload = payload if payload is not None else {}
+        self.headers = headers or {}
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self._payload
+
+
+def _gemini_ok(text):
+    return _GeminiResponse({"candidates": [{"content": {"parts": [{"text": text}]}}]})
+
+
+class _FakeGeminiHttpx:
+    """Records every request and answers from ``routes``.
+
+    ``routes`` maps (HTTP method, URL suffix) to a list of replies, handed out in
+    order with the last one repeating. A reply that is an exception is raised.
+    """
+
+    def __init__(self, routes, calls):
+        self._routes = routes
+        self._calls = calls
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def _request(self, method, url, headers=None, json=None, content=None):
+        self._calls.append(
+            {"method": method, "url": url, "headers": headers, "json": json, "content": content}
+        )
+        for (route_method, suffix), replies in self._routes.items():
+            if route_method == method and url.endswith(suffix):
+                reply = replies.pop(0) if len(replies) > 1 else replies[0]
+                if isinstance(reply, Exception):
+                    raise reply
+                return reply
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    async def post(self, url, headers=None, json=None, content=None):
+        return await self._request("POST", url, headers, json, content)
+
+    async def get(self, url, headers=None):
+        return await self._request("GET", url, headers)
+
+    async def delete(self, url, headers=None):
+        return await self._request("DELETE", url, headers)
+
+
+def _install_gemini_http(monkeypatch, routes):
+    calls = []
+    monkeypatch.setattr(
+        transcription.httpx, "AsyncClient", lambda **kw: _FakeGeminiHttpx(routes, calls)
+    )
+    return calls
+
+
+def _gemini_generate_url(model=None):
+    model = model or transcription.GEMINI_DEFAULT_MODEL
+    return f"{transcription.GEMINI_API_BASE}/v1beta/models/{model}:generateContent"
+
+
+def _gemini_env(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    for name in (
+        "TELEGRAM_TRANSCRIBE_GEMINI_MODEL",
+        "TELEGRAM_TRANSCRIBE_GEMINI_MAX_MB",
+        "TELEGRAM_TRANSCRIBE_LANGUAGE",
+        "TELEGRAM_TRANSCRIBE_TIMEOUT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.asyncio
+async def test_transcribe_via_gemini_sends_a_small_recording_inline(monkeypatch):
+    _gemini_env(monkeypatch)
+    calls = _install_gemini_http(monkeypatch, {("POST", ":generateContent"): [_gemini_ok(" hi ")]})
+
+    result = await transcription._transcribe_via_gemini(_bytes_client(b"raw-audio"), _voice_msg())
+
+    assert result == {"status": "ok", "text": "hi", "lang": None}
+    assert len(calls) == 1, "a small recording must not touch the Files API"
+    call = calls[0]
+    assert call["url"] == _gemini_generate_url()
+    assert call["headers"] == {"x-goog-api-key": "test-key"}
+    assert "test-key" not in call["url"]
+    prompt, audio = call["json"]["contents"][0]["parts"]
+    assert "verbatim" in prompt["text"]
+    assert audio == {
+        "inline_data": {"mime_type": "audio/ogg", "data": base64.b64encode(b"raw-audio").decode()}
+    }
+
+
+@pytest.mark.asyncio
+async def test_transcribe_via_gemini_passes_a_video_note_mime_type_through(monkeypatch):
+    _gemini_env(monkeypatch)
+    calls = _install_gemini_http(monkeypatch, {("POST", ":generateContent"): [_gemini_ok("x")]})
+    msg = _voice_msg(file=SimpleNamespace(duration=5, ext=".mp4", mime_type="video/mp4"))
+
+    await transcription._transcribe_via_gemini(_bytes_client(), msg)
+
+    audio = calls[0]["json"]["contents"][0]["parts"][1]
+    assert audio["inline_data"]["mime_type"] == "video/mp4"
+
+
+@pytest.mark.asyncio
+async def test_transcribe_via_gemini_honours_model_and_language_settings(monkeypatch):
+    _gemini_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_GEMINI_MODEL", "models/gemini-pinned-001")
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_LANGUAGE", "nl")
+    routes = {("POST", ":generateContent"): [_gemini_ok("hallo")]}
+    calls = _install_gemini_http(monkeypatch, routes)
+
+    result = await transcription._transcribe_via_gemini(_bytes_client(), _voice_msg())
+
+    assert result == {"status": "ok", "text": "hallo", "lang": "nl"}
+    assert calls[0]["url"] == _gemini_generate_url("gemini-pinned-001")
+    assert "'nl'" in calls[0]["json"]["contents"][0]["parts"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_transcribe_via_gemini_requires_api_key(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    # No download_media on the client: reaching the download would raise AttributeError.
+    result = await transcription._transcribe_via_gemini(SimpleNamespace(), _voice_msg())
+
+    assert result["status"] == "error"
+    assert "GEMINI_API_KEY" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_uploads_a_large_recording_through_the_files_api(monkeypatch):
+    _gemini_env(monkeypatch)
+    monkeypatch.setattr(transcription, "GEMINI_INLINE_MAX_BYTES", 4)
+    monkeypatch.setattr(transcription, "GEMINI_FILE_POLL_INTERVAL_SECONDS", 0)
+    file_uri = "https://files.example/abc"
+    processing = {"file": {"name": "files/abc", "uri": file_uri, "state": "PROCESSING"}}
+    active = {"name": "files/abc", "uri": file_uri, "state": "ACTIVE"}
+    routes = {
+        ("POST", "/upload/v1beta/files"): [
+            _GeminiResponse(headers={"x-goog-upload-url": "https://upload.example/session-1"})
+        ],
+        ("POST", "/session-1"): [_GeminiResponse(processing)],
+        ("GET", "/v1beta/files/abc"): [_GeminiResponse(active)],
+        ("POST", ":generateContent"): [_gemini_ok("long recording")],
+        ("DELETE", "/v1beta/files/abc"): [_GeminiResponse()],
+    }
+    calls = _install_gemini_http(monkeypatch, routes)
+
+    result = await transcription._transcribe_via_gemini(_bytes_client(b"12345678"), _voice_msg())
+
+    assert result == {"status": "ok", "text": "long recording", "lang": None}
+    base = transcription.GEMINI_API_BASE
+    assert [(c["method"], c["url"]) for c in calls] == [
+        ("POST", f"{base}/upload/v1beta/files"),
+        ("POST", "https://upload.example/session-1"),
+        ("GET", f"{base}/v1beta/files/abc"),
+        ("POST", _gemini_generate_url()),
+        ("DELETE", f"{base}/v1beta/files/abc"),
+    ]
+    start, upload, _, generate, _ = calls
+    assert start["headers"]["X-Goog-Upload-Header-Content-Length"] == "8"
+    assert start["headers"]["X-Goog-Upload-Header-Content-Type"] == "audio/ogg"
+    assert upload["content"] == b"12345678"
+    assert "x-goog-api-key" not in upload["headers"], "the key goes to the API, not the upload URL"
+    audio = generate["json"]["contents"][0]["parts"][1]
+    assert audio == {"file_data": {"mime_type": "audio/ogg", "file_uri": file_uri}}
+
+
+@pytest.mark.asyncio
+async def test_gemini_deletes_the_uploaded_file_when_generation_fails(monkeypatch):
+    _gemini_env(monkeypatch)
+    monkeypatch.setattr(transcription, "GEMINI_INLINE_MAX_BYTES", 4)
+    active = {"file": {"name": "files/abc", "uri": "https://files.example/abc", "state": "ACTIVE"}}
+    routes = {
+        ("POST", "/upload/v1beta/files"): [
+            _GeminiResponse(headers={"x-goog-upload-url": "https://upload.example/session-1"})
+        ],
+        ("POST", "/session-1"): [_GeminiResponse(active)],
+        ("POST", ":generateContent"): [_GeminiResponse(status_code=500)],
+        ("DELETE", "/v1beta/files/abc"): [_GeminiResponse()],
+    }
+    calls = _install_gemini_http(monkeypatch, routes)
+
+    result = await transcription._transcribe_via_gemini(_bytes_client(b"12345678"), _voice_msg())
+
+    assert result["status"] == "error"
+    assert "gemini request failed" in result["error"]
+    assert calls[-1]["method"] == "DELETE", "a private recording was left in the Files API"
+
+
+@pytest.mark.asyncio
+async def test_gemini_file_that_fails_processing_is_an_error_and_is_cleaned_up(monkeypatch):
+    _gemini_env(monkeypatch)
+    monkeypatch.setattr(transcription, "GEMINI_INLINE_MAX_BYTES", 4)
+    failed = {"file": {"name": "files/abc", "uri": "https://files.example/abc", "state": "FAILED"}}
+    routes = {
+        ("POST", "/upload/v1beta/files"): [
+            _GeminiResponse(headers={"x-goog-upload-url": "https://upload.example/session-1"})
+        ],
+        ("POST", "/session-1"): [_GeminiResponse(failed)],
+        ("DELETE", "/v1beta/files/abc"): [_GeminiResponse()],
+    }
+    calls = _install_gemini_http(monkeypatch, routes)
+
+    result = await transcription._transcribe_via_gemini(_bytes_client(b"12345678"), _voice_msg())
+
+    assert result["status"] == "error"
+    assert "FAILED" in result["error"]
+    assert [c["method"] for c in calls] == ["POST", "POST", "DELETE"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_failed_cleanup_does_not_discard_a_finished_transcript(monkeypatch):
+    _gemini_env(monkeypatch)
+    monkeypatch.setattr(transcription, "GEMINI_INLINE_MAX_BYTES", 4)
+    active = {"file": {"name": "files/abc", "uri": "https://files.example/abc", "state": "ACTIVE"}}
+    routes = {
+        ("POST", "/upload/v1beta/files"): [
+            _GeminiResponse(headers={"x-goog-upload-url": "https://upload.example/session-1"})
+        ],
+        ("POST", "/session-1"): [_GeminiResponse(active)],
+        ("POST", ":generateContent"): [_gemini_ok("done")],
+        ("DELETE", "/v1beta/files/abc"): [OSError("connection reset")],
+    }
+    _install_gemini_http(monkeypatch, routes)
+
+    result = await transcription._transcribe_via_gemini(_bytes_client(b"12345678"), _voice_msg())
+
+    assert result == {"status": "ok", "text": "done", "lang": None}
+
+
+@pytest.mark.asyncio
+async def test_gemini_recording_above_the_limit_is_refused_without_uploading(monkeypatch):
+    _gemini_env(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_GEMINI_MAX_MB", "1")
+
+    def _fail(**kwargs):
+        raise AssertionError("sent a recording that is above the limit")
+
+    monkeypatch.setattr(transcription.httpx, "AsyncClient", _fail)
+
+    result = await transcription._transcribe_via_gemini(
+        _bytes_client(b"0" * (2 * 1024 * 1024)), _voice_msg()
+    )
+
+    assert result["reason"] == "too_large"
+    assert "TELEGRAM_TRANSCRIBE_GEMINI_MAX_MB" in result["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        ({"promptFeedback": {"blockReason": "SAFETY"}}, "blocked: SAFETY"),
+        ({"candidates": [{"content": {"parts": [{"text": "  "}]}}]}, "empty transcript"),
+        ({"candidates": [{"finishReason": "SAFETY"}]}, "empty transcript"),
+    ],
+)
+async def test_gemini_reply_without_text_is_an_error(monkeypatch, payload, expected):
+    _gemini_env(monkeypatch)
+    _install_gemini_http(monkeypatch, {("POST", ":generateContent"): [_GeminiResponse(payload)]})
+
+    result = await transcription._transcribe_via_gemini(_bytes_client(), _voice_msg())
+
+    assert result["status"] == "error"
+    assert expected in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_http_failure_is_an_error(monkeypatch):
+    _gemini_env(monkeypatch)
+    _install_gemini_http(
+        monkeypatch, {("POST", ":generateContent"): [_GeminiResponse(status_code=429)]}
+    )
+
+    result = await transcription._transcribe_via_gemini(_bytes_client(), _voice_msg())
+
+    assert result["status"] == "error"
+    assert "gemini request failed" in result["error"]
+
+
+def test_gemini_text_skips_thought_parts_and_joins_the_rest():
+    payload = {
+        "candidates": [
+            {"content": {"parts": [{"text": "reasoning", "thought": True}, {"text": "Hello "}]}},
+            {"content": {"parts": [{"text": "ignored second candidate"}]}},
+        ]
+    }
+
+    assert transcription._gemini_text(payload) == "Hello"
+
+
+def test_gemini_config_defaults_and_overrides(monkeypatch):
+    _gemini_env(monkeypatch)
+
+    cfg = transcription.http_engine_config("gemini")
+
+    assert cfg.url == _gemini_generate_url()
+    assert cfg.max_bytes == 100 * 1024 * 1024
+    assert cfg.timeout == transcription.GEMINI_DEFAULT_TIMEOUT_SECONDS
+
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_TIMEOUT", "30")
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE_GEMINI_MAX_MB", "5")
+
+    cfg = transcription.http_engine_config("gemini")
+
+    assert cfg.timeout == 30
+    assert cfg.max_bytes == 5 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_transcribe_dispatches_to_gemini_engine(monkeypatch):
+    monkeypatch.setattr(
+        transcription, "_transcribe_via_gemini", _async_return({"status": "ok", "text": "gem"})
+    )
+
+    result = await transcription.transcribe(None, None, None, "gemini")
+
+    assert result["text"] == "gem"
 
 
 class _FakeWhisperModel:
