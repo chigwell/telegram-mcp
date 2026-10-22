@@ -321,3 +321,23 @@ async def test_real_gate_and_breaker_composed_with_the_wrapper(monkeypatch):
     assert first == "ok"
     assert "Rate limit exceeded (FloodGate)" in second
     assert calls == [None]  # exactly one real execution
+
+
+@pytest.mark.asyncio
+async def test_shipped_history_bucket_defers_call_25(monkeypatch):
+    """The shipped calibration end to end: real gate (default buckets, no
+    overrides), real breaker, real tool-name mapping. get_messages maps to the
+    history bucket (24/30s): calls 1-24 execute, call 25 is deferred locally
+    and never reaches the tool body."""
+    monkeypatch.setattr(runtime, "_floodgate_gate", None)  # _floodgate() builds the real pair
+    monkeypatch.setattr(runtime, "_floodgate_breaker", None)
+    calls = []
+    tool = _tool(calls)
+    tool.__name__ = "get_messages"  # the shipped name->category mapping
+    wrapped = runtime.with_account(readonly=True)(tool)
+
+    results = [await wrapped(chat_id=93372553) for _ in range(25)]
+
+    assert results[:24] == ["ok"] * 24
+    assert "Rate limit exceeded (FloodGate)" in results[24]
+    assert len(calls) == 24  # the deferred call made no RPC
