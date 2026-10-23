@@ -544,7 +544,9 @@ async def get_gif_search(query: str, limit: int = 10, account: Optional[str] = N
             for msg in messages
             if isinstance(getattr(getattr(msg.media, "document", None), "id", None), int)
         ]
-        return json.dumps(gif_ids, indent=2, default=json_serializer) if gif_ids else "[]"
+        if not gif_ids:
+            return "[]"
+        return json.dumps(gif_ids, indent=2, default=json_serializer, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("get_gif_search", e, query=query, limit=limit)
 
