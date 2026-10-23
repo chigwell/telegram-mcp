@@ -1,5 +1,6 @@
 """Drafts keep formatting as real entities, without Telegram connections."""
 
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -59,3 +60,52 @@ async def test_unknown_parse_mode_is_rejected_without_a_request(client):
     result = await messages.save_draft(42, "x", parse_mode="rich", account="test")
     assert "not supported" in result
     assert client.await_args is None
+
+
+def _drafts_update(draft, user_id=42):
+    return types.Updates(
+        updates=[types.UpdateDraftMessage(peer=types.PeerUser(user_id), draft=draft)],
+        users=[],
+        chats=[],
+        date=None,
+        seq=0,
+    )
+
+
+@pytest.fixture
+def drafts_client(monkeypatch):
+    cl = AsyncMock()
+    monkeypatch.setattr(messages, "get_client", lambda account=None: cl)
+    monkeypatch.setattr(messages, "ensure_connected", AsyncMock())
+    return cl
+
+
+@pytest.mark.asyncio
+async def test_get_drafts_returns_html_that_round_trips_the_formatting(drafts_client):
+    from telethon.extensions import html as _html
+
+    source = (
+        '<b>01 CASE</b>\n<u>Ждём</u> — <a href="https://example.com/a?b=1&amp;c=2">гайд</a> 👍'
+    )
+    text, entities = _html.parse(source)
+    drafts_client.return_value = _drafts_update(
+        types.DraftMessage(message=text, date=None, entities=entities)
+    )
+
+    drafts = json.loads(await messages.get_drafts(account="test"))["drafts"]
+
+    assert drafts[0]["message"] == "01 CASE\nЖдём — гайд 👍"
+    reparsed = _html.parse(drafts[0]["message_html"])
+    assert reparsed == (text, entities)
+
+
+@pytest.mark.asyncio
+async def test_get_drafts_plain_draft_has_no_html(drafts_client):
+    drafts_client.return_value = _drafts_update(
+        types.DraftMessage(message="**not bold**", date=None)
+    )
+
+    drafts = json.loads(await messages.get_drafts(account="test"))["drafts"]
+
+    assert drafts[0]["message"] == "**not bold**"
+    assert "message_html" not in drafts[0]
