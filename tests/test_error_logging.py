@@ -306,25 +306,14 @@ async def test_folder_resolution_error_omits_identifier_and_exception(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_gif_fallback_error_omits_exception_and_query_payload(monkeypatch):
+async def test_gif_search_error_omits_exception_and_query_payload(monkeypatch):
     class Client:
-        calls = 0
-
-        async def __call__(self, request):
-            self.calls += 1
-            if self.calls == 1:
-                raise AttributeError("force fallback")
+        async def get_messages(self, *args, **kwargs):
             raise RuntimeError("exception-payload-secret")
 
     async def connected(client):
         return None
 
-    monkeypatch.setattr(
-        media.functions.messages,
-        "SearchGifsRequest",
-        lambda **kwargs: "primary-request",
-        raising=False,
-    )
     monkeypatch.setattr(media, "get_client", lambda account: Client())
     monkeypatch.setattr(media, "ensure_connected", connected)
 
