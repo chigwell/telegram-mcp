@@ -684,6 +684,30 @@ async def send_sticker(
         )
 
 
+# Sending a GIF needs the document's access_hash and file_reference, which a bare
+# document ID does not carry, so get_gif_search remembers them for send_gif.
+_known_gifs: dict[tuple[str, int], types.InputDocument] = {}
+
+
+def _remember_gif(account: Optional[str], document) -> int:
+    _known_gifs[(account or "", document.id)] = utils.get_input_document(document)
+    return document.id
+
+
+async def _find_gif(cl, account: Optional[str], gif_id: int):
+    """InputDocument for a GIF ID seen in get_gif_search or saved in the account."""
+    known = _known_gifs.get((account or "", gif_id))
+    if known is not None:
+        return known
+    saved = await cl(functions.messages.GetSavedGifsRequest(hash=0))
+    for document in getattr(saved, "gifs", []):
+        if document.id == gif_id:
+            return _known_gifs.setdefault(
+                (account or "", gif_id), utils.get_input_document(document)
+            )
+    return None
+
+
 @mcp.tool(
     annotations=ToolAnnotations(title="Get Gif Search", openWorldHint=True, readOnlyHint=True)
 )
@@ -699,49 +723,17 @@ async def get_gif_search(query: str, limit: int = 10, account: Optional[str] = N
     try:
         cl = get_client(account)
         await ensure_connected(cl)
-        # Try approach 1: SearchGifsRequest
-        try:
-            result = await cl(
-                functions.messages.SearchGifsRequest(q=query, offset_id=0, limit=limit)
-            )
-            if not result.gifs:
-                return "[]"
-            return json.dumps(
-                [g.document.id for g in result.gifs],
-                indent=2,
-                default=json_serializer,
-                ensure_ascii=False,
-            )
-        except (AttributeError, ImportError):
-            # Fallback approach: Use SearchRequest with GIF filter
-            try:
-                from telethon.tl.types import InputMessagesFilterGif
-
-                result = await cl(
-                    functions.messages.SearchRequest(
-                        peer="gif",
-                        q=query,
-                        filter=InputMessagesFilterGif(),
-                        min_date=None,
-                        max_date=None,
-                        offset_id=0,
-                        add_offset=0,
-                        limit=limit,
-                        max_id=0,
-                        min_id=0,
-                        hash=0,
-                    )
-                )
-                if not result or not hasattr(result, "messages") or not result.messages:
-                    return "[]"
-                # Extract document IDs from any messages with media
-                gif_ids = []
-                for msg in result.messages:
-                    if hasattr(msg, "media") and msg.media and hasattr(msg.media, "document"):
-                        gif_ids.append(msg.media.document.id)
-                return json.dumps(gif_ids, default=json_serializer, ensure_ascii=False)
-            except Exception as inner_e:
-                return log_and_format_error("get_gif_search", inner_e, query=query, limit=limit)
+        messages = await cl.get_messages(
+            None, limit=max(limit, 0), search=query, filter=types.InputMessagesFilterGif()
+        )
+        gif_ids = [
+            _remember_gif(account, msg.media.document)
+            for msg in messages
+            if isinstance(getattr(getattr(msg.media, "document", None), "id", None), int)
+        ]
+        if not gif_ids:
+            return "[]"
+        return json.dumps(gif_ids, indent=2, default=json_serializer, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error("get_gif_search", e, query=query, limit=limit)
 
@@ -760,7 +752,8 @@ async def send_gif(
 
     Args:
         chat_id: The chat ID or username.
-        gif_id: Telegram document ID for the GIF (from get_gif_search).
+        gif_id: Telegram document ID for the GIF (from get_gif_search, or a GIF
+            saved in the account).
         topic_id: Optional forum topic ID (from list_topics). Sends into that topic
             in a forum-enabled community/supergroup. Also works as reply_to for a message.
     """
@@ -772,7 +765,13 @@ async def send_gif(
                 "path. Use get_gif_search to find IDs."
             )
         entity = await resolve_entity(chat_id, cl)
-        await cl.send_file(entity, gif_id, reply_to=topic_id)
+        gif = await _find_gif(cl, account, gif_id)
+        if gif is None:
+            return (
+                f"GIF {gif_id} is unknown to this session. Run get_gif_search "
+                "first and use an ID from its result."
+            )
+        await cl.send_file(entity, gif, reply_to=topic_id)
         return f"GIF sent to chat {chat_id}."
     except Exception as e:
         return log_and_format_error(
