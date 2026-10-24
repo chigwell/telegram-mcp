@@ -15,7 +15,7 @@ def _box(box_type: bytes, payload: bytes) -> bytes:
 
 def _mvhd(duration: int, timescale: int = 1000, version: int = 0) -> bytes:
     if version == 1:
-        payload = struct.pack(">B3xQQII", 1, 0, 0, timescale, duration)
+        payload = struct.pack(">B3xQQIQ", 1, 0, 0, timescale, duration)
     else:
         payload = struct.pack(">B3xIIII", 0, 0, 0, timescale, duration)
     return _box(b"mvhd", payload)
@@ -68,11 +68,12 @@ def test_identity_matrix_keeps_dimensions(tmp_path):
 
 def test_reads_64bit_mvhd(tmp_path):
     path = tmp_path / "clip.mov"
-    path.write_bytes(_mp4(_mvhd(90000, timescale=3000, version=1), _trak(_tkhd(640, 360))))
+    # 2**33 does not fit the 32-bit duration field a buggy parser would read.
+    path.write_bytes(_mp4(_mvhd(2**33, timescale=1, version=1), _trak(_tkhd(640, 360))))
 
     attributes = media._mp4_video_attributes(str(path))
 
-    assert (attributes.w, attributes.h, attributes.duration) == (640, 360, 30)
+    assert (attributes.w, attributes.h, attributes.duration) == (640, 360, 2**33)
 
 
 @pytest.mark.parametrize(
@@ -82,6 +83,8 @@ def test_reads_64bit_mvhd(tmp_path):
         b"\x00\x00\x00\x1cftypjunk",  # no moov
         _mp4(_mvhd(42)),  # moov without a video track
         _mp4(_box(b"mvhd", b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"), _trak(_tkhd(2, 2))),
+        # mvhd v1 truncated inside the 64-bit duration
+        _mp4(_box(b"mvhd", struct.pack(">B3xQQI", 1, 0, 0, 1000)), _trak(_tkhd(2, 2))),
         struct.pack(">I", 8) + b"mdat",  # size below the header
     ],
 )
@@ -195,12 +198,30 @@ async def test_album_with_video_builds_per_file_media(tmp_path, monkeypatch):
     assert isinstance(video_media, types.InputMediaUploadedDocument)
     assert video_media.file == f"handle:{video}"
     assert video_media.mime_type == "video/mp4"
-    (attributes,) = video_media.attributes
+    assert video_media.attributes[0].file_name == "clip.mp4"
+    (attributes,) = video_media.attributes[1:]
     assert (attributes.w, attributes.h) == (1080, 1920)
     assert video_media.nosound_video is True
     assert isinstance(photo_media, types.InputMediaUploadedPhoto)
     assert photo_media.file == f"handle:{picture}"
     assert client.kwargs["caption"] == "cap"
+
+
+@pytest.mark.asyncio
+async def test_album_non_image_file_keeps_filename(tmp_path, monkeypatch):
+    root = (tmp_path / "root").resolve()
+    root.mkdir()
+    _write_video(root)
+    doc = root / "doc.pdf"
+    doc.write_bytes(b"%PDF")
+    client = _AlbumClient()
+    _wire(monkeypatch, client, root)
+
+    await media.send_file("chat", ["clip.mp4", "doc.pdf"])
+
+    _video_media, doc_media = client.media_items
+    assert isinstance(doc_media, types.InputMediaUploadedDocument)
+    assert doc_media.attributes[0].file_name == "doc.pdf"
 
 
 @pytest.mark.asyncio

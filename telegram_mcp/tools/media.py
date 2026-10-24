@@ -132,9 +132,9 @@ def _parse_mvhd(media_file, start: int, end: int):
     media_file.seek(start)
     data = media_file.read(min(32, end - start))
     if data and data[0] == 1:
-        if len(data) < 28:
+        if len(data) < 32:
             return None, None
-        timescale, duration = struct.unpack_from(">II", data, 20)
+        timescale, duration = struct.unpack_from(">IQ", data, 20)
     else:
         if len(data) < 20:
             return None, None
@@ -340,11 +340,14 @@ async def _send_album(
 
 def _album_media_item(path: str, file_handle, video_attributes):
     mime_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    # Telethon's own path-based uploads always attach a filename attribute;
+    # rebuilt InputMedia items must carry one too or files arrive unnamed.
+    filename = types.DocumentAttributeFilename(os.path.basename(path))
     if video_attributes is not None:
         return types.InputMediaUploadedDocument(
             file=file_handle,
             mime_type=mime_type,
-            attributes=[video_attributes],
+            attributes=[filename, video_attributes],
             nosound_video=True,
         )
     if mime_type.startswith("image/"):
@@ -352,7 +355,7 @@ def _album_media_item(path: str, file_handle, video_attributes):
     return types.InputMediaUploadedDocument(
         file=file_handle,
         mime_type=mime_type,
-        attributes=[],
+        attributes=[filename],
     )
 
 
