@@ -1,7 +1,10 @@
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+
+from telethon import types, utils
 from telethon.tl import functions
 from telethon.tl.types import Channel
 
@@ -240,11 +243,17 @@ async def test_list_topics_sends_get_forum_topics_request(monkeypatch):
     ]
     assert len(client.requests) == 1
     request = client.requests[0]
-    assert isinstance(request, chats.GetForumTopicsRequest)
-    assert request.channel is entity
+    assert isinstance(request, functions.messages.GetForumTopicsRequest)
+    assert request.peer is entity
     assert request.limit == 50
     assert request.offset_topic == 5
     assert request.q == "Eng"
+    resolver = AsyncMock()
+    resolver.get_input_entity.return_value = types.InputPeerChannel(entity.id, entity.access_hash)
+    await request.resolve(resolver, utils)
+    assert bytes(request)[:4] == functions.messages.GetForumTopicsRequest.CONSTRUCTOR_ID.to_bytes(
+        4, "little"
+    )
 
 
 @pytest.mark.asyncio
