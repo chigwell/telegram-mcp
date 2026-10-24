@@ -470,6 +470,7 @@ async def delete_contact(user_id: Union[int, str], account: Optional[str] = None
 )
 @with_account(readonly=False)
 @validate_id("user_id")
+@flood_category("admin_action")
 async def block_user(user_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Block a user by user ID.
@@ -492,6 +493,7 @@ async def block_user(user_id: Union[int, str], account: Optional[str] = None) ->
 )
 @with_account(readonly=False)
 @validate_id("user_id")
+@flood_category("admin_action")
 async def unblock_user(user_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Unblock a user by user ID.
@@ -577,6 +579,7 @@ async def get_blocked_users(account: Optional[str] = None) -> str:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def send_contact(
     chat_id: Union[int, str],
     phone_number: str,

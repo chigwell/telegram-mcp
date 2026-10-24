@@ -186,6 +186,7 @@ def _merged_privacy_rules(current, allow, disallow):
 )
 @with_account(readonly=False)
 @validate_id("allow_users", "disallow_users")
+@flood_category("admin_action")
 async def set_privacy_settings(
     key: str,
     allow_users: Optional[List[Union[int, str]]] = None,
@@ -454,6 +455,7 @@ async def get_bot_info(bot_username: str, account: Optional[str] = None) -> str:
     )
 )
 @with_account(readonly=False)
+@flood_category("admin_action")
 async def set_bot_commands(
     bot_username: str, commands: list, account: Optional[str] = None
 ) -> str:

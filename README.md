@@ -400,6 +400,21 @@ Use `TELEGRAM_FLOOD_SLEEP_THRESHOLD` to configure Telethon's internal silent-sle
 TELEGRAM_FLOOD_SLEEP_THRESHOLD=60   # Max seconds Telethon sleeps silently on FloodWait (default 60)
 ```
 
+On top of that, a proactive flood-prevention layer gates every tool call that
+reaches Telegram (the long-poll `wait_for_events`/`wait_for_new_message`/
+`wait_for_settled_message` and incoming-feed tools manage their accounts
+internally and are not gated): a sliding-window bucket per (account, operation
+category) — sends 30/min, history reads 24/30s, admin actions 10/min, username
+resolution 20/min, channel create/join/leave 3/5min — plus a reactive circuit
+breaker that suspends a tool after repeated flood waits on the same account. A
+deferred call returns a rate-limit message with the retry delay instead of
+making the Telegram request, so the agent reschedules instead of accumulating
+hours-long flood bans. It is on by default; disable it with:
+
+```env
+TELEGRAM_FLOODGATE=0   # disable the local flood-prevention gate (default on)
+```
+
 Run the server locally:
 
 ```bash
@@ -957,6 +972,7 @@ This project is licensed under the [Apache 2.0 License](LICENSE).
 - [Model Context Protocol](https://modelcontextprotocol.io/)
 - [Claude](https://www.anthropic.com/) and [Cursor](https://cursor.so/)
 - [chigwell/telegram-mcp](https://github.com/chigwell/telegram-mcp) upstream project
+- [telethon-floodgate](https://github.com/axisrow/telethon-floodgate) by [@axisrow](https://github.com/axisrow) — flood-prevention engine, vendored under MIT (see file headers in `telegram_mcp/floodgate/`)
 
 Maintained by [@chigwell](https://github.com/chigwell) and [@l1v0n1](https://github.com/l1v0n1). PRs welcome.
 
