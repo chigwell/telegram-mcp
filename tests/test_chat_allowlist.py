@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Optional, Union
 
 import pytest
+from telethon.tl import functions, types
 from telethon.tl.types import Channel, Chat, User
 
 import main
@@ -71,6 +72,8 @@ class FakeAllowlistClient:
         )
 
     async def __call__(self, request):
+        if isinstance(request, functions.messages.SearchGlobalRequest):
+            return SimpleNamespace(messages=self._messages, users=[], chats=[])
         return SimpleNamespace(
             chats=[], users=[], dialogs=[SimpleNamespace(unread_count=0, folder_id=0)]
         )
@@ -394,6 +397,8 @@ async def test_search_global_filters_unallowed_chats(monkeypatch):
 
     m1 = SimpleNamespace(
         id=1,
+        peer_id=types.PeerUser(111),
+        _finish_init=lambda *args: None,
         chat_id=111,
         chat=allowed_chat,
         date=datetime.now(timezone.utc),
@@ -402,6 +407,8 @@ async def test_search_global_filters_unallowed_chats(monkeypatch):
     )
     m2 = SimpleNamespace(
         id=2,
+        peer_id=types.PeerUser(999),
+        _finish_init=lambda *args: None,
         chat_id=999,
         chat=forbidden_chat,
         date=datetime.now(timezone.utc),

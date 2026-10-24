@@ -8,7 +8,7 @@ link hidden behind its text, its forward origin and its view count.
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from telethon.tl import types
@@ -65,6 +65,8 @@ def _voice():
 @pytest.fixture
 def client(monkeypatch):
     cl = AsyncMock()
+    cl._mb_entity_cache = MagicMock()
+    cl._mb_entity_cache.get.return_value = None
     monkeypatch.setattr(messages, "get_client", lambda account=None: cl)
     monkeypatch.setattr(
         messages,
@@ -94,6 +96,16 @@ def client(monkeypatch):
 async def test_json_readers_return_the_complete_record(client, tool, arguments):
     msg = _post()
     client.get_messages.return_value = [msg]
+    if tool is messages.search_global:
+        client.return_value = SimpleNamespace(
+            messages=[msg],
+            users=[],
+            chats=[
+                types.Channel(
+                    id=CHANNEL_ID, title="Example channel", photo=types.ChatPhotoEmpty(), date=DATE
+                )
+            ],
+        )
     if tool is messages.get_message_context:
         client.get_messages.side_effect = [[], msg, []]
 
@@ -107,7 +119,15 @@ async def test_json_readers_return_the_complete_record(client, tool, arguments):
 
 @pytest.mark.asyncio
 async def test_search_global_keeps_chat_attribution(client):
-    client.get_messages.return_value = [_post()]
+    client.return_value = SimpleNamespace(
+        messages=[_post()],
+        users=[],
+        chats=[
+            types.Channel(
+                id=CHANNEL_ID, title="Example channel", photo=types.ChatPhotoEmpty(), date=DATE
+            )
+        ],
+    )
 
     record = json.loads(await messages.search_global("Model", account="test"))["results"][0]
 
@@ -131,7 +151,7 @@ async def test_cached_voice_transcript_is_part_of_the_record(client, transcript_
     transcription.save_transcript(MARKED_CHANNEL_ID, 1, "groq", "Hello there", duration=13)
     voice = _voice()
     if tool == "search_global":
-        client.get_messages.return_value = [voice]
+        client.return_value = SimpleNamespace(messages=[voice], users=[], chats=[])
         result = await messages.search_global("Hello", account="test")
     else:
         client.get_messages.side_effect = [[], voice, []]
