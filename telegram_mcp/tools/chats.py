@@ -212,6 +212,7 @@ async def get_chats(account: Optional[str] = None, page: int = 1, page_size: int
 )
 @with_account(readonly=False)
 @validate_id("channel")
+@flood_category("channel_lifecycle")
 async def subscribe_public_channel(channel: Union[int, str], account: Optional[str] = None) -> str:
     """
     Subscribe (join) to a public channel or supergroup by username or ID.
@@ -429,6 +430,7 @@ async def enable_forum_topics(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def create_forum_topic(
     chat_id: Union[int, str],
     title: str,
@@ -534,6 +536,7 @@ def _forum_supergroup_error(entity) -> Optional[str]:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def edit_forum_topic(
     chat_id: Union[int, str],
     topic_id: int,
@@ -611,6 +614,7 @@ _DELETE_TOPIC_MAX_BATCHES = 100
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def delete_forum_topic(
     chat_id: Union[int, str],
     topic_id: int,
@@ -923,6 +927,7 @@ async def get_chat(chat_id: Union[int, str], account: Optional[str] = None) -> s
     annotations=ToolAnnotations(title="Search Public Chats", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
+@flood_category("resolve_guard")
 async def search_public_chats(query: str, limit: int = 20, account: Optional[str] = None) -> str:
     """
     Search for public chats, channels, or bots by username or title.
@@ -944,6 +949,7 @@ async def search_public_chats(query: str, limit: int = 20, account: Optional[str
     annotations=ToolAnnotations(title="Resolve Username", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
+@flood_category("resolve_guard")
 async def resolve_username(username: str, account: Optional[str] = None) -> str:
     """
     Resolve a username to a user or chat ID.
@@ -1220,6 +1226,7 @@ async def get_common_chats(
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("history")
 async def get_message_read_by(
     chat_id: Union[int, str], message_id: int, account: Optional[str] = None
 ) -> str:

@@ -563,6 +563,7 @@ async def wait_for_events(
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("history")
 async def get_messages_after(
     chat_id: Union[int, str],
     after_id: Optional[int] = None,

@@ -175,15 +175,15 @@ def test_flood_report_without_account_context_is_ignored(monkeypatch):
 
 
 def test_category_mapping_covers_the_hot_tools():
-    from telegram_mcp.floodgate import category_for_tool
+    import telegram_mcp.tools  # noqa: F401 - populates the @flood_category registry
 
-    assert category_for_tool("send_message") == "send"
-    assert category_for_tool("get_history") == "history"
-    assert category_for_tool("ban_user") == "admin_action"
-    assert category_for_tool("leave_chat") == "channel_lifecycle"
-    assert category_for_tool("get_chats") == "default"  # dialogs bucket stays unused
-    assert category_for_tool("resolve_username") == "resolve_guard"
-    assert category_for_tool("not_a_tool") == "default"
+    assert runtime.category_for_tool("send_message") == "send"
+    assert runtime.category_for_tool("get_history") == "history"
+    assert runtime.category_for_tool("ban_user") == "admin_action"
+    assert runtime.category_for_tool("leave_chat") == "channel_lifecycle"
+    assert runtime.category_for_tool("get_chats") == "default"  # dialogs bucket stays unused
+    assert runtime.category_for_tool("resolve_username") == "resolve_guard"
+    assert runtime.category_for_tool("not_a_tool") == "default"
 
 
 @pytest.mark.asyncio

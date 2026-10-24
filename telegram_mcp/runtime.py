@@ -72,7 +72,6 @@ from telegram_mcp.floodgate import (
     RateLimitSpec,
     TelegramOperationSuspendedError,
     TelegramRateLimitGate,
-    category_for_tool,
 )
 from telegram_mcp.singleton import try_lock_exclusive
 
@@ -1036,6 +1035,33 @@ def _floodgate_settle(tool_name: str, label: Optional[str], result: Any) -> None
         breaker.record_success(tool_name, label)
     except Exception:
         pass
+
+
+# Tool name -> gate category, populated at import time by @flood_category on
+# the tool definitions themselves (telegram_mcp/tools/*): the mapping lives
+# next to each tool and cannot drift from it. Undecorated tools take the
+# broad "default" bucket (1000/60s) — reads, media, contacts, profile,
+# folders, waits.
+TOOL_CATEGORIES: dict[str, str] = {}
+
+
+def flood_category(category: str):
+    """Declare an MCP tool's floodgate category, e.g. ``@flood_category("send")``.
+
+    Stacked on the tool definitions alongside @with_account; registration is
+    keyed by the tool function name — the same name _floodgate_defer sees.
+    """
+
+    def decorator(fn):
+        TOOL_CATEGORIES[fn.__name__] = category
+        return fn
+
+    return decorator
+
+
+def category_for_tool(tool_name: str) -> str:
+    """Gate category for a tool name; unknown tools take the default bucket."""
+    return TOOL_CATEGORIES.get(tool_name, "default")
 
 
 def with_account(readonly=False):
