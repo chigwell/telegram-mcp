@@ -1,8 +1,10 @@
 """Media MCP tools."""
 
 import io
+import mimetypes
 import os
 import shutil
+import struct
 import tempfile
 from uuid import uuid4
 
@@ -37,6 +39,145 @@ def _force_document_kwargs(force_document: bool) -> Dict[str, bool]:
     # Only pass force_document when the caller set it, so the default call
     # reaches Telethon exactly as before.
     return {"force_document": True} if force_document else {}
+
+
+def _video_send_attributes(path: str):
+    """Real DocumentAttributeVideo for a video file, so clips do not go out 1x1/0:00.
+
+    Telethon fills in dimensions and duration only with hachoir (GPL, not a
+    dependency here); without them every video is sent as w=1 h=1 duration=0,
+    which squashes portrait clips in clients. Returns None for non-videos and
+    for containers the parser cannot read, falling back to Telethon's defaults.
+    """
+    if not (mimetypes.guess_type(path)[0] or "").startswith("video/"):
+        return None
+    return _mp4_video_attributes(path)
+
+
+def _mp4_video_attributes(path: str):
+    """Parse an MP4/MOV container for duration and display dimensions.
+
+    mvhd carries the duration; tkhd the track dimensions plus the display
+    matrix, so a 90-degree-rotated phone video (stored 1920x1080) is reported
+    as 1080x1920 — the rotation hachoir ignores. Any malformed structure
+    returns None.
+    """
+    try:
+        with open(path, "rb") as media_file:
+            media_file.seek(0, os.SEEK_END)
+            moov = _find_box(media_file, 0, media_file.tell(), b"moov")
+            if moov is None:
+                return None
+            return _parse_moov(media_file, *moov)
+    except (OSError, struct.error):
+        return None
+
+
+def _find_box(media_file, start: int, end: int, wanted: bytes):
+    """(payload_start, payload_end) of the first child box named `wanted`."""
+    offset = start
+    while offset + 8 <= end:
+        media_file.seek(offset)
+        header = media_file.read(8)
+        if len(header) < 8:
+            return None
+        size, box_type = struct.unpack(">I4s", header)
+        payload_start = offset + 8
+        if size == 1:
+            large = media_file.read(8)
+            if len(large) < 8:
+                return None
+            size = struct.unpack(">Q", large)[0]
+            payload_start = offset + 16
+        elif size == 0:
+            size = end - offset
+        if size < payload_start - offset:
+            return None
+        if box_type == wanted:
+            return payload_start, min(offset + size, end)
+        offset += size
+    return None
+
+
+def _parse_moov(media_file, start: int, end: int):
+    timescale = duration = None
+    dimensions = None
+    offset = start
+    while offset + 8 <= end:
+        media_file.seek(offset)
+        header = media_file.read(8)
+        if len(header) < 8:
+            return None
+        size, box_type = struct.unpack(">I4s", header)
+        if size < 8:
+            return None
+        box_end = min(offset + size, end)
+        if box_type == b"mvhd":
+            timescale, duration = _parse_mvhd(media_file, offset + 8, box_end)
+        elif box_type == b"trak" and dimensions is None:
+            dimensions = _parse_trak(media_file, offset + 8, box_end)
+        offset = box_end
+    if not timescale or duration is None or dimensions is None:
+        return None
+    return types.DocumentAttributeVideo(
+        round_message=False,
+        w=dimensions[0],
+        h=dimensions[1],
+        duration=int(round(duration / timescale)),
+        supports_streaming=True,
+    )
+
+
+def _parse_mvhd(media_file, start: int, end: int):
+    media_file.seek(start)
+    data = media_file.read(min(32, end - start))
+    if data and data[0] == 1:
+        if len(data) < 32:
+            return None, None
+        timescale, duration = struct.unpack_from(">IQ", data, 20)
+    else:
+        if len(data) < 20:
+            return None, None
+        timescale, duration = struct.unpack_from(">II", data, 12)
+    return timescale, duration
+
+
+def _parse_trak(media_file, start: int, end: int):
+    offset = start
+    while offset + 8 <= end:
+        media_file.seek(offset)
+        header = media_file.read(8)
+        if len(header) < 8:
+            return None
+        size, box_type = struct.unpack(">I4s", header)
+        if size < 8:
+            return None
+        box_end = min(offset + size, end)
+        if box_type == b"tkhd":
+            return _parse_tkhd(media_file, offset + 8, box_end)
+        offset = box_end
+    return None
+
+
+def _parse_tkhd(media_file, start: int, end: int):
+    media_file.seek(start)
+    data = media_file.read(min(96, end - start))
+    if data and data[0] == 1:
+        if len(data) < 96:
+            return None
+        matrix_at, width_at = 52, 88
+    else:
+        if len(data) < 84:
+            return None
+        matrix_at, width_at = 40, 76
+    matrix_a, _b, _c, matrix_d = struct.unpack_from(">4i", data, matrix_at)
+    width = struct.unpack_from(">I", data, width_at)[0] >> 16
+    height = struct.unpack_from(">I", data, width_at + 4)[0] >> 16
+    if not width or not height:
+        return None
+    if matrix_a == 0 and matrix_d == 0:  # a 90/270-degree display matrix
+        width, height = height, width
+    return width, height
 
 
 class _DownloadLimitExceeded(Exception):
@@ -101,13 +242,18 @@ async def send_file(
         if path_error:
             return path_error
         entity = await resolve_entity(chat_id, cl)
+        send_kwargs: dict = _force_document_kwargs(force_document)
+        if not force_document:
+            video_attributes = _video_send_attributes(str(safe_path))
+            if video_attributes is not None:
+                send_kwargs["attributes"] = [video_attributes]
         await cl.send_file(
             entity,
             str(safe_path),
             caption=caption,
             reply_to=topic_id,
             schedule=dt,
-            **_force_document_kwargs(force_document),
+            **send_kwargs,
         )
         if dt:
             return f"File from {safe_path} scheduled for {dt.isoformat()} in chat {chat_id}."
@@ -157,19 +303,60 @@ async def _send_album(
         safe_paths.append(str(safe_path))
 
     entity = await resolve_entity(chat_id, cl)
-    await cl.send_file(
-        entity,
-        safe_paths,
-        caption=caption,
-        reply_to=topic_id,
-        schedule=dt,
-        **_force_document_kwargs(force_document),
+    # Telethon's media-group branch never forwards caller attributes, so an
+    # album containing video is rebuilt as per-file InputMedia; image-only
+    # albums keep Telethon's own path untouched.
+    per_file_attributes = (
+        [_video_send_attributes(path) for path in safe_paths] if not force_document else None
     )
+    if per_file_attributes is None or not any(per_file_attributes):
+        await cl.send_file(
+            entity,
+            safe_paths,
+            caption=caption,
+            reply_to=topic_id,
+            schedule=dt,
+            **_force_document_kwargs(force_document),
+        )
+    else:
+        media_items = []
+        for safe_path, video_attributes in zip(safe_paths, per_file_attributes):
+            media_items.append(
+                _album_media_item(safe_path, await cl.upload_file(safe_path), video_attributes)
+            )
+        await cl.send_file(
+            entity,
+            media_items,
+            caption=caption,
+            reply_to=topic_id,
+            schedule=dt,
+        )
     if dt:
         return (
             f"Album of {len(safe_paths)} files scheduled for {dt.isoformat()} in chat {chat_id}."
         )
     return f"Album sent to chat {chat_id} with {len(safe_paths)} files."
+
+
+def _album_media_item(path: str, file_handle, video_attributes):
+    mime_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    # Telethon's own path-based uploads always attach a filename attribute;
+    # rebuilt InputMedia items must carry one too or files arrive unnamed.
+    filename = types.DocumentAttributeFilename(os.path.basename(path))
+    if video_attributes is not None:
+        return types.InputMediaUploadedDocument(
+            file=file_handle,
+            mime_type=mime_type,
+            attributes=[filename, video_attributes],
+            nosound_video=True,
+        )
+    if mime_type.startswith("image/"):
+        return types.InputMediaUploadedPhoto(file=file_handle)
+    return types.InputMediaUploadedDocument(
+        file=file_handle,
+        mime_type=mime_type,
+        attributes=[filename],
+    )
 
 
 @mcp.tool(
