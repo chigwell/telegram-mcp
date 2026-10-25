@@ -21,6 +21,7 @@ from telegram_mcp.photo_source import (
     list_photo_references,
     validate_source,
 )
+from telegram_mcp.tools.messages import _plain_entities, _plain_text_conflict
 
 PHOTO_IDENTIFIER_SEARCH_DEPTH = 100
 PHOTO_SHEET_MAXIMUM_TILES = 12
@@ -180,6 +181,32 @@ def _parse_tkhd(media_file, start: int, end: int):
     return width, height
 
 
+def _caption_format_kwargs(caption, parse_mode, custom_emojis):
+    """Return (Telethon send_file kwargs, None) for the caption format, or (None, error).
+
+    Like _force_document_kwargs, nothing is passed when the caller set neither
+    argument, so Telethon keeps parsing the caption with its default (Markdown).
+    """
+    conflict = _plain_text_conflict(parse_mode, None, custom_emojis)
+    if conflict:
+        return None, conflict
+    if parse_mode and parse_mode.lower() in RICH_PARSE_MODES:
+        return None, (
+            f"parse_mode='{parse_mode}' is not supported for file captions. "
+            "Use 'md', 'html' or 'plain'."
+        )
+    if custom_emojis:
+        if not caption:
+            return None, "custom_emojis needs a caption."
+        entities, error = _plain_entities(caption, None, custom_emojis)
+        if error:
+            return None, error
+        return {"formatting_entities": entities}, None
+    if parse_mode is None:
+        return {}, None
+    return {"parse_mode": None if parse_mode.lower() == "plain" else parse_mode}, None
+
+
 class _DownloadLimitExceeded(Exception):
     """Stop an in-progress media download once it exceeds the configured limit."""
 
@@ -194,11 +221,19 @@ async def send_file(
     topic_id: Optional[int] = None,
     schedule_date: Union[str, int, None] = None,
     force_document: bool = False,
+    parse_mode: Optional[str] = None,
+    custom_emojis: Optional[List[Dict[str, Any]]] = None,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
 ) -> str:
     """
     Send a file to a chat.
+    Reuse custom_emojis from message-reading tools in the caption with
+    parse_mode='html' and <tg-emoji emoji-id="ID">EMOJI</tg-emoji>, using the
+    returned id and emoji. HTML-escape the emoji and other literal text. Custom
+    emoji availability is subject to Telegram's account restrictions.
+    Without HTML, custom_emojis turns emoji in a plain-text caption into custom
+    emoji: custom_emojis=[{"emoji": "🍷", "id": "ID"}] marks every standalone 🍷.
     Args:
         chat_id: The chat ID or username.
         file_path: Absolute or relative path to the file under allowed roots.
@@ -213,6 +248,17 @@ async def send_file(
         force_document: When true, send the original file as a document instead of letting
             Telegram turn images and videos into compressed photos or streamed videos.
             Applies to every file of a media group.
+        parse_mode: Optional caption formatting mode. Use 'html' for HTML tags (<b>, <i>,
+            <code>, <pre>, <a href="...">), 'md' or 'markdown' for Markdown (**bold**,
+            __italic__, `code`, ```pre```), or 'plain' to send the caption verbatim.
+            If omitted, the client default applies (Markdown), as in earlier versions.
+            Rich modes ('rich', 'rich_md', 'rich_markdown', 'rich_html') are not
+            supported for captions.
+        custom_emojis: Entries {"emoji": fallback, "id": document ID} as returned
+            in custom_emojis by message-reading tools. Every standalone occurrence of
+            each fallback emoji in the caption becomes that custom emoji; a fallback
+            that is not in the caption is an error. Plain-text captions only — leave
+            parse_mode unset.
     """
     try:
         if isinstance(file_path, list):
@@ -223,6 +269,8 @@ async def send_file(
                 topic_id=topic_id,
                 schedule_date=schedule_date,
                 force_document=force_document,
+                parse_mode=parse_mode,
+                custom_emojis=custom_emojis,
                 ctx=ctx,
                 account=account,
             )
@@ -232,6 +280,10 @@ async def send_file(
             dt, schedule_error = parse_schedule_date(schedule_date)
             if schedule_error:
                 return schedule_error
+
+        caption_kwargs, caption_error = _caption_format_kwargs(caption, parse_mode, custom_emojis)
+        if caption_error:
+            return caption_error
 
         cl = get_client(account)
         safe_path, path_error = await _resolve_readable_file_path(
@@ -254,6 +306,7 @@ async def send_file(
             reply_to=topic_id,
             schedule=dt,
             **send_kwargs,
+            **caption_kwargs,
         )
         if dt:
             return f"File from {safe_path} scheduled for {dt.isoformat()} in chat {chat_id}."
@@ -268,6 +321,8 @@ async def send_file(
             topic_id=topic_id,
             schedule_date=str(schedule_date),
             force_document=force_document,
+            parse_mode=parse_mode,
+            custom_emojis=custom_emojis,
         )
 
 
@@ -278,6 +333,8 @@ async def _send_album(
     topic_id: Optional[int] = None,
     schedule_date: Union[str, int, None] = None,
     force_document: bool = False,
+    parse_mode: Optional[str] = None,
+    custom_emojis: Optional[List[Dict[str, Any]]] = None,
     ctx: Optional[Context] = None,
     account: str = None,
 ) -> str:
@@ -289,6 +346,10 @@ async def _send_album(
         dt, schedule_error = parse_schedule_date(schedule_date)
         if schedule_error:
             return schedule_error
+
+    caption_kwargs, caption_error = _caption_format_kwargs(caption, parse_mode, custom_emojis)
+    if caption_error:
+        return caption_error
 
     cl = get_client(account)
     safe_paths = []
@@ -317,6 +378,7 @@ async def _send_album(
             reply_to=topic_id,
             schedule=dt,
             **_force_document_kwargs(force_document),
+            **caption_kwargs,
         )
     else:
         media_items = []
@@ -330,6 +392,7 @@ async def _send_album(
             caption=caption,
             reply_to=topic_id,
             schedule=dt,
+            **caption_kwargs,
         )
     if dt:
         return (
@@ -370,11 +433,16 @@ async def send_album(
     caption: Optional[str] = None,
     topic_id: Optional[int] = None,
     schedule_date: Union[str, int, None] = None,
+    parse_mode: Optional[str] = None,
+    custom_emojis: Optional[List[Dict[str, Any]]] = None,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
 ) -> str:
     """
     Send multiple photos/videos as one Telegram media group (album).
+    The caption is formatted as in send_file: parse_mode='html' reads
+    <tg-emoji emoji-id="ID">EMOJI</tg-emoji>, and custom_emojis marks emoji in a
+    plain-text caption.
 
     Args:
         chat_id: The chat ID or username.
@@ -385,6 +453,10 @@ async def send_album(
         schedule_date: Optional. When set, the album is placed in the chat's
             scheduled queue instead of being sent now. Either an ISO-8601 string
             or a Unix timestamp (int). Naive datetimes are treated as UTC.
+        parse_mode: Optional caption formatting mode — same values as send_file: 'html',
+            'md'/'markdown' or 'plain'. If omitted, the client default applies (Markdown).
+        custom_emojis: Entries {"emoji": fallback, "id": document ID}, as in send_file.
+            Plain-text captions only — leave parse_mode unset.
     """
     try:
         if not isinstance(file_paths, list):
@@ -395,6 +467,8 @@ async def send_album(
             caption=caption,
             topic_id=topic_id,
             schedule_date=schedule_date,
+            parse_mode=parse_mode,
+            custom_emojis=custom_emojis,
             ctx=ctx,
             account=account,
         )
@@ -407,6 +481,8 @@ async def send_album(
             caption=caption,
             topic_id=topic_id,
             schedule_date=str(schedule_date),
+            parse_mode=parse_mode,
+            custom_emojis=custom_emojis,
         )
 
 
