@@ -1,8 +1,11 @@
-"""Custom Emoji MCP tools for browsing, inspecting, and previewing custom emoji packs."""
+"""Custom Emoji MCP tools for browsing, searching, inspecting, and previewing custom emoji."""
 
+import asyncio
 import json
+import os
 import re
-from typing import Any, Dict, List, Optional, Union
+import time
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from mcp.server.fastmcp import Context, FastMCP, Image
 from mcp.types import ToolAnnotations
@@ -338,9 +341,125 @@ async def preview_custom_emoji(
         )
 
 
+# Telegram's emoji keywords (the words that turn into emoji when you type them in a
+# client) are one large dictionary per language that rarely changes, so each is fetched
+# once and kept in memory: lang_code -> (monotonic time fetched, {keyword: [emoticon]}).
+EMOJI_KEYWORDS_TTL = 24 * 60 * 60.0
+_emoji_keywords: Dict[str, Tuple[float, Dict[str, List[str]]]] = {}
+_emoji_keyword_locks: Dict[str, asyncio.Lock] = {}
+
+
+def emoji_search_language() -> str:
+    """``TELEGRAM_EMOJI_SEARCH_LANGUAGE``: language search_custom_emoji reads words in
+    (default ``en``). A per-call ``lang_code`` takes precedence."""
+    raw = os.getenv("TELEGRAM_EMOJI_SEARCH_LANGUAGE", "").strip().lower()
+    return raw or "en"
+
+
+async def emoji_keywords(cl, lang_code: str) -> Dict[str, List[str]]:
+    """{keyword: [emoticon, ...]} for a language, from messages.getEmojiKeywords.
+
+    Keywords are lower-cased so a lookup ignores case. The dictionary is cached per
+    language for EMOJI_KEYWORDS_TTL; concurrent first calls share one request. A language
+    Telegram has no keywords for comes back empty and is not cached.
+    """
+    async with _emoji_keyword_locks.setdefault(lang_code, asyncio.Lock()):
+        cached = _emoji_keywords.get(lang_code)
+        if cached and time.monotonic() - cached[0] < EMOJI_KEYWORDS_TTL:
+            return cached[1]
+        result = await cl(functions.messages.GetEmojiKeywordsRequest(lang_code=lang_code))
+        keywords: Dict[str, List[str]] = {}
+        for item in getattr(result, "keywords", []) or []:
+            if not isinstance(item, types.EmojiKeyword):
+                continue
+            emoticons = keywords.setdefault(item.keyword.casefold(), [])
+            for emoticon in item.emoticons:
+                if emoticon not in emoticons:
+                    emoticons.append(emoticon)
+        if keywords:
+            _emoji_keywords[lang_code] = (time.monotonic(), keywords)
+        return keywords
+
+
+async def find_custom_emoji(cl, emoticons: List[str], limit: int) -> Dict[int, str]:
+    """{document ID: emoticon it was found under} for up to ``limit`` custom emoji.
+
+    Emoticons are searched in order and the search stops once ``limit`` is reached, so a
+    word that maps to many emoji does not cost a request for each.
+    """
+    found: Dict[int, str] = {}
+    for emoticon in emoticons:
+        if len(found) >= limit:
+            break
+        reply = await cl(functions.messages.SearchCustomEmojiRequest(emoticon=emoticon, hash=0))
+        for doc_id in getattr(reply, "document_id", None) or []:
+            found.setdefault(doc_id, emoticon)
+    return dict(list(found.items())[: max(limit, 0)])
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Search Custom Emoji", openWorldHint=True, readOnlyHint=True)
+)
+@with_account(readonly=True)
+async def search_custom_emoji(
+    query: str,
+    limit: int = 20,
+    lang_code: Optional[str] = None,
+    account: Optional[str] = None,
+) -> str:
+    """
+    Search custom emoji by a word or by an emoji. A word is turned into emoji through
+    Telegram's emoji keywords and the custom emoji made for each of them are returned;
+    an emoji is searched as it is. Each result is an {"emoji", "id"} entry, the form
+    send_message takes as custom_emojis; its id is the document_id for
+    preview_custom_emoji.
+
+    Args:
+        query: A word (e.g. 'snow', 'fire', 'heart') or an emoji (e.g. '❄️').
+        limit: Maximum number of custom emoji to return (default: 20).
+        lang_code: Language of the word (e.g. 'en', 'ru'). Defaults to
+            TELEGRAM_EMOJI_SEARCH_LANGUAGE, or 'en'. Not used for an emoji.
+        account: Optional account alias or phone number.
+    """
+    try:
+        text = " ".join((query or "").split())
+        if not text:
+            return "Invalid query: provide a word or an emoji."
+
+        cl = get_client(account)
+        await ensure_connected(cl)
+
+        result: Dict[str, Any] = {"query": text}
+        if any(char.isalnum() for char in text):
+            language = (lang_code or emoji_search_language()).strip().lower()
+            keywords = await emoji_keywords(cl, language)
+            emoticons = keywords.get(text.casefold(), [])
+            result["lang_code"] = language
+        else:
+            emoticons = [text]
+
+        found = await find_custom_emoji(cl, emoticons, limit)
+        result["matched_emoji"] = emoticons
+        result["count"] = len(found)
+        result["custom_emojis"] = [
+            {
+                "emoji": sanitize_user_content(emoticon, max_length=64, preserve_emoji=True),
+                "id": str(doc_id),
+            }
+            for doc_id, emoticon in found.items()
+        ]
+
+        return json.dumps(result, indent=2, default=json_serializer, ensure_ascii=False)
+    except Exception as e:
+        return log_and_format_error(
+            "search_custom_emoji", e, query=query, limit=limit, lang_code=lang_code
+        )
+
+
 __all__ = [
     "extract_pack_short_name",
     "get_custom_emoji_packs",
     "get_custom_emoji_pack",
     "preview_custom_emoji",
+    "search_custom_emoji",
 ]

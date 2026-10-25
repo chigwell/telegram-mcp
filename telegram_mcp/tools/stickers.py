@@ -5,6 +5,7 @@ from telegram_mcp.tools.custom_emoji import (
     get_custom_emoji_pack,
     get_custom_emoji_packs,
     preview_custom_emoji,
+    search_custom_emoji,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "get_custom_emoji_packs",
     "get_custom_emoji_pack",
     "preview_custom_emoji",
+    "search_custom_emoji",
 ]
