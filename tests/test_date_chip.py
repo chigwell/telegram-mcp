@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from telethon.tl import functions, types
 
-from telegram_mcp import runtime
+from telegram_mcp import formatting, runtime
 from telegram_mcp.tools import messages
 
 
@@ -14,13 +14,13 @@ def _utf16_length(text):
 
 
 def _chip(text, format_date):
-    entity, error = messages._date_entity(text, format_date)
+    entity, error = formatting._date_entity(text, format_date)
     assert error is None
     return entity
 
 
 def _chip_error(text, format_date):
-    entity, error = messages._date_entity(text, format_date)
+    entity, error = formatting._date_entity(text, format_date)
     assert entity is None
     return error
 
