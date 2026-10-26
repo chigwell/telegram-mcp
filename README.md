@@ -172,6 +172,11 @@ does not look like an emoji (pure ASCII/Latin punctuation such as `#` is refused
 an `id` is not a positive 64-bit integer, two marked spans overlap, or `parse_mode`
 is set. It combines with `format_date`.
 
+`send_file` and `send_album` take the same `parse_mode` and `custom_emojis` for their
+caption, which for a media group sits on its first item. Without `parse_mode` a caption is
+still parsed as Markdown, as before; `parse_mode="plain"` sends it verbatim, the rich modes
+are not supported for captions, and `custom_emojis` needs a caption.
+
 ### Tappable dates and times
 
 Passing `format_date` to `send_message`, `reply_to_message`, or `edit_message`
