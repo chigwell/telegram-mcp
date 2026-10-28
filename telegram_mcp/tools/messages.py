@@ -2001,6 +2001,7 @@ async def forward_messages(
     message_ids: List[int],
     to_chat_id: Union[int, str],
     account: Optional[str] = None,
+    topic_id: Optional[int] = None,
 ) -> str:
     """
     Forward a BATCH of messages from a source chat to a destination chat in
@@ -2022,15 +2023,48 @@ async def forward_messages(
             (e.g. [12345, 12346]). Must contain at least one id.
         to_chat_id: Destination chat (id or @username).
         account: Optional account label for multi-account mode.
+        topic_id: Positive forum topic ID (top_msg_id), where supported. Omit
+            it to forward to the destination chat's default topic.
+
+    Telegram validates topic permissions. A rejected topic is never retried
+    without the requested topic.
     """
     try:
+        if topic_id is not None and (type(topic_id) is not int or topic_id <= 0):
+            return "Error: topic_id must be a positive integer."
         if not message_ids:
             return "Error: message_ids must contain at least one id."
         cl = get_client(account)
         from_entity = await resolve_entity(from_chat_id, cl)
         to_entity = await resolve_entity(to_chat_id, cl)
-        await cl.forward_messages(to_entity, list(message_ids), from_entity)
-        return f"{len(message_ids)} messages forwarded from " f"{from_chat_id} to {to_chat_id}."
+        destination_note = ""
+        if topic_id is None:
+            await cl.forward_messages(to_entity, list(message_ids), from_entity)
+        else:
+            request = functions.messages.ForwardMessagesRequest(
+                from_peer=from_entity,
+                id=list(message_ids),
+                to_peer=to_entity,
+                top_msg_id=topic_id,
+            )
+            result = await cl(request)
+            returned_ids = {
+                update.random_id: update.id
+                for update in getattr(result, "updates", None) or []
+                if isinstance(update, types.UpdateMessageID)
+            }
+            destination_ids = [
+                returned_ids[random_id]
+                for random_id in request.random_id
+                if random_id in returned_ids
+            ]
+            destination_note = (
+                f" Destination message IDs: {destination_ids or 'not returned by Telegram'}."
+            )
+        return (
+            f"{len(message_ids)} messages forwarded from {from_chat_id} to {to_chat_id}."
+            + destination_note
+        )
     except Exception as e:
         return log_and_format_error(
             "forward_messages",
@@ -2038,6 +2072,7 @@ async def forward_messages(
             from_chat_id=from_chat_id,
             message_ids=message_ids,
             to_chat_id=to_chat_id,
+            topic_id=topic_id,
         )
 
 

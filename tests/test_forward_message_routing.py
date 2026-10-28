@@ -306,3 +306,61 @@ async def test_native_forward_states_when_no_ids_were_returned(client):
         "Message 10 forwarded from source to destination. "
         "Destination message IDs: not returned by Telegram."
     )
+
+
+@pytest.mark.asyncio
+async def test_batch_forward_routes_to_forum_topic_and_reports_exact_destination_ids(client):
+    def updates(request):
+        return [
+            types.UpdateMessageID(id=701, random_id=request.random_id[1]),
+            types.UpdateMessageID(id=700, random_id=request.random_id[0]),
+        ]
+
+    client.build_updates = updates
+    result = await messages.forward_messages("source", [10, 12], "destination", topic_id=7)
+
+    assert result == (
+        "2 messages forwarded from source to destination. " "Destination message IDs: [700, 701]."
+    )
+    assert client.legacy == []
+    assert len(client.requests) == 1
+    request = client.requests[0]
+    assert isinstance(request, functions.messages.ForwardMessagesRequest)
+    assert request.from_peer is client.peers["source"]
+    assert request.to_peer is client.peers["destination"]
+    assert request.id == [10, 12]
+    assert request.top_msg_id == 7
+    assert request.reply_to is None
+    assert request.send_as is None
+    assert not request.drop_author
+    assert not request.drop_media_captions
+    assert not request.silent
+    assert len(set(request.random_id)) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("topic_id", [0, -1, True, 1.5, "7"])
+async def test_batch_forward_rejects_invalid_topic_before_sending(client, topic_id):
+    result = await messages.forward_messages("source", [10], "destination", topic_id=topic_id)
+
+    assert "topic_id must be a positive integer" in result
+    assert client.requests == client.legacy == []
+
+
+@pytest.mark.asyncio
+async def test_batch_forward_without_topic_keeps_legacy_behavior(client):
+    result = await messages.forward_messages("source", [10, 12], "destination")
+
+    assert result == "2 messages forwarded from source to destination."
+    assert client.requests == []
+    assert client.legacy == [((client.peers["destination"], [10, 12], client.peers["source"]), {})]
+
+
+@pytest.mark.asyncio
+async def test_batch_forward_schema_exposes_optional_topic_id():
+    tools = {tool.name: tool for tool in await runtime.mcp.list_tools()}
+    schema = tools["forward_messages"].inputSchema
+
+    assert set(schema["required"]) == {"from_chat_id", "message_ids", "to_chat_id"}
+    assert schema["properties"]["topic_id"]["default"] is None
+    assert {"type": "null"} in schema["properties"]["topic_id"]["anyOf"]
