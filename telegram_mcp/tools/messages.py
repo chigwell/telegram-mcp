@@ -2801,6 +2801,8 @@ async def get_history(
     with parse_mode='html' and <tg-emoji emoji-id="ID">EMOJI</tg-emoji>.
 
     Args:
+        chat_id: The ID or username of the chat.
+        limit: Maximum number of messages to retrieve (default 100).
         topic_id: Forum topic ID (from list_topics). If set, Telegram returns only that
                   topic's thread, including replies nested inside it, and `limit` counts
                   messages of the topic rather than of the whole group. Use 1 for General.
