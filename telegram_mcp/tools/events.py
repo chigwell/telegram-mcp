@@ -137,6 +137,9 @@ def _open_feed_append():
     `Path.touch(mode=...)` only applies its mode when creating, so an existing or
     externally rotated 0644 file keeps its permissions; fchmod on the open
     descriptor fixes that without a TOCTOU window.
+
+    Windows has no POSIX modes (fstat always reports 0666) and no os.fchmod before
+    Python 3.13, so the check is skipped there.
     """
     path = feed_file_path()
     if not os.getenv(_FEED_FILE_ENV):
@@ -145,7 +148,7 @@ def _open_feed_append():
         path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
-        if stat.S_IMODE(os.fstat(fd).st_mode) != 0o600:
+        if os.name != "nt" and stat.S_IMODE(os.fstat(fd).st_mode) != 0o600:
             os.fchmod(fd, 0o600)
     except OSError:
         os.close(fd)
