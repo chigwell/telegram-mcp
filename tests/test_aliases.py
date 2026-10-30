@@ -244,7 +244,8 @@ def test_alias_file_is_owner_only_and_written_atomically():
     runtime.save_aliases({"андрей": 1})
     path = runtime.aliases_file_path()
 
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name != "nt":  # POSIX permissions only
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert not path.with_suffix(".tmp").exists()
 
 
@@ -295,6 +296,7 @@ def test_update_aliases_does_not_lose_a_concurrent_write():
     assert _ids(runtime.load_aliases()) == {"первый": 1, "второй": 2, "третий": 3}
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions only")
 def test_update_aliases_refuses_to_write_over_an_unreadable_file():
     path = runtime.aliases_file_path()
     runtime.save_aliases({"важный": 1})

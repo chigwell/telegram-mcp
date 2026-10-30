@@ -1071,6 +1071,7 @@ def test_default_cache_falls_back_to_a_user_cache_when_cwd_is_unusable(tmp_path,
     home.mkdir()
     monkeypatch.chdir(workdir)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Path.home() on Windows
     monkeypatch.delenv("TELEGRAM_TRANSCRIPT_CACHE_DIR", raising=False)
 
     path = transcription.cache_dir()
