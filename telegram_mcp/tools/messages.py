@@ -1597,6 +1597,9 @@ async def transcribe_voice(
       self-hosted Parakeet/speaches server.
     - "whisper": a local faster-whisper model on this server. Audio never
       leaves the machine; slower on CPU.
+    - "gemini": Google Gemini (GEMINI_API_KEY). Sends the audio to Google. Takes
+      far longer recordings than groq's upload limit allows, so use it for long
+      meetings and lectures.
 
     Results are cached per engine, by (chat_id, message_id, engine) - a
     repeat call with the same engine returns the cached text without
@@ -1610,7 +1613,7 @@ async def transcribe_voice(
     Args:
         chat_id: The chat ID or username.
         message_id: The message ID containing the voice/video-note media.
-        engine: "groq", "telegram", "openai" or "whisper".
+        engine: "groq", "telegram", "openai", "whisper" or "gemini".
             Defaults to TELEGRAM_TRANSCRIBE_ENGINE (groq unless configured
             otherwise).
     """
