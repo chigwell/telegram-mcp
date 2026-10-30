@@ -23,12 +23,23 @@ rejections that occur before entering the tool body are outside this log's scope
 ## Location and permissions
 
 `TELEGRAM_AUDIT_LOG` overrides the output path (relative paths use the process's
-working directory). Otherwise, pass the resolved file-based session path to put
-`audit_log.jsonl` beside the session. For string sessions or in-memory sessions, omit
-that argument: the default is
-`${XDG_STATE_HOME:-~/.local/state}/telegram-mcp/audit_log.jsonl`. Never pass a session
-string as a filename. Multiple accounts may share a file; callers must identify
-the account in each record.
+working directory). For example, add this to your `.env` or server environment:
+
+```dotenv
+TELEGRAM_AUDIT_LOG=/absolute/path/to/private/audit_log.jsonl
+```
+
+Without an override, deletion tools automatically put `audit_log.jsonl` beside
+the active account's file-based session. For example, a session at
+`/srv/telegram/sessions/work.session` uses
+`/srv/telegram/sessions/audit_log.jsonl`. String sessions and in-memory sessions
+fall back to `${XDG_STATE_HOME:-~/.local/state}/telegram-mcp/audit_log.jsonl`.
+Multiple accounts may share a file; each record identifies the account by label.
+Restart the server after editing `.env` so the new setting is loaded.
+
+When using the storage helper directly, pass the resolved session filename as
+`session_path`; omit it for string sessions. Never pass a session string as a
+filename.
 
 On POSIX systems, the writer creates new parent directories with mode `0700`
 and enforces mode `0600` on the log file. Existing directory permissions are
