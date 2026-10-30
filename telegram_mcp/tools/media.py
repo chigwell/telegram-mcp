@@ -513,7 +513,8 @@ async def download_media(
         media_id: Optional document/photo id to download when the message is a
             rich (block-format) post with several embedded media. Get the ids
             from the message's "rich_media" records. Without it, the first
-            embedded media is downloaded.
+            embedded media is downloaded. Passing it for a message with
+            regular media is an error — pick the media by message instead.
     """
     try:
         cl = get_client(account)
@@ -534,6 +535,11 @@ async def download_media(
             if not pool:
                 return "No media found in the specified message."
             target = pool[0]["media"]
+        elif media_id is not None:
+            return (
+                f"media_id picks among a rich post's embedded media; message {message_id} "
+                "carries regular media — download it without media_id."
+            )
 
         limit = MAX_FILE_BYTES["download_media"]
         declared_size = _known_media_size(target)

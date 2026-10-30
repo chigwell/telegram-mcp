@@ -602,3 +602,14 @@ async def test_download_media_enforces_size_limit_on_rich_document(tmp_path, mon
 
     assert "too large" in result.lower()
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_download_media_rejects_media_id_for_regular_media(monkeypatch):
+    client = _MediaClient(SimpleNamespace(id=9, media=object()))
+    _patch_media_client(monkeypatch, client)
+
+    result = await _download_media(123, 9, media_id=7001)
+
+    assert "media_id picks among a rich post's embedded media" in result
+    assert client.downloaded == []
