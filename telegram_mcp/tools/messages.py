@@ -85,6 +85,11 @@ def get_media_label(msg) -> str:
             return "poll"
         if getattr(msg, "media", None) is not None:
             return "media"
+        # Block-format posts keep embedded photos/videos as ids resolved from
+        # rich_message.photos/documents instead of msg.media.
+        kinds = sorted({m["type"] for m in rich_message_media(msg)})
+        if kinds:
+            return kinds[0] if len(kinds) == 1 else "rich " + ", ".join(kinds)
         return ""
     except Exception:
         return ""
@@ -105,7 +110,11 @@ def _inline_button_texts(msg):
 
 
 def _link_urls(msg):
-    """Explicit URLs from entities (links hidden behind text), [] if none."""
+    """Explicit URLs: entity links plus rich-block targets, [] if none.
+
+    Block-format posts keep their links as TextUrl/TextEmail/TextPhone nodes and
+    PageBlockEmbed iframes inside rich_message, where entities never reach.
+    """
     out = []
     try:
         for e in getattr(msg, "entities", None) or []:
@@ -114,6 +123,9 @@ def _link_urls(msg):
                 out.append(u)
     except Exception:
         pass
+    for u in rich_message_link_urls(msg):
+        if u not in out:
+            out.append(u)
     return out
 
 
@@ -334,6 +346,11 @@ def message_to_dict(msg, chat_id: Optional[int] = None, forum: bool = False) -> 
     media_label = get_media_label(msg)
     if media_label:
         d["media"] = media_label
+    rich_media = rich_message_media(msg)
+    if rich_media:
+        # ids the media tools accept back as media_id (get_media_info resolves
+        # them against rich_message.photos/documents)
+        d["rich_media"] = [{"type": m["type"], "id": m["id"]} for m in rich_media]
 
     page = getattr(msg, "web_preview", None)
     if page is not None and getattr(page, "url", None):
