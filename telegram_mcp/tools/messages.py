@@ -4,7 +4,8 @@ import base64
 import math
 
 from telegram_mcp.runtime import *
-from telegram_mcp import transcription
+from telegram_mcp import transcription, audit_log
+from telegram_mcp import runtime as _runtime
 from telegram_mcp.keyboards import CALLBACK_KINDS, keyboard_of
 from pydantic import StrictInt
 
@@ -2134,6 +2135,36 @@ async def _ids_outside_chat(cl, entity, message_ids: List[int]) -> List[int]:
     return [message_id for message_id, msg in zip(message_ids, found) if msg is None]
 
 
+class _DeletionAudit:
+    """Record metadata without allowing audit failures to change deletion results."""
+
+    def __init__(self, tool, account, chat_id, **metadata):
+        label = canonical_account_label(account) if account is not None else None
+        if label is None and len(_runtime.clients) == 1:
+            label = next(iter(_runtime.clients))
+        self.record = {"account": label, "tool": tool, "chat_id": chat_id, **metadata}
+        self.client = None
+
+    def finish(self, response, outcome, reason=None, **metadata):
+        record = {
+            **self.record,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "outcome": outcome,
+            "reason": reason,
+            **metadata,
+        }
+        try:
+            session = getattr(self.client, "session", None)
+            filename = getattr(session, "filename", None)
+            session_path = filename if isinstance(filename, (str, Path)) else None
+            audit_log.append_audit_record(record, session_path=session_path)
+        except Exception:
+            # Keep diagnostics constant: paths or credentials may appear in errors.
+            logger.error("Deletion audit write failed")
+            return response + " Warning: the audit record could not be saved."
+        return response
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Delete Message", openWorldHint=True, destructiveHint=True, idempotentHint=True
@@ -2147,15 +2178,28 @@ async def delete_message(
     """
     Delete a message by ID. The message must belong to chat_id; otherwise nothing is deleted.
     """
+    audit = _DeletionAudit(
+        "delete_message", account, chat_id, message_ids=[message_id], revoke=True
+    )
     try:
         cl = get_client(account)
+        audit.client = cl
         entity = await resolve_entity(chat_id, cl)
         if await _ids_outside_chat(cl, entity, [message_id]):
-            return f"Message {message_id} is not in chat {chat_id}; nothing was deleted."
+            return audit.finish(
+                f"Message {message_id} is not in chat {chat_id}; nothing was deleted.",
+                "refused",
+                "foreign_message_ids",
+                foreign_message_ids=[message_id],
+            )
         await cl.delete_messages(entity, message_id)
-        return f"Message {message_id} deleted."
+        return audit.finish(f"Message {message_id} deleted.", "success")
     except Exception as e:
-        return log_and_format_error("delete_message", e, chat_id=chat_id, message_id=message_id)
+        reason = type(e).__name__
+        response = log_and_format_error(
+            "delete_message", e, chat_id=chat_id, message_id=message_id
+        )
+        return audit.finish(response, "failure", reason)
 
 
 @mcp.tool(
@@ -2179,8 +2223,10 @@ async def delete_chat_history(
         max_id: Delete messages up to this ID; 0 deletes all messages (default).
         revoke: If True, delete for both parties (default False = only for you).
     """
+    audit = _DeletionAudit("delete_chat_history", account, chat_id, max_id=max_id, revoke=revoke)
     try:
         cl = get_client(account)
+        audit.client = cl
         await ensure_connected(cl)
         entity = await resolve_entity(chat_id, cl)
         result = await cl(
@@ -2189,20 +2235,30 @@ async def delete_chat_history(
         pts_count = getattr(result, "pts_count", 0)
         offset = getattr(result, "offset", 0)
         scope = "for both parties" if revoke else "for you"
-        return (
+        return audit.finish(
             f"Chat {chat_id} history cleared {scope}: "
-            f"{pts_count} messages deleted (offset={offset})."
+            f"{pts_count} messages deleted (offset={offset}).",
+            "success",
+            telegram_pts_count=pts_count,
+            offset=offset,
         )
-    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
-        return "Cannot delete chat history: admin privileges are required."
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
+        reason = type(e).__name__
+        return audit.finish(
+            "Cannot delete chat history: admin privileges are required.",
+            "failure",
+            reason,
+        )
     except Exception as e:
-        return log_and_format_error(
+        reason = type(e).__name__
+        response = log_and_format_error(
             "delete_chat_history",
             e,
             chat_id=chat_id,
             max_id=max_id,
             revoke=revoke,
         )
+        return audit.finish(response, "failure", reason)
 
 
 @mcp.tool(
@@ -2230,15 +2286,22 @@ async def delete_messages_bulk(
         message_ids: List of message IDs to delete.
         revoke: If True, delete for both parties (default True). Ignored for channels.
     """
+    audit = _DeletionAudit(
+        "delete_messages_bulk", account, chat_id, message_ids=list(message_ids), revoke=revoke
+    )
     try:
         cl = get_client(account)
+        audit.client = cl
         await ensure_connected(cl)
         entity = await resolve_entity(chat_id, cl)
         outside = await _ids_outside_chat(cl, entity, message_ids)
         if outside:
-            return (
+            return audit.finish(
                 f"Message(s) {', '.join(map(str, outside))} are not in chat {chat_id}; "
-                "nothing was deleted."
+                "nothing was deleted.",
+                "refused",
+                "foreign_message_ids",
+                foreign_message_ids=outside,
             )
         if isinstance(entity, Channel):
             result = await cl(
@@ -2249,19 +2312,33 @@ async def delete_messages_bulk(
                 functions.messages.DeleteMessagesRequest(id=message_ids, revoke=revoke)
             )
         pts_count = getattr(result, "pts_count", 0)
-        return f"Deleted {pts_count} of {len(message_ids)} messages from chat {chat_id}."
-    except telethon.errors.rpcerrorlist.MessageIdInvalidError:
-        return "Cannot delete messages: one or more message IDs are invalid."
-    except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
-        return "Cannot delete messages: admin privileges are required."
+        return audit.finish(
+            f"Deleted {pts_count} of {len(message_ids)} messages from chat {chat_id}.",
+            "success",
+            telegram_pts_count=pts_count,
+        )
+    except telethon.errors.rpcerrorlist.MessageIdInvalidError as e:
+        reason = type(e).__name__
+        return audit.finish(
+            "Cannot delete messages: one or more message IDs are invalid.",
+            "failure",
+            reason,
+        )
+    except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
+        reason = type(e).__name__
+        return audit.finish(
+            "Cannot delete messages: admin privileges are required.", "failure", reason
+        )
     except Exception as e:
-        return log_and_format_error(
+        reason = type(e).__name__
+        response = log_and_format_error(
             "delete_messages_bulk",
             e,
             chat_id=chat_id,
             message_ids=message_ids,
             revoke=revoke,
         )
+        return audit.finish(response, "failure", reason)
 
 
 @mcp.tool(

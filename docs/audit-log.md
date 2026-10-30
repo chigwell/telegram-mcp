@@ -1,10 +1,24 @@
 # Audit log storage
 
 `telegram_mcp.audit_log.append_audit_record(record, session_path=...)` appends a
-metadata dictionary as one UTF-8 JSON object per line. This is a storage helper;
-deletion tools are not yet connected to it, so installing this change alone does
-not enable deletion auditing. Callers must exclude message content, credentials,
-and raw exception text from records.
+metadata dictionary as one UTF-8 JSON object per line. The server automatically
+records completed attempts inside `delete_message`, `delete_messages_bulk`, and
+`delete_chat_history`, including cross-chat refusals and Telegram failures.
+
+Records contain a UTC timestamp, account label, tool name, chat identifier,
+message IDs (or history `max_id`), requested revoke flag, outcome (`success`,
+`refused`, or `failure`), and a structured reason. Cross-chat refusals include
+`foreign_message_ids`; errors include only the exception class name. Message
+text, session credentials, and raw exception text are excluded. A successful
+record means the API call completed; `telegram_pts_count`, when available, is
+Telegram's update counter and is not a verified count of deleted messages.
+Single-message deletion uses Telethon's default `revoke=True`; channels ignore
+revoke flags. History results also include Telegram's continuation `offset`.
+
+Failures to write the audit record are reported through the existing error logger
+and a warning appended to the tool response. The deletion result is preserved,
+and deletion is never retried for an audit failure. Validation and account-routing
+rejections that occur before entering the tool body are outside this log's scope.
 
 ## Location and permissions
 
