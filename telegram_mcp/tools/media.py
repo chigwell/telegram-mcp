@@ -33,6 +33,9 @@ def _known_media_size(message) -> Optional[int]:
     if isinstance(size, int) and size >= 0:
         return size
     size = getattr(getattr(getattr(message, "media", None), "document", None), "size", None)
+    if isinstance(size, int) and size >= 0:
+        return size
+    size = getattr(message, "size", None)  # a bare Document resolved from rich_message
     return size if isinstance(size, int) and size >= 0 else None
 
 
@@ -495,6 +498,7 @@ async def download_media(
     chat_id: Union[int, str],
     message_id: int,
     file_path: Optional[str] = None,
+    media_id: Optional[int] = None,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
 ) -> str:
@@ -506,16 +510,39 @@ async def download_media(
         file_path: Optional absolute or relative path under allowed roots.
             If omitted, saves into `<first_root>/downloads/` (or directly into
             `<first_root>/` if the root is already a downloads directory).
+        media_id: Optional document/photo id to download when the message is a
+            rich (block-format) post with several embedded media. Get the ids
+            from the message's "rich_media" records. Without it, the first
+            embedded media is downloaded. Passing it for a message with
+            regular media is an error — pick the media by message instead.
     """
     try:
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
         msg = await cl.get_messages(entity, ids=message_id)
-        if not msg or not msg.media:
+        if not msg:
             return "No media found in the specified message."
 
+        # Block-format posts keep their embedded photos/videos as ids resolved
+        # from rich_message.photos/documents — nothing sits in msg.media.
+        target = msg
+        if not msg.media:
+            pool = [m for m in rich_message_media(msg) if m["media"] is not None]
+            if media_id is not None:
+                pool = [m for m in pool if m["id"] == media_id]
+                if not pool:
+                    return f"No rich media with id {media_id} in message {message_id}."
+            if not pool:
+                return "No media found in the specified message."
+            target = pool[0]["media"]
+        elif media_id is not None:
+            return (
+                f"media_id picks among a rich post's embedded media; message {message_id} "
+                "carries regular media — download it without media_id."
+            )
+
         limit = MAX_FILE_BYTES["download_media"]
-        declared_size = _known_media_size(msg)
+        declared_size = _known_media_size(target)
         if declared_size is not None and declared_size > limit:
             return f"Media is too large for download_media (limit: {limit} bytes)."
 
@@ -542,7 +569,7 @@ async def download_media(
 
             try:
                 downloaded = await cl.download_media(
-                    msg,
+                    target,
                     file=str(temp_requested_path),
                     progress_callback=enforce_download_limit,
                 )
@@ -580,6 +607,7 @@ async def download_media(
             chat_id=chat_id,
             message_id=message_id,
             file_path=file_path,
+            media_id=media_id,
         )
 
 
@@ -690,10 +718,16 @@ async def get_media_info(
         entity = await resolve_entity(chat_id, cl)
         msg = await cl.get_messages(entity, ids=message_id)
 
-        if not msg or not msg.media:
+        if not msg:
             return "No media found in the specified message."
-
-        return str(msg.media)
+        if msg.media:
+            return str(msg.media)
+        # Block-format posts keep their embedded photos/videos in
+        # rich_message.photos/documents — report the resolved objects.
+        rich = [m["media"] for m in rich_message_media(msg) if m["media"] is not None]
+        if not rich:
+            return "No media found in the specified message."
+        return "\n".join(str(m) for m in rich)
     except Exception as e:
         return log_and_format_error("get_media_info", e, chat_id=chat_id, message_id=message_id)
 

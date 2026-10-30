@@ -300,3 +300,316 @@ def test_plain_message_text_still_wins_over_rich_message():
 
     assert messages.message_to_dict(msg)["text"] == "обычный текст"
     assert "обычный текст" in messages.format_message_line(msg)
+
+
+# --- rich posts keep their links and embedded media reachable ---------------
+# Regression for chigwell/telegram-mcp#370: a block-format post keeps text links
+# as TextUrl/TextEmail/TextPhone nodes and PageBlockEmbed iframes inside
+# rich_message, and its photos/videos as ids pointing into rich_message.photos /
+# rich_message.documents. Reading only msg.entities and msg.media loses them all.
+
+
+def _document(document_id, size=None):
+    return types.Document(
+        id=document_id,
+        access_hash=1,
+        file_reference=b"\x01",
+        date=datetime(2026, 9, 3, tzinfo=timezone.utc),
+        mime_type="video/mp4",
+        size=size if size is not None else 1048576,
+        dc_id=2,
+        attributes=[types.DocumentAttributeVideo(duration=95, w=1280, h=720)],
+    )
+
+
+def _photo(photo_id):
+    return types.Photo(
+        id=photo_id,
+        access_hash=1,
+        file_reference=b"\x01",
+        date=datetime(2026, 9, 3, tzinfo=timezone.utc),
+        dc_id=2,
+        sizes=[types.PhotoSize(type="x", w=1280, h=720, size=200000)],
+    )
+
+
+def _caption(text=""):
+    return types.PageCaption(
+        text=_plain(text) if text else types.TextEmpty(), credit=types.TextEmpty()
+    )
+
+
+def _post_like_issue_370():
+    """A digest post: a paragraph with a text link, then an embedded video."""
+    return _rich(
+        types.PageBlockParagraph(
+            text=types.TextConcat(
+                texts=[
+                    _plain("Read "),
+                    types.TextUrl(
+                        text=_plain("the report"), url="https://example.com/report", webpage_id=0
+                    ),
+                ]
+            )
+        ),
+        types.PageBlockVideo(video_id=7001, caption=_caption("demo video")),
+    )
+
+
+def test_rich_link_urls_collect_texturl_email_phone_and_embed_targets():
+    rich = _rich(
+        types.PageBlockParagraph(
+            text=types.TextConcat(
+                texts=[
+                    types.TextUrl(text=_plain("site"), url="https://a.example/x", webpage_id=0),
+                    types.TextUrl(text=_plain("again"), url="https://a.example/x", webpage_id=0),
+                    types.TextEmail(text=_plain("mail"), email="hi@a.example"),
+                    types.TextPhone(text=_plain("call"), phone="+15550001111"),
+                ]
+            )
+        ),
+        # an iframe embed carries its src in .url, and the walk reaches blocks
+        # nested inside collapsible details too
+        types.PageBlockEmbed(caption=_caption(), url="https://youtube.com/watch?v=1"),
+        types.PageBlockDetails(
+            blocks=[
+                types.PageBlockParagraph(
+                    text=types.TextUrl(
+                        text=_plain("hidden"), url="https://a.example/hidden", webpage_id=0
+                    )
+                )
+            ],
+            title=_plain("more"),
+            open=False,
+        ),
+    )
+
+    assert runtime.rich_message_link_urls(_msg(rich_message=rich)) == [
+        "https://a.example/x",
+        "hi@a.example",
+        "+15550001111",
+        "https://youtube.com/watch?v=1",
+        "https://a.example/hidden",
+    ]
+
+
+def test_rich_link_urls_empty_without_targets():
+    assert runtime.rich_message_link_urls(_msg()) == []
+    assert runtime.rich_message_link_urls(_msg(rich_message=_rich(_cell("no links")))) == []
+
+
+def test_link_urls_merges_entity_and_rich_urls_without_duplicates():
+    msg = _msg(
+        rich_message=_post_like_issue_370(),
+        entities=[
+            types.MessageEntityTextUrl(offset=0, length=4, url="https://example.com/report"),
+            types.MessageEntityTextUrl(offset=5, length=4, url="https://example.com/entity"),
+        ],
+    )
+
+    # the entity URL comes first, the rich TextUrl target is the same and is
+    # reported once
+    assert messages._link_urls(msg) == ["https://example.com/report", "https://example.com/entity"]
+
+
+def test_rich_media_resolves_block_ids_against_photos_and_documents():
+    doc = _document(7001)
+    photo = _photo(5197)
+    rich = types.RichMessage(
+        blocks=[
+            types.PageBlockVideo(video_id=7001, caption=_caption("demo")),
+            types.PageBlockPhoto(photo_id=5197, caption=_caption(), spoiler=False),
+            types.PageBlockVideo(video_id=9999, caption=_caption()),  # id not in the payload
+        ],
+        photos=[photo],
+        documents=[doc],
+    )
+
+    entries = runtime.rich_message_media(_msg(rich_message=rich))
+
+    assert [(e["type"], e["id"], e["media"]) for e in entries] == [
+        ("video", 7001, doc),
+        ("photo", 5197, photo),
+        ("video", 9999, None),
+    ]
+    assert runtime.rich_message_media(_msg()) == []
+
+
+def test_message_to_dict_reports_rich_links_and_media():
+    d = messages.message_to_dict(_msg(rich_message=_post_like_issue_370()))
+
+    assert d["link_urls"] == ["https://example.com/report"]
+    assert d["rich_media"] == [{"type": "video", "id": 7001}]
+    assert d["media"] == "video"  # the embedded video reads as media in listings
+
+
+def test_format_message_line_flags_rich_media_when_no_attachment():
+    line = messages.format_message_line(_msg(rich_message=_post_like_issue_370()))
+    assert "📎 video" in line
+
+    # the agents-lab post embeds an uncaptioned photo — now it reads as media
+    with_photo = messages.format_message_line(_msg(rich_message=_post_like_agents_lab_224()))
+    assert "📎 photo" in with_photo
+
+    text_only = messages.format_message_line(
+        _msg(rich_message=_rich(types.PageBlockParagraph(text=_plain("просто текст"))))
+    )
+    assert "📎" not in text_only
+
+
+# --- media tools reach the embedded media -----------------------------------
+
+import inspect  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from telegram_mcp.tools import media  # noqa: E402
+
+_get_media_info = inspect.unwrap(media.get_media_info)
+_download_media = inspect.unwrap(media.download_media)
+
+
+def _video_post(document, video_id=7001):
+    return _msg(
+        media=None,
+        rich_message=types.RichMessage(
+            blocks=[types.PageBlockVideo(video_id=video_id, caption=_caption("demo video"))],
+            photos=[],
+            documents=[document],
+        ),
+    )
+
+
+class _MediaClient:
+    def __init__(self, message):
+        self.message = message
+        self.downloaded = []
+
+    async def get_messages(self, entity, ids):
+        return self.message
+
+    async def download_media(self, media_obj, file, **kwargs):
+        self.downloaded.append(media_obj)
+        Path(f"{file}.mp4").write_bytes(b"data")
+        return f"{file}.mp4"
+
+
+def _patch_media_client(monkeypatch, client):
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+
+    async def _resolve_entity(chat_id, cl):
+        return "entity"
+
+    monkeypatch.setattr(media, "resolve_entity", _resolve_entity)
+
+
+@pytest.mark.asyncio
+async def test_get_media_info_reports_embedded_rich_video(monkeypatch):
+    doc = _document(7001)
+    monkeypatch.setattr(media, "get_client", lambda account=None: _MediaClient(_video_post(doc)))
+
+    async def _resolve_entity(chat_id, cl):
+        return "entity"
+
+    monkeypatch.setattr(media, "resolve_entity", _resolve_entity)
+
+    result = await _get_media_info(123, 225)
+
+    assert "7001" in result
+    assert "video/mp4" in result
+
+
+@pytest.mark.asyncio
+async def test_get_media_info_still_reports_no_media_without_rich_media(monkeypatch):
+    monkeypatch.setattr(
+        media,
+        "get_client",
+        lambda account=None: _MediaClient(
+            _msg(media=None, rich_message=_post_like_agents_lab_224())
+        ),
+    )
+
+    async def _resolve_entity(chat_id, cl):
+        return "entity"
+
+    monkeypatch.setattr(media, "resolve_entity", _resolve_entity)
+
+    result = await _get_media_info(123, 224)
+
+    assert "No media found" in result
+
+
+@pytest.mark.asyncio
+async def test_download_media_fetches_embedded_rich_video(tmp_path, monkeypatch):
+    doc = _document(7001)
+    client = _MediaClient(_video_post(doc))
+    _patch_media_client(monkeypatch, client)
+
+    async def _resolve_path(**kwargs):
+        return tmp_path / kwargs["default_filename"], None
+
+    monkeypatch.setattr(media, "_resolve_writable_file_path", _resolve_path)
+
+    result = await _download_media(123, 225)
+
+    assert client.downloaded == [doc]  # the rich document, not the bare message
+    assert result.startswith("Media downloaded to")
+
+
+@pytest.mark.asyncio
+async def test_download_media_media_id_picks_among_rich_blocks(tmp_path, monkeypatch):
+    doc = _document(7001)
+    other = _document(7002)
+    msg = _msg(
+        media=None,
+        rich_message=types.RichMessage(
+            blocks=[
+                types.PageBlockVideo(video_id=7001, caption=_caption("first")),
+                types.PageBlockVideo(video_id=7002, caption=_caption("second")),
+            ],
+            photos=[],
+            documents=[doc, other],
+        ),
+    )
+    client = _MediaClient(msg)
+    _patch_media_client(monkeypatch, client)
+
+    async def _resolve_path(**kwargs):
+        return tmp_path / kwargs["default_filename"], None
+
+    monkeypatch.setattr(media, "_resolve_writable_file_path", _resolve_path)
+
+    await _download_media(123, 225, media_id=7002)
+    assert [d.id for d in client.downloaded] == [7002]
+
+    result = await _download_media(123, 225, media_id=9999)
+    assert "No rich media with id 9999" in result
+    assert [d.id for d in client.downloaded] == [7002]
+
+
+@pytest.mark.asyncio
+async def test_download_media_enforces_size_limit_on_rich_document(tmp_path, monkeypatch):
+    doc = _document(7001, size=10)
+    client = _MediaClient(_video_post(doc))
+    _patch_media_client(monkeypatch, client)
+    monkeypatch.setitem(media.MAX_FILE_BYTES, "download_media", 4)
+
+    async def _fail_download(media_obj, file, **kwargs):
+        raise AssertionError("download must not start")
+
+    client.download_media = _fail_download
+
+    result = await _download_media(123, 225)
+
+    assert "too large" in result.lower()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_download_media_rejects_media_id_for_regular_media(monkeypatch):
+    client = _MediaClient(SimpleNamespace(id=9, media=object()))
+    _patch_media_client(monkeypatch, client)
+
+    result = await _download_media(123, 9, media_id=7001)
+
+    assert "media_id picks among a rich post's embedded media" in result
+    assert client.downloaded == []

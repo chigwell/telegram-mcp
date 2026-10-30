@@ -1681,6 +1681,90 @@ def rich_message_text(msg) -> str:
     return "\n\n".join(p for p in paragraphs if p)
 
 
+def _rich_text_target(node):
+    """The target a rich-text node hides behind its words, None when plain."""
+    if isinstance(node, types.TextUrl):
+        return node.url
+    if isinstance(node, types.TextEmail):
+        return node.email
+    if isinstance(node, types.TextPhone):
+        return node.phone
+    if isinstance(node, types.PageBlockEmbed):
+        return node.url
+    return None
+
+
+def rich_message_link_urls(msg) -> List[str]:
+    """Targets behind rich-block anchors and embeds, deduplicated, [] if none.
+
+    Entities never carry these: a block-format post keeps its links as
+    TextUrl / TextEmail / TextPhone nodes (flattening one reads only its words,
+    the target lives in a field) and PageBlockEmbed holds its iframe src in
+    .url. A target behind two anchors is reported once, in first-seen order.
+    """
+    blocks = getattr(getattr(msg, "rich_message", None), "blocks", None)
+    if not blocks:
+        return []
+    out: List[str] = []
+
+    def _walk(node):
+        if isinstance(node, (list, tuple)):
+            for item in node:
+                _walk(item)
+            return
+        target = _rich_text_target(node)
+        if target and target not in out:
+            out.append(target)
+        for child in getattr(node, "__dict__", {}).values():
+            _walk(child)
+
+    _walk(blocks)
+    return out
+
+
+# kind -> (block field naming the id, RichMessage pool holding the object):
+# photo_id points into .photos, video/audio ids into .documents.
+_RICH_MEDIA_KINDS = (
+    ("photo", "photo_id", "photos"),
+    ("video", "video_id", "documents"),
+    ("audio", "audio_id", "documents"),
+)
+
+
+def rich_message_media(msg) -> List[Dict[str, Any]]:
+    """Media blocks of a rich message resolved against .photos/.documents.
+
+    [{"type": "video", "id": 7001, "media": <Document>}, ...] in block order;
+    "media" is None when the id has no object in the message (truncated payload).
+    Plain messages carry their media in msg.media instead — nothing here.
+    """
+    rich = getattr(msg, "rich_message", None)
+    blocks = getattr(rich, "blocks", None)
+    if not blocks:
+        return []
+    pools = {
+        name: {obj.id: obj for obj in getattr(rich, name, None) or []}
+        for name in ("photos", "documents")
+    }
+    out: List[Dict[str, Any]] = []
+
+    def _walk(node):
+        if isinstance(node, (list, tuple)):
+            for item in node:
+                _walk(item)
+            return
+        for kind, field, pool in _RICH_MEDIA_KINDS:
+            media_id = getattr(node, field, None)
+            if media_id is not None:
+                out.append({"type": kind, "id": media_id, "media": pools[pool].get(media_id)})
+                break
+        for child in getattr(node, "__dict__", {}).values():
+            _walk(child)
+
+    _walk(blocks)
+    return out
+
+
 def premium_required_result(action: str) -> str:
     """Structured refusal so the agent can degrade gracefully instead of sending garbage."""
     return json.dumps(
