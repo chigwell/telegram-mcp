@@ -154,6 +154,75 @@ class CreateForumTopicRequest(TLRequest):
         )
 
 
+async def _chat_notification_settings(cl, entity, settings=None, defaults=None):
+    """Read effective server mute state; never fetch messages or alter notifications."""
+    result = {"muted": None, "mute_until": None, "peer_mute_until": None, "source": "unknown"}
+    try:
+        if settings is None:
+            peer = await cl.get_input_entity(entity)
+            settings = await cl(
+                functions.account.GetNotifySettingsRequest(types.InputNotifyPeer(peer))
+            )
+        until = settings.mute_until
+        result["peer_mute_until"] = (
+            int(until.timestamp()) if isinstance(until, datetime) else until
+        )
+        result["source"] = "chat"
+        if until is None:
+            if isinstance(entity, User):
+                scope, peer = "users", types.InputNotifyUsers()
+            elif isinstance(entity, Channel) and entity.broadcast:
+                scope, peer = "broadcasts", types.InputNotifyBroadcasts()
+            else:
+                scope, peer = "groups", types.InputNotifyChats()
+            result["source"] = f"default:{scope}"
+            if defaults is None:
+                defaults = {}
+            if scope not in defaults:
+                try:
+                    defaults[scope] = await cl(functions.account.GetNotifySettingsRequest(peer))
+                except Exception as error:
+                    defaults[scope] = error
+            if isinstance(defaults[scope], Exception):
+                raise defaults[scope]
+            until = defaults[scope].mute_until
+        timestamp = int(until.timestamp()) if isinstance(until, datetime) else until
+        result["mute_until"] = timestamp
+        if timestamp is not None:
+            result["muted"] = timestamp > time.time()
+        return result
+    except Exception as error:
+        result["error"] = type(error).__name__
+        return result
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Chat Notification Settings", openWorldHint=True, readOnlyHint=True
+    )
+)
+@with_account(readonly=True)
+@validate_id("chat_id")
+async def get_chat_notification_settings(
+    chat_id: Union[int, str], account: Optional[str] = None
+) -> str:
+    """Read chat-wide server mute state without message history.
+
+    Returns muted (true/false/null for unknown), effective and peer mute_until
+    (Unix seconds), and source (chat or default:users/groups/broadcasts).
+    Device-local and individual forum-topic settings are not covered.
+    """
+    try:
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+            raise ChatAccessDeniedError(check_chat_access(chat_id, entity))
+        settings = await _chat_notification_settings(cl, entity)
+        return format_tool_result([{"chat_id": get_marked_id(entity), **settings}])
+    except Exception as error:
+        return log_and_format_error("get_chat_notification_settings", error, chat_id=chat_id)
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Get Chats", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
 async def get_chats(account: Optional[str] = None, page: int = 1, page_size: int = 20) -> str:
@@ -184,6 +253,7 @@ async def get_chats(account: Optional[str] = None, page: int = 1, page_size: int
             return "Page out of range."
         chats = dialogs[start:end]
         records = []
+        defaults = {}
         for dialog in chats:
             entity = dialog.entity
             title = getattr(entity, "title", None)
@@ -195,6 +265,12 @@ async def get_chats(account: Optional[str] = None, page: int = 1, page_size: int
                 {
                     "chat_id": get_marked_id(entity),
                     "title": sanitize_name(title),
+                    **await _chat_notification_settings(
+                        cl,
+                        entity,
+                        getattr(getattr(dialog, "dialog", None), "notify_settings", None),
+                        defaults,
+                    ),
                 }
             )
         return format_tool_result(records)
@@ -704,6 +780,7 @@ async def list_chats(
             )
 
         records = []
+        defaults = {}
         for dialog in dialogs:
             entity = dialog.entity
 
@@ -743,18 +820,11 @@ async def list_chats(
                 bool(getattr(inner_dialog, "unread_mark", False)) if inner_dialog else False
             )
 
-            # Extract mute status from notify_settings
-            notify_settings = getattr(inner_dialog, "notify_settings", None)
-            mute_until = getattr(notify_settings, "mute_until", None)
-            if mute_until is None:
-                is_muted = False
-            elif isinstance(mute_until, datetime):
-                is_muted = mute_until.timestamp() > time.time()
-            else:
-                is_muted = mute_until > time.time()
-
-            # Filter by mute status if requested
-            if unmuted_only and is_muted:
+            notifications = await _chat_notification_settings(
+                cl, entity, getattr(inner_dialog, "notify_settings", None), defaults
+            )
+            # Unknown notification state is not evidence that the chat is unmuted.
+            if unmuted_only and notifications["muted"] is not False:
                 continue
 
             # Filter by unread status if requested
@@ -764,7 +834,7 @@ async def list_chats(
             record["unread"] = unread_count
             if unread_mark:
                 record["unread_mark"] = True
-            record["muted"] = is_muted
+            record.update(notifications)
             record["archived"] = bool(getattr(dialog, "archived", False))
 
             # Add unread mentions count if available
@@ -840,7 +910,7 @@ async def get_chat(chat_id: Union[int, str], account: Optional[str] = None) -> s
                 chat_id=chat_id,
             )
 
-        record = {"id": get_marked_id(entity)}
+        record = {"id": get_marked_id(entity), **await _chat_notification_settings(cl, entity)}
 
         is_user = isinstance(entity, User)
 
