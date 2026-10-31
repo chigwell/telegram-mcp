@@ -897,6 +897,11 @@ uv run flake8 .
 
 ## Security Notes
 
+- Deletion attempts made through `delete_message`, `delete_messages_bulk`, and
+  `delete_chat_history` are recorded in a local, metadata-only audit log. See
+  [Audit log configuration and rotation](docs/audit-log.md) for default locations,
+  `TELEGRAM_AUDIT_LOG`, permissions, and retention. Deletions made from other
+  Telegram sessions are not recorded.
 - Never commit `.env`, session strings, or `.session` files.
 - A Telegram session string grants access to the account it belongs to.
 - The `telegram-mcp` package name on PyPI is not controlled by this project.
