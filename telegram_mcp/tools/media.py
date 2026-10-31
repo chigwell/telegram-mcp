@@ -217,6 +217,7 @@ class _DownloadLimitExceeded(Exception):
 @mcp.tool(annotations=ToolAnnotations(title="Send File", openWorldHint=True, destructiveHint=True))
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def send_file(
     chat_id: Union[int, str],
     file_path: Union[str, List[str]],
@@ -430,6 +431,7 @@ def _album_media_item(path: str, file_handle, video_attributes):
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def send_album(
     chat_id: Union[int, str],
     file_paths: List[str],
@@ -616,6 +618,7 @@ async def download_media(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def send_voice(
     chat_id: Union[int, str],
     file_path: str,
@@ -666,6 +669,7 @@ async def send_voice(
     annotations=ToolAnnotations(title="Upload File", openWorldHint=True, destructiveHint=True)
 )
 @with_account(readonly=False)
+@flood_category("send")
 async def upload_file(
     file_path: str, ctx: Optional[Context] = None, account: Optional[str] = None
 ) -> str:
@@ -759,6 +763,7 @@ async def get_sticker_sets(account: Optional[str] = None) -> str:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def send_sticker(
     chat_id: Union[int, str],
     file_path: str,
@@ -851,6 +856,7 @@ async def get_gif_search(query: str, limit: int = 10, account: Optional[str] = N
 @mcp.tool(annotations=ToolAnnotations(title="Send Gif", openWorldHint=True, destructiveHint=True))
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def send_gif(
     chat_id: Union[int, str],
     gif_id: int,

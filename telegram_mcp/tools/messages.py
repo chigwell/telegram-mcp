@@ -570,6 +570,7 @@ def format_message_line(msg, chat_id: Optional[int] = None, forum: bool = False)
 @mcp.tool(annotations=ToolAnnotations(title="Get Messages", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("history")
 async def get_messages(
     chat_id: Union[int, str], page: int = 1, page_size: int = 20, account: Optional[str] = None
 ) -> str:
@@ -920,6 +921,7 @@ def _plain_entities(text: str, format_date, custom_emojis):
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def send_message(
     chat_id: Union[int, str],
     message: str,
@@ -1044,6 +1046,7 @@ def _sent_result(sent) -> str:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def send_scheduled_message(
     chat_id: Union[int, str],
     message: str,
@@ -1112,6 +1115,7 @@ async def send_scheduled_message(
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("history")
 async def get_scheduled_messages(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     List all scheduled (pending) messages in a chat.
@@ -1159,6 +1163,7 @@ async def get_scheduled_messages(chat_id: Union[int, str], account: Optional[str
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("history")
 async def delete_scheduled_message(
     chat_id: Union[int, str], message_ids: List[int], account: Optional[str] = None
 ) -> str:
@@ -1234,6 +1239,7 @@ def _int_or_error(value, name):
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("history")
 async def list_inline_buttons(
     chat_id: Union[int, str],
     message_id: Optional[Union[int, str]] = None,
@@ -1333,6 +1339,7 @@ def _unpressable_reason(button):
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def press_inline_button(
     chat_id: Union[int, str],
     message_id: Optional[Union[int, str]] = None,
@@ -1435,6 +1442,7 @@ async def press_inline_button(
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("history")
 async def list_messages(
     chat_id: Union[int, str],
     limit: int = 20,
@@ -1713,6 +1721,7 @@ async def transcribe_voice(
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("history")
 async def get_message_context(
     chat_id: Union[int, str],
     message_id: int,
@@ -1839,6 +1848,7 @@ async def get_send_as(chat_id: Union[int, str], account: Optional[str] = None) -
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "send_as")
+@flood_category("admin_action")
 async def set_default_send_as(
     chat_id: Union[int, str], send_as: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -1876,6 +1886,7 @@ async def set_default_send_as(
 )
 @with_account(readonly=False)
 @validate_id("from_chat_id", "to_chat_id")
+@flood_category("send")
 async def forward_message(
     from_chat_id: Union[int, str],
     message_id: Union[int, List[int]],
@@ -2013,6 +2024,7 @@ async def forward_message(
 )
 @with_account(readonly=False)
 @validate_id("from_chat_id", "to_chat_id")
+@flood_category("send")
 async def forward_messages(
     from_chat_id: Union[int, str],
     message_ids: List[int],
@@ -2065,6 +2077,7 @@ async def forward_messages(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def edit_message(
     chat_id: Union[int, str],
     message_id: int,
@@ -2158,6 +2171,7 @@ async def _ids_outside_chat(cl, entity, message_ids: List[int]) -> List[int]:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def delete_message(
     chat_id: Union[int, str], message_id: int, account: Optional[str] = None
 ) -> str:
@@ -2185,6 +2199,7 @@ async def delete_message(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("channel_lifecycle")
 async def delete_chat_history(
     chat_id: Union[int, str], max_id: int = 0, revoke: bool = False, account: Optional[str] = None
 ) -> str:
@@ -2232,6 +2247,7 @@ async def delete_chat_history(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def delete_messages_bulk(
     chat_id: Union[int, str],
     message_ids: List[int],
@@ -2288,6 +2304,7 @@ async def delete_messages_bulk(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def pin_message(
     chat_id: Union[int, str],
     message_id: int,
@@ -2318,6 +2335,7 @@ async def pin_message(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def unpin_message(
     chat_id: Union[int, str], message_id: int, account: Optional[str] = None
 ) -> str:
@@ -2343,6 +2361,7 @@ async def unpin_message(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def unpin_all_messages(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Unpin all pinned messages in a chat.
@@ -2378,6 +2397,7 @@ _active_typing = set()
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def send_typing(
     chat_id: Union[int, str],
     seconds: float = 5.0,
@@ -2465,6 +2485,7 @@ async def send_typing(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def mark_as_read(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Mark all messages as read in a chat.
@@ -2483,6 +2504,7 @@ async def mark_as_read(chat_id: Union[int, str], account: Optional[str] = None) 
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def reply_to_message(
     chat_id: Union[int, str],
     message_id: int,
@@ -2554,6 +2576,7 @@ async def reply_to_message(
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("history")
 async def search_messages(
     chat_id: Union[int, str], query: str, limit: int = 20, account: Optional[str] = None
 ) -> str:
@@ -2803,6 +2826,7 @@ async def search_global(
 @mcp.tool(annotations=ToolAnnotations(title="Get History", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("history")
 async def get_history(
     chat_id: Union[int, str],
     limit: int = 100,
@@ -2862,6 +2886,7 @@ async def get_history(
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("history")
 async def get_pinned_messages(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Get all pinned messages in a chat.
@@ -2926,6 +2951,7 @@ async def get_pinned_messages(chat_id: Union[int, str], account: Optional[str] =
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def create_poll(
     chat_id: Union[int, str],
     question: str,
@@ -3070,6 +3096,7 @@ async def create_poll(
 @mcp.tool(annotations=ToolAnnotations(title="Vote Poll", openWorldHint=True, destructiveHint=True))
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def vote_poll(
     chat_id: Union[int, str],
     message_id: StrictInt,
@@ -3131,6 +3158,7 @@ async def vote_poll(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def send_reaction(
     chat_id: Union[int, str],
     message_id: int,
@@ -3182,6 +3210,7 @@ async def send_reaction(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def remove_reaction(
     chat_id: Union[int, str],
     message_id: int,
@@ -3216,6 +3245,7 @@ async def remove_reaction(
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("history")
 async def get_message_reactions(
     chat_id: Union[int, str],
     message_id: int,
@@ -3295,6 +3325,7 @@ async def get_message_reactions(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def save_draft(
     chat_id: Union[int, str],
     message: str,
@@ -3419,6 +3450,7 @@ async def get_drafts(account: Optional[str] = None) -> str:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("send")
 async def clear_draft(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Clear/delete a draft from a specific chat.
@@ -3452,6 +3484,7 @@ async def clear_draft(chat_id: Union[int, str], account: Optional[str] = None) -
     )
 )
 @with_account(readonly=True)
+@flood_category("history")
 async def export_unread_messages(
     chat_ids: List[Union[int, str]],
     output_path: str,
