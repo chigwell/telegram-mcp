@@ -8,6 +8,7 @@ from typing import Any
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from telegram_mcp.media_links import MEDIA_ROUTE_PREFIX, UPLOAD_ROUTE_PREFIX
 from telegram_mcp.transport.protocol import (
     DEFAULT_PROTOCOL_VERSION,
     LATEST_PROTOCOL_VERSION,
@@ -34,7 +35,10 @@ class ProtocolNegotiationMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        # The signed file routes are plain HTTP, not MCP: no negotiation, no discovery probe.
+        if scope["type"] != "http" or scope.get("path", "").startswith(
+            (MEDIA_ROUTE_PREFIX, UPLOAD_ROUTE_PREFIX)
+        ):
             await self.app(scope, receive, send)
             return
 

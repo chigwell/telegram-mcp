@@ -739,6 +739,26 @@ Security behavior:
   and `upload_file` have no extension limit by default; see
   `TELEGRAM_FILE_EXTENSIONS` above to add one.
 
+#### Clients on another machine
+
+File-path tools read and write the server's disk. When the server runs over
+HTTP for a client on another machine, set `TELEGRAM_MEDIA_BASE_URL` to the URL
+clients reach it at (for example `https://tg.example.com`, behind your reverse
+proxy) and configure a server allowed root:
+
+- `download_media` also returns a URL that serves the downloaded file
+  (`<base>/media/…`); fetch it with `curl` or similar.
+- `prepare_upload(filename)` returns a `url` and a `file_path`. PUT the file to
+  the url (`curl --fail -T ./report.pdf "<url>"`; streamed to disk, up to the
+  `send_file` size limit), then pass `file_path` to `send_file`, `send_album`,
+  `send_voice` or `send_sticker`.
+
+Both URLs carry an HMAC signature and stay inside the first server allowed root.
+Each expires after an hour or when the server restarts, and an upload URL takes
+one upload. Uploads land in `<first_root>/uploads/` and are deleted two hours
+later. Client MCP Roots name the client's own disk, so such a deployment
+usually also sets `TELEGRAM_SERVER_ROOTS_ONLY=1`.
+
 Run with allowed roots via environment variable:
 
 ```bash
