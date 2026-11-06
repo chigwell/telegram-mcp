@@ -498,7 +498,7 @@ async def download_media(
     chat_id: Union[int, str],
     message_id: int,
     file_path: Optional[str] = None,
-    media_id: Optional[int] = None,
+    media_id: Optional[Union[int, str]] = None,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
 ) -> str:
@@ -512,7 +512,9 @@ async def download_media(
             `<first_root>/` if the root is already a downloads directory).
         media_id: Optional document/photo id to download when the message is a
             rich (block-format) post with several embedded media. Get the ids
-            from the message's "rich_media" records. Without it, the first
+            from the message's "rich_media" records, as the string shown there
+            (the ids exceed 2^53, so a JSON number would be rounded by many
+            clients). Without it, the first
             embedded media is downloaded. Passing it for a message with
             regular media is an error — pick the media by message instead.
     """
@@ -529,7 +531,7 @@ async def download_media(
         if not msg.media:
             pool = [m for m in rich_message_media(msg) if m["media"] is not None]
             if media_id is not None:
-                pool = [m for m in pool if m["id"] == media_id]
+                pool = [m for m in pool if str(m["id"]) == str(media_id).strip()]
                 if not pool:
                     return f"No rich media with id {media_id} in message {message_id}."
             if not pool:

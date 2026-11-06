@@ -349,8 +349,9 @@ def message_to_dict(msg, chat_id: Optional[int] = None, forum: bool = False) -> 
     rich_media = rich_message_media(msg)
     if rich_media:
         # ids the media tools accept back as media_id (get_media_info resolves
-        # them against rich_message.photos/documents)
-        d["rich_media"] = [{"type": m["type"], "id": m["id"]} for m in rich_media]
+        # them against rich_message.photos/documents). As strings: they exceed
+        # 2^53, so a client parsing JSON numbers into doubles would round them.
+        d["rich_media"] = [{"type": m["type"], "id": str(m["id"])} for m in rich_media]
 
     page = getattr(msg, "web_preview", None)
     if page is not None and getattr(page, "url", None):
