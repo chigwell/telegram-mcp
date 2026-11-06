@@ -57,7 +57,7 @@ The server currently includes 80+ MCP tools grouped into these areas:
 
 - **Accounts:** list configured accounts and route tool calls by account label.
 - **Chats and groups:** list chats, inspect metadata, create groups/channels, upgrade basic groups to supergroups, join or leave chats, invite or remove users, manage admins, bans, default permissions, slow mode, topics and their allowed icons, invite links, common chats, read receipts, and message links.
-- **Messages:** send, schedule, edit, delete, forward, pin, unpin, mark read, reply, search, inspect context, create polls, manage reactions, inspect inline buttons, and press inline callbacks. `send_message`, `reply_to_message`, and `edit_message` support classic formatting (`parse_mode='md'`/`'html'`) and server-side rich formatting (`parse_mode='rich'`/`'rich_markdown'`/`'rich_html'` — full Markdown/HTML with tables, headings, formulas, and collapsible sections). Rich modes require Telegram Premium on the account; Premium is re-checked on every call, and without it nothing is sent — the tool returns a structured `telegram_premium_required` result so the agent can reformat with classic modes and retry. `send_message`, `reply_to_message`, and `edit_message` also accept `format_date` to render a date as a tappable chip. `edit_message` reports an edit that changes nothing as `not modified` instead of an error.
+- **Messages:** send, schedule, edit, delete, forward, pin, unpin, mark read, reply, search, inspect context, create polls, manage reactions, inspect inline buttons, and press inline callbacks. `send_message`, `reply_to_message`, and `edit_message` support classic formatting (`parse_mode='md'`/`'html'`) and server-side rich formatting (`parse_mode='rich'`/`'rich_markdown'`/`'rich_html'` — full Markdown/HTML with tables, headings, formulas, and collapsible sections). Rich modes require Telegram Premium on the account; Premium is re-checked on every call, and without it nothing is sent — the tool returns a structured `telegram_premium_required` result so the agent can reformat with classic modes and retry. `send_message`, `reply_to_message`, and `edit_message` also accept `format_date` to render a date as a tappable chip. Captions of `send_file` and `send_album` take the same `parse_mode` (classic modes only), `format_date`, and `custom_emojis`. `edit_message` reports an edit that changes nothing as `not modified` instead of an error.
 
 `list_inline_buttons` describes each button by row, column and `kind` (what pressing it does), for inline buttons and reply keyboards. `press_inline_button` presses `callback` and `game` buttons, returns the bot's answer with `alert` and `url`, and refuses buttons that need the 2FA password.
 
@@ -155,33 +155,34 @@ the original Telegram entities, including `TextCustomEmoji` nodes in block-forma
 joiners and flag tag characters are preserved in the fallback text.
 
 To reuse an entry, set `parse_mode="html"` in `send_message`, `reply_to_message`,
-or `edit_message`, and insert `<tg-emoji emoji-id="ID">EMOJI</tg-emoji>` using its
-`id` and `emoji`. HTML-escape the fallback and other literal text. For example,
+`edit_message`, or a caption of `send_file` or `send_album`, and insert
+`<tg-emoji emoji-id="ID">EMOJI</tg-emoji>` using its `id` and `emoji`. HTML-escape the fallback and other literal text. For example,
 the entry above becomes `<tg-emoji emoji-id="5368324170671202286">🍷</tg-emoji>`.
 Telegram's account restrictions still apply to sending custom emoji.
 
 For plain-text messages, pass the entries themselves as `custom_emojis` instead,
 with no HTML and no escaping; the text is sent verbatim. For example,
 `send_message(chat_id, "🍷 News for List<int> & co", custom_emojis=[{"emoji": "🍷",
-"id": "5368324170671202286"}])`. The same parameter works in `reply_to_message` and
-`edit_message`. Every standalone occurrence of each `emoji` becomes that custom
-emoji, including ones inside URLs or code; to keep one plain, use
+"id": "5368324170671202286"}])`. The same parameter works in `reply_to_message`,
+`edit_message`, and for captions in `send_file` and `send_album`. Every standalone
+occurrence of each `emoji` becomes that custom emoji, including ones inside URLs or code; to keep one plain, use
 `parse_mode="html"` with `<tg-emoji>` instead. An emoji inside a longer sequence
 (such as 👍 in 👍🏽) is not a match. Nothing is sent when an `emoji` is not found or
 does not look like an emoji (pure ASCII/Latin punctuation such as `#` is refused),
 an `id` is not a positive 64-bit integer, two marked spans overlap, or `parse_mode`
 is set. It combines with `format_date`.
 
-`send_file` and `send_album` take the same `parse_mode` and `custom_emojis` for their
-caption, which for a media group sits on its first item. Without `parse_mode` a caption is
-still parsed as Markdown, as before; `parse_mode="plain"` sends it verbatim, the rich modes
-are not supported for captions, and `custom_emojis` needs a caption.
+`send_file` and `send_album` take the same `parse_mode`, `custom_emojis` and `format_date`
+for their caption, which for a media group sits on its first item. Without `parse_mode` a
+caption is still parsed as Markdown, as before; `parse_mode="plain"` sends it verbatim, the
+rich modes are not supported for captions, and `custom_emojis` and `format_date` need a
+caption.
 
 ### Tappable dates and times
 
-Passing `format_date` to `send_message`, `reply_to_message`, or `edit_message`
-renders a tappable date/time chip — the same entity Telegram's apps attach when
-you type a recognizable date. Give the date text exactly as it appears in the
+Passing `format_date` to `send_message`, `reply_to_message`, `edit_message`, or
+a caption of `send_file` or `send_album` renders a tappable date/time chip — the
+same entity Telegram's apps attach when you type a recognizable date. Give the date text exactly as it appears in the
 message: `'13/09'`, `'13/09/2026'`, or `'13/09 17:00'`. The chip opens
 copy-date / add-to-calendar / reminder actions. Plain-text messages only —
 omit `parse_mode`. For example, `send_message(chat_id, "Lunch 13/09 13:00",

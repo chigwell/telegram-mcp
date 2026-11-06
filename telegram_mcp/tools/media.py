@@ -21,7 +21,7 @@ from telegram_mcp.photo_source import (
     list_photo_references,
     validate_source,
 )
-from telegram_mcp.tools.messages import _plain_entities, _plain_text_conflict
+from telegram_mcp.formatting import prepare_text, telethon_parse_mode_kwargs
 
 PHOTO_IDENTIFIER_SEARCH_DEPTH = 100
 PHOTO_SHEET_MAXIMUM_TILES = 12
@@ -184,30 +184,28 @@ def _parse_tkhd(media_file, start: int, end: int):
     return width, height
 
 
-def _caption_format_kwargs(caption, parse_mode, custom_emojis):
+def _caption_format_kwargs(caption, parse_mode, format_date, custom_emojis):
     """Return (Telethon send_file kwargs, None) for the caption format, or (None, error).
 
-    Like _force_document_kwargs, nothing is passed when the caller set neither
-    argument, so Telethon keeps parsing the caption with its default (Markdown).
+    Like _force_document_kwargs, nothing is passed when the caller set none of the
+    arguments, so Telethon keeps parsing the caption with its default (Markdown).
     """
-    conflict = _plain_text_conflict(parse_mode, None, custom_emojis)
-    if conflict:
-        return None, conflict
-    if parse_mode and parse_mode.lower() in RICH_PARSE_MODES:
-        return None, (
-            f"parse_mode='{parse_mode}' is not supported for file captions. "
-            "Use 'md', 'html' or 'plain'."
-        )
-    if custom_emojis:
-        if not caption:
-            return None, "custom_emojis needs a caption."
-        entities, error = _plain_entities(caption, None, custom_emojis)
-        if error:
-            return None, error
-        return {"formatting_entities": entities}, None
-    if parse_mode is None:
-        return {}, None
-    return {"parse_mode": None if parse_mode.lower() == "plain" else parse_mode}, None
+    if not caption and (format_date or custom_emojis):
+        option = "custom_emojis" if custom_emojis else "format_date"
+        return None, f"{option} needs a caption."
+    prepared, error = prepare_text(
+        caption,
+        parse_mode,
+        format_date,
+        custom_emojis,
+        rich_supported=False,
+        target="file captions",
+    )
+    if error:
+        return None, error
+    if prepared.entities is not None:
+        return {"formatting_entities": prepared.entities}, None
+    return telethon_parse_mode_kwargs(parse_mode), None
 
 
 class _DownloadLimitExceeded(Exception):
@@ -225,6 +223,7 @@ async def send_file(
     schedule_date: Union[str, int, None] = None,
     force_document: bool = False,
     parse_mode: Optional[str] = None,
+    format_date: Optional[str] = None,
     custom_emojis: Optional[List[Dict[str, Any]]] = None,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
@@ -261,7 +260,10 @@ async def send_file(
             in custom_emojis by message-reading tools. Every standalone occurrence of
             each fallback emoji in the caption becomes that custom emoji; a fallback
             that is not in the caption is an error. Plain-text captions only — leave
-            parse_mode unset.
+            parse_mode unset. Combines with format_date.
+        format_date: Exact date text in the caption to render as a tappable date chip,
+            as in send_message: '13/09', '13/09/2026', or '13/09 17:00'. Plain-text
+            captions only — leave parse_mode unset.
     """
     try:
         if isinstance(file_path, list):
@@ -273,6 +275,7 @@ async def send_file(
                 schedule_date=schedule_date,
                 force_document=force_document,
                 parse_mode=parse_mode,
+                format_date=format_date,
                 custom_emojis=custom_emojis,
                 ctx=ctx,
                 account=account,
@@ -284,7 +287,9 @@ async def send_file(
             if schedule_error:
                 return schedule_error
 
-        caption_kwargs, caption_error = _caption_format_kwargs(caption, parse_mode, custom_emojis)
+        caption_kwargs, caption_error = _caption_format_kwargs(
+            caption, parse_mode, format_date, custom_emojis
+        )
         if caption_error:
             return caption_error
 
@@ -325,6 +330,7 @@ async def send_file(
             schedule_date=str(schedule_date),
             force_document=force_document,
             parse_mode=parse_mode,
+            format_date=format_date,
             custom_emojis=custom_emojis,
         )
 
@@ -337,6 +343,7 @@ async def _send_album(
     schedule_date: Union[str, int, None] = None,
     force_document: bool = False,
     parse_mode: Optional[str] = None,
+    format_date: Optional[str] = None,
     custom_emojis: Optional[List[Dict[str, Any]]] = None,
     ctx: Optional[Context] = None,
     account: str = None,
@@ -350,7 +357,9 @@ async def _send_album(
         if schedule_error:
             return schedule_error
 
-    caption_kwargs, caption_error = _caption_format_kwargs(caption, parse_mode, custom_emojis)
+    caption_kwargs, caption_error = _caption_format_kwargs(
+        caption, parse_mode, format_date, custom_emojis
+    )
     if caption_error:
         return caption_error
 
@@ -437,6 +446,7 @@ async def send_album(
     topic_id: Optional[int] = None,
     schedule_date: Union[str, int, None] = None,
     parse_mode: Optional[str] = None,
+    format_date: Optional[str] = None,
     custom_emojis: Optional[List[Dict[str, Any]]] = None,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
@@ -460,6 +470,8 @@ async def send_album(
             'md'/'markdown' or 'plain'. If omitted, the client default applies (Markdown).
         custom_emojis: Entries {"emoji": fallback, "id": document ID}, as in send_file.
             Plain-text captions only — leave parse_mode unset.
+        format_date: Exact date text in the caption to render as a tappable date chip,
+            as in send_file. Plain-text captions only — leave parse_mode unset.
     """
     try:
         if not isinstance(file_paths, list):
@@ -471,6 +483,7 @@ async def send_album(
             topic_id=topic_id,
             schedule_date=schedule_date,
             parse_mode=parse_mode,
+            format_date=format_date,
             custom_emojis=custom_emojis,
             ctx=ctx,
             account=account,
@@ -485,6 +498,7 @@ async def send_album(
             topic_id=topic_id,
             schedule_date=str(schedule_date),
             parse_mode=parse_mode,
+            format_date=format_date,
             custom_emojis=custom_emojis,
         )
 

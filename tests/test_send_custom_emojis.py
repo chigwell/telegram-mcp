@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from telethon.tl import functions, types
 
-from telegram_mcp import runtime
+from telegram_mcp import formatting, runtime
 from telegram_mcp.tools import messages
 
 WINE_ID = 5368324170671202286
@@ -30,7 +30,7 @@ def _utf16(text):
 
 
 def _result(text, custom_emojis, format_date=None):
-    return messages._plain_entities(text, format_date, custom_emojis)
+    return formatting._plain_entities(text, format_date, custom_emojis)
 
 
 def _spans(entities):
@@ -153,7 +153,7 @@ def test_format_date_adjacent_to_custom_emoji_is_allowed(text, spans):
 def test_format_date_overlapping_custom_emoji_is_refused(monkeypatch):
     # Valid fallbacks and dates share no characters, so force a chip over the emoji.
     chip = types.MessageEntityFormattedDate(offset=1, length=5, date=None)
-    monkeypatch.setattr(messages, "_date_entity", lambda *args: (chip, None))
+    monkeypatch.setattr(formatting, "_date_entity", lambda *args: (chip, None))
     assert _result("🍷 13/09", [WINE], format_date="13/09")[1] == (
         f"custom emoji '🍷' ({WINE_ID}) and format_date '13/09' {OVERLAP}"
     )
