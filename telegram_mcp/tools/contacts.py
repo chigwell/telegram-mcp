@@ -1,7 +1,12 @@
 """Contacts MCP tools."""
 
 from telegram_mcp.runtime import *
-from typing import Optional
+from typing import Final, Optional
+import weakref
+
+from telethon.errors import PhoneNotOccupiedError, PhoneNumberInvalidError
+
+from telegram_mcp.resolve_phone_limit import ResolvePhoneLimiter
 
 
 @mcp.tool(
@@ -302,6 +307,85 @@ async def get_last_interaction(contact_id: Union[int, str], account: Optional[st
         )
     except Exception as e:
         return log_and_format_error("get_last_interaction", e, contact_id=contact_id)
+
+
+PHONE_MIN_DIGITS: Final[int] = 7
+PHONE_MAX_DIGITS: Final[int] = 15  # E.164
+_PHONE_SEPARATORS = str.maketrans("", "", " -().")
+# E.164: a leading +, then a country code that never starts with 0.
+_E164_RE = re.compile(rf"\+([1-9][0-9]{{{PHONE_MIN_DIGITS - 1},{PHONE_MAX_DIGITS - 1}}})")
+_resolve_phone_limiter = ResolvePhoneLimiter()
+# Serialise the flood_sleep_threshold swap below per client, so overlapping lookups on
+# one account cannot restore each other's lowered value and leave that client at 0.
+_resolve_phone_call_locks: "weakref.WeakKeyDictionary[TelegramClient, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def normalize_phone(phone: str) -> Optional[str]:
+    """Return an E.164 number as bare digits, or None when it is not one."""
+    if not isinstance(phone, str):
+        return None
+    match = _E164_RE.fullmatch(phone.strip().translate(_PHONE_SEPARATORS))
+    return match.group(1) if match else None
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Resolve Phone", openWorldHint=True, readOnlyHint=True)
+)
+@with_account(readonly=False)
+async def resolve_phone(phone: str, account: Optional[str] = None) -> str:
+    """
+    Resolve a phone number to the Telegram user who owns it, without adding a contact.
+
+    Args:
+        phone: International number in E.164 form, starting with + and the country code,
+            e.g. "+44 20 7946 0958". The caller must supply the country code: a local
+            number such as "8 999 000-11-22" is rejected, not guessed at.
+            Spaces, dashes, dots and parentheses are ignored.
+
+    Telegram finds the user only if their privacy settings allow finding them by number.
+    The server may cap lookups (TELEGRAM_RESOLVE_PHONE_*); a refusal says when to retry.
+    With several accounts configured, account is required: each lookup spends that
+    account's quota.
+    """
+    digits = normalize_phone(phone)
+    if digits is None:
+        return (
+            "Error: phone must be an international number starting with + and the country "
+            f"code (not 0), {PHONE_MIN_DIGITS} to {PHONE_MAX_DIGITS} digits in total."
+        )
+    try:
+        cl = get_client(account)
+        await ensure_connected(cl)
+        refusal = _resolve_phone_limiter.reserve()
+        if refusal:
+            return refusal
+        # Telethon 1.45 drops the per-call flood_sleep_threshold, so lower the client's own:
+        # a silent sleep-and-retry would be a second, uncounted lookup. Until the lookup
+        # returns, other requests on this client get their FloodWait raised, not slept.
+        async with _resolve_phone_call_locks.setdefault(cl, asyncio.Lock()):
+            previous_threshold = cl.flood_sleep_threshold
+            cl.flood_sleep_threshold = 0
+            try:
+                result = await cl(functions.contacts.ResolvePhoneRequest(phone=digits))
+            finally:
+                cl.flood_sleep_threshold = previous_threshold
+        return str(result)
+    except PhoneNotOccupiedError:
+        return (
+            "No Telegram user found for this number, or the owner's privacy settings "
+            "hide it from phone lookups."
+        )
+    except PhoneNumberInvalidError:
+        return (
+            "Error: Telegram rejected this phone number as invalid. "
+            "Pass it in international format with the country code."
+        )
+    except Exception as e:
+        return log_and_format_error(
+            "resolve_phone", e, prefix=ErrorCategory.CONTACT, phone=f"...{digits[-2:]}"
+        )
 
 
 @mcp.tool(
@@ -798,6 +882,7 @@ __all__ = [
     "get_direct_chat_by_contact",
     "get_contact_chats",
     "get_last_interaction",
+    "resolve_phone",
     "add_contact",
     "delete_contact",
     "block_user",

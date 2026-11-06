@@ -76,7 +76,7 @@ send_as)` saves which one your later messages use: `"me"` for your own account, 
 username of an allowed sender. The saved sender applies in all your Telegram clients.
 Anonymous posting as an admin is an admin right and is not changed by it.
 
-- **Contacts:** list, search, add, delete, block, unblock, import, export, inspect direct chats, find recent contact interactions, and remember contacts by the names you actually use (see below).
+- **Contacts:** list, search, add, delete, block, unblock, import, export, look up a phone number without adding a contact, inspect direct chats, find recent contact interactions, and remember contacts by the names you actually use (see below).
 
 ### Typing indicators
 
@@ -92,6 +92,24 @@ the typing phase has a 50-second timeout and cleanup a separate three-second tim
 A failed cleanup is reported explicitly. Successful RPC responses confirm Telegram accepted
 the requests, not that another client's UI displayed them. This is a write operation and
 respects the existing account routing and chat allowlist.
+
+### Phone lookups
+
+`resolve_phone(phone)` finds the Telegram user behind a phone number without adding them to your contacts, and returns the same raw result as `resolve_username`. Pass the number in E.164 form: a leading `+` and the country code, 7 to 15 digits in total. Spaces, dashes, dots and parentheses are ignored. Local forms such as `8 999 000-11-22` or `0044 ...` are rejected before Telegram is called, because the country would have to be guessed. Telegram only answers when the owner's privacy settings let you find them by number. With several accounts configured, `account` is required, since each lookup spends that account's quota.
+
+On a FloodWait the tool returns the wait and does not retry. Telethon ignores a per-request sleep threshold, so the tool sets the client's `flood_sleep_threshold` to 0 and restores it when the lookup returns. The 0 holds for as long as the lookup takes, including Telethon's own resends: any other request on that account that gets a FloodWait in that window raises it instead of sleeping.
+
+`resolve_phone` is read-only, so it is part of `TELEGRAM_EXPOSED_TOOLS=read-only`. To hide it, exclude it by name, e.g. `TELEGRAM_EXPOSED_TOOLS=read-only-resolve_phone`.
+
+Telegram publishes no quota for phone lookups and answers bulk lookups with long FloodWaits, so you can cap them locally. Both limits are off unless set. Every lookup admitted past local validation counts, whatever happens next: a Telegram answer or error, a FloodWait raised by Telethon's local pre-check without sending, or a call cancelled while it waits for another lookup on the same account. That errs on the side of refusing. Numbers rejected locally do not count. Telethon may resend a lookup itself after a server error, timeout or DC migration; that still counts once. A refused call sends nothing and says how many seconds to wait.
+
+```env
+TELEGRAM_RESOLVE_PHONE_MAX_PER_DAY=12              # lookups per rolling 24 hours (0 or unset = no cap)
+TELEGRAM_RESOLVE_PHONE_MIN_INTERVAL_SECONDS=5      # minimum gap between lookups (0 or unset = none)
+TELEGRAM_RESOLVE_PHONE_STATE_FILE=/path/to/resolve-phone.json  # keep the count across restarts
+```
+
+Without a state file the count lives in memory and restarts from zero with the server. The state file holds only lookup timestamps (owner-only, written atomically), is shared by every server process that points at it, and covers all accounts together. A `<state file>.lock` file next to it serialises those processes. If it exists but cannot be parsed, lookups are refused until you fix or delete it; deleting it resets the count. A malformed limit value also refuses lookups instead of running unlimited. The history keeps only the newest `max(MAX_PER_DAY, 1)` timestamps, so after raising the cap the first window counts only the lookups that were kept.
 
 ### Remembered contacts
 
