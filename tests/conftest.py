@@ -23,3 +23,9 @@ def _clear_expected_username(monkeypatch):
     for key in list(os.environ):
         if key.startswith("TELEGRAM_EXPECTED_USERNAME"):
             monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_audit_log(tmp_path, monkeypatch):
+    """Never append test deletion records to a developer's audit history."""
+    monkeypatch.setenv("TELEGRAM_AUDIT_LOG", str(tmp_path / "audit_log.jsonl"))
