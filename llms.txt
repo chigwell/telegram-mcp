@@ -1,0 +1,25 @@
+# telegram-mcp
+
+> A Model Context Protocol server that exposes Telegram account, chat, message, contact, media, folder, and admin operations to Claude, Cursor, and other MCP-compatible clients via Telethon.
+
+Python-based MCP server offering 80+ tools for messaging, chats, contacts, media, polls, and voice transcription, with multi-account support, proxy support, and a contact alias system. Install and configure it as an MCP client server (Docker supported); skills documentation covers workflows like summarizing unread messages and drafting replies.
+
+## Docs
+
+- [telegram-mcp README](https://raw.githubusercontent.com/chigwell/telegram-mcp/main/README.md): Telegram integration for Claude and other MCP clients: features, setup, multi-account, proxy, Docker, security, and troubleshooting.
+- [MCP in Action](https://github.com/chigwell/telegram-mcp/blob/main/README.md#-mcp-in-action): Screenshots of Claude analyzing chat history and sending a Telegram message through the MCP server.
+- [Skills & Workflows](https://github.com/chigwell/telegram-mcp/blob/main/README.md#skills--workflows): Step-by-step guides for summarizing unread messages, drafting replies, triaging action items, and searching chat history.
+- [What It Can Do](https://github.com/chigwell/telegram-mcp/blob/main/README.md#what-it-can-do): Overview of 80+ MCP tools for accounts, chats, messages, media, folders, and admin operations, including rich formatting and Premium requirements.
+- [Requirements](https://github.com/chigwell/telegram-mcp/blob/main/README.md#requirements): Required Python version, Telegram API credentials, session string, MCP client, and optional uv for development.
+- [Quick Start](https://github.com/chigwell/telegram-mcp/blob/main/README.md#quick-start): Installation warning about the PyPI name, cloning, session string generation, environment configuration, and migrating to a persistent SQLite session.
+- [MCP Client Configuration](https://github.com/chigwell/telegram-mcp/blob/main/README.md#mcp-client-configuration): Installing the Claude Desktop .mcpb extension, manual client configuration, read-only tool toggles, and MCP transports.
+- [Multi-Account Setup](https://github.com/chigwell/telegram-mcp/blob/main/README.md#multi-account-setup): Configuring multiple Telegram accounts with suffixed session variables and a session pool for concurrent clients.
+- [Device Identity](https://github.com/chigwell/telegram-mcp/blob/main/README.md#device-identity): Optional variables controlling the device name shown in Telegram's active-sessions list.
+- [Expected Account Check](https://github.com/chigwell/telegram-mcp/blob/main/README.md#expected-account-check): Setting TELEGRAM_EXPECTED_USERNAME so the server refuses to start with a different account's session.
+- [Proxy Support](https://github.com/chigwell/telegram-mcp/blob/main/README.md#proxy-support): Routing Telegram traffic through socks5, socks4, http, or mtproxy proxies with per-account overrides.
+- [File Path Security](https://github.com/chigwell/telegram-mcp/blob/main/README.md#file-path-security): Disabled-by-default file tools and configuring allowed roots via environment variables, CLI arguments, or MCP client roots.
+- [Chat Access Privacy (Allowlist)](https://github.com/chigwell/telegram-mcp/blob/main/README.md#chat-access-privacy-allowlist): Restricting agent access to specific chats via TELEGRAM_ALLOWED_CHAT_IDS and how tools, search, and events behave.
+- [Docker](https://github.com/chigwell/telegram-mcp/blob/main/README.md#docker): Building the Docker image, running a shared HTTP server or per-client stdio containers, Compose setup, and multi-account variables.
+- [Development](https://github.com/chigwell/telegram-mcp/blob/main/README.md#development): Modular package layout, running tests with coverage, the 80% coverage gate, and formatting checks.
+- [Security Notes](https://github.com/chigwell/telegram-mcp/blob/main/README.md#security-notes): Session string handling, PyPI package warning, proxy routing, content sanitization, and prompt injection protection measures.
+- [Troubleshooting](https://github.com/chigwell/telegram-mcp/blob/main/README.md#troubleshooting): Fixing session configuration, authorization, API credentials, locked databases, and duplicate connection errors.
