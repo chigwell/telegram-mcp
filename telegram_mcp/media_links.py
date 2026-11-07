@@ -89,11 +89,27 @@ def sweep_expired_uploads(root: Path, now: Optional[float] = None) -> None:
     if not uploads.is_dir():
         return
     cutoff = _now(now) - 2 * URL_TTL_SECONDS
-    for slot in uploads.iterdir():
-        if slot.is_dir() and slot.stat().st_mtime < cutoff:
-            for entry in slot.iterdir():
-                entry.unlink(missing_ok=True)
-            slot.rmdir()
+    try:
+        slots = list(uploads.iterdir())
+    except OSError:
+        return
+    for slot in slots:
+        try:
+            if slot.is_dir() and slot.stat().st_mtime < cutoff:
+                for entry in slot.iterdir():
+                    try:
+                        if entry.is_dir():
+                            entry.rmdir()
+                        else:
+                            entry.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                try:
+                    slot.rmdir()
+                except OSError:
+                    pass
+        except OSError:
+            pass
 
 
 def upload_slot(
