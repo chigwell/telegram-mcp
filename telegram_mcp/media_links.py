@@ -11,8 +11,10 @@ server restarts. Both stay inside the first server allowed root.
 
 import hashlib
 import hmac
+import logging
 import os
 import secrets
+import shutil
 import time
 from pathlib import Path
 from typing import Optional
@@ -25,6 +27,8 @@ URL_TTL_SECONDS = 3600
 
 # Per process: a restart invalidates every URL handed out before it.
 _SECRET = secrets.token_bytes(32)
+
+logger = logging.getLogger(__name__)
 
 
 def base_url() -> Optional[str]:
@@ -83,33 +87,56 @@ def resolve_download(
     return target
 
 
+def _clean_slot_entry(entry: Path) -> None:
+    try:
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink(missing_ok=True)
+    except FileNotFoundError:
+        pass
+    except PermissionError as e:
+        logger.warning("Permission denied removing upload entry %s: %s", entry, e)
+    except OSError as e:
+        logger.warning("Failed to remove upload entry %s: %s", entry, e)
+
+
+def _clean_slot(slot: Path) -> None:
+    try:
+        for entry in slot.iterdir():
+            _clean_slot_entry(entry)
+        slot.rmdir()
+    except FileNotFoundError:
+        pass
+    except PermissionError as e:
+        logger.warning("Permission denied removing upload slot %s: %s", slot, e)
+    except OSError as e:
+        logger.warning("Failed to remove upload slot %s: %s", slot, e)
+
+
 def sweep_expired_uploads(root: Path, now: Optional[float] = None) -> None:
-    """Delete upload directories created more than two URL lifetimes ago."""
+    """Delete upload directories modified more than two URL lifetimes ago."""
     uploads = root / UPLOAD_SUBDIR
     if not uploads.is_dir():
         return
     cutoff = _now(now) - 2 * URL_TTL_SECONDS
     try:
-        slots = list(uploads.iterdir())
-    except OSError:
+        slots = uploads.iterdir()
+    except OSError as e:
+        logger.warning("Could not read uploads directory %s: %s", uploads, e)
         return
+
     for slot in slots:
         try:
-            if slot.is_dir() and slot.stat().st_mtime < cutoff:
-                for entry in slot.iterdir():
-                    try:
-                        if entry.is_dir():
-                            entry.rmdir()
-                        else:
-                            entry.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                try:
-                    slot.rmdir()
-                except OSError:
-                    pass
-        except OSError:
-            pass
+            if not slot.is_dir() or slot.stat().st_mtime >= cutoff:
+                continue
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            logger.warning("Could not inspect upload slot %s: %s", slot, e)
+            continue
+
+        _clean_slot(slot)
 
 
 def upload_slot(
