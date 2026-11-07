@@ -314,6 +314,7 @@ async def preview_custom_emoji(
             )
             if path_error:
                 return path_error
+            kept_path.parent.mkdir(parents=True, exist_ok=True)
             kept_path.write_bytes(data)
             saved_path_str = str(kept_path)
 
