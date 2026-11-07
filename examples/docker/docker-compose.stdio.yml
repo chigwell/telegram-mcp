@@ -1,0 +1,15 @@
+services:
+  telegram-mcp:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: production
+    container_name: telegram-mcp-stdio
+    env_file:
+      - ../../.env
+    environment:
+      MCP_TRANSPORT: stdio
+    stdin_open: true
+    tty: false
+    volumes:
+      - ../../transcript_cache:/app/data/transcripts
