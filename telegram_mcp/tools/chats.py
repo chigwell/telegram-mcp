@@ -940,21 +940,91 @@ async def search_public_chats(query: str, limit: int = 20, account: Optional[str
         return log_and_format_error("search_public_chats", e, query=query, limit=limit)
 
 
+def normalize_username(username: str) -> str:
+    """Normalize a username input by stripping @, t.me links, whitespace, query strings, and trailing slashes."""
+    if not username:
+        return ""
+    clean = str(username).strip()
+    for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
+        if clean.startswith(prefix):
+            clean = clean[len(prefix) :]
+            break
+    clean = clean.lstrip("@").rstrip("/")
+    if "?" in clean:
+        clean = clean.split("?")[0]
+    return clean.strip()
+
+
 @mcp.tool(
     annotations=ToolAnnotations(title="Resolve Username", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
 async def resolve_username(username: str, account: Optional[str] = None) -> str:
     """
-    Resolve a username to a user or chat ID.
+    Resolve a username to a user, channel, or chat ID with structured metadata.
+
+    Accepts bare usernames ('durov'), handles with '@' ('@durov'),
+    or Telegram links ('t.me/durov', 'https://t.me/durov').
     """
     try:
+        clean_user = normalize_username(username)
+        if not clean_user:
+            return "Invalid username: must be a non-empty alphanumeric username."
+
         cl = get_client(account)
         await ensure_connected(cl)
-        result = await cl(functions.contacts.ResolveUsernameRequest(username=username))
-        return str(result)
+        result = await cl(functions.contacts.ResolveUsernameRequest(username=clean_user))
+
+        peer_id = None
+        peer_type = "unknown"
+        if getattr(result, "peer", None):
+            peer = result.peer
+            if isinstance(peer, types.PeerUser):
+                peer_id = peer.user_id
+                peer_type = "user"
+            elif isinstance(peer, types.PeerChannel):
+                peer_id = -1000000000000 - peer.channel_id
+                peer_type = "channel"
+            elif isinstance(peer, types.PeerChat):
+                peer_id = -peer.chat_id
+                peer_type = "chat"
+
+        entity_info: Dict[str, Any] = {
+            "query": username,
+            "username": clean_user,
+            "peer_id": peer_id,
+            "peer_type": peer_type,
+        }
+
+        users = getattr(result, "users", [])
+        chats = getattr(result, "chats", [])
+        if users:
+            u = users[0]
+            entity_info.update(
+                {
+                    "id": getattr(u, "id", peer_id),
+                    "first_name": sanitize_user_content(getattr(u, "first_name", None) or ""),
+                    "last_name": sanitize_user_content(getattr(u, "last_name", None) or ""),
+                    "phone": getattr(u, "phone", None),
+                    "is_bot": bool(getattr(u, "bot", False)),
+                    "verified": bool(getattr(u, "verified", False)),
+                }
+            )
+        elif chats:
+            c = chats[0]
+            entity_info.update(
+                {
+                    "id": get_marked_id(c),
+                    "title": sanitize_user_content(getattr(c, "title", None) or ""),
+                    "participants_count": getattr(c, "participants_count", None),
+                    "broadcast": bool(getattr(c, "broadcast", False)),
+                    "megagroup": bool(getattr(c, "megagroup", False)),
+                }
+            )
+
+        return json.dumps(entity_info, indent=2, ensure_ascii=False)
     except Exception as e:
-        return log_and_format_error("resolve_username", e, username=username)
+        return log_and_format_error("normalize_username", "resolve_username", e, username=username)
 
 
 @mcp.tool(
@@ -1371,6 +1441,7 @@ __all__ = [
     "get_chat",
     "subscribe_public_channel",
     "search_public_chats",
+    "normalize_username",
     "resolve_username",
     "get_full_chat",
     "mute_chat",
