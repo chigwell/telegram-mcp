@@ -1,0 +1,17 @@
+services:
+  telegram-mcp:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: production
+    container_name: telegram-mcp-shared
+    env_file:
+      - ../../.env
+    environment:
+      MCP_TRANSPORT: http
+      MCP_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ../../transcript_cache:/app/data/transcripts
+    restart: unless-stopped
