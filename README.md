@@ -658,6 +658,8 @@ These optional variables control how the client appears in Telegram under
 TELEGRAM_DEVICE_MODEL=Telegram MCP
 TELEGRAM_SYSTEM_VERSION=1.0
 TELEGRAM_APP_VERSION=1.0
+TELEGRAM_LANG_CODE=en
+TELEGRAM_SYSTEM_LANG_CODE=en
 ```
 
 If left unset, Telethon falls back to the host platform (for example `arm64`).

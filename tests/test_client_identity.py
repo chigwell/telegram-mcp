@@ -2,7 +2,13 @@ from telegram_mcp.client_identity import client_identity_kwargs
 
 
 def _clear_device_env(monkeypatch):
-    for key in ("TELEGRAM_DEVICE_MODEL", "TELEGRAM_SYSTEM_VERSION", "TELEGRAM_APP_VERSION"):
+    for key in (
+        "TELEGRAM_DEVICE_MODEL",
+        "TELEGRAM_SYSTEM_VERSION",
+        "TELEGRAM_APP_VERSION",
+        "TELEGRAM_LANG_CODE",
+        "TELEGRAM_SYSTEM_LANG_CODE",
+    ):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -17,11 +23,15 @@ def test_client_identity_kwargs_maps_all_variables(monkeypatch):
     monkeypatch.setenv("TELEGRAM_DEVICE_MODEL", "Telegram MCP")
     monkeypatch.setenv("TELEGRAM_SYSTEM_VERSION", "2.0")
     monkeypatch.setenv("TELEGRAM_APP_VERSION", "3.1")
+    monkeypatch.setenv("TELEGRAM_LANG_CODE", "en")
+    monkeypatch.setenv("TELEGRAM_SYSTEM_LANG_CODE", "en")
 
     assert client_identity_kwargs() == {
         "device_model": "Telegram MCP",
         "system_version": "2.0",
         "app_version": "3.1",
+        "lang_code": "en",
+        "system_lang_code": "en",
     }
 
 
