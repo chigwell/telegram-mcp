@@ -6,6 +6,7 @@ import math
 from telegram_mcp.runtime import *
 from telegram_mcp import transcription
 from telegram_mcp.keyboards import CALLBACK_KINDS, keyboard_of
+from telegram_mcp.audit import record_audit_event
 from pydantic import StrictInt
 
 # Domain used to build message permalinks. Overridable because the default is a
@@ -2169,10 +2170,31 @@ async def delete_message(
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
         if await _ids_outside_chat(cl, entity, [message_id]):
+            record_audit_event(
+                tool="delete_message",
+                chat_id=chat_id,
+                outcome="refused: foreign message ID",
+                account=account,
+                message_ids=[message_id],
+            )
             return f"Message {message_id} is not in chat {chat_id}; nothing was deleted."
         await cl.delete_messages(entity, message_id)
+        record_audit_event(
+            tool="delete_message",
+            chat_id=chat_id,
+            outcome="deleted",
+            account=account,
+            message_ids=[message_id],
+        )
         return f"Message {message_id} deleted."
     except Exception as e:
+        record_audit_event(
+            tool="delete_message",
+            chat_id=chat_id,
+            outcome=f"error: {type(e).__name__}",
+            account=account,
+            message_ids=[message_id],
+        )
         return log_and_format_error("delete_message", e, chat_id=chat_id, message_id=message_id)
 
 
@@ -2207,13 +2229,37 @@ async def delete_chat_history(
         pts_count = getattr(result, "pts_count", 0)
         offset = getattr(result, "offset", 0)
         scope = "for both parties" if revoke else "for you"
+        record_audit_event(
+            tool="delete_chat_history",
+            chat_id=chat_id,
+            outcome=f"cleared {scope} (pts_count={pts_count}, offset={offset})",
+            account=account,
+            revoke=revoke,
+            extra={"max_id": max_id, "pts_count": pts_count, "offset": offset},
+        )
         return (
             f"Chat {chat_id} history cleared {scope}: "
             f"{pts_count} messages deleted (offset={offset})."
         )
     except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        record_audit_event(
+            tool="delete_chat_history",
+            chat_id=chat_id,
+            outcome="refused: ChatAdminRequiredError",
+            account=account,
+            revoke=revoke,
+            extra={"max_id": max_id},
+        )
         return "Cannot delete chat history: admin privileges are required."
     except Exception as e:
+        record_audit_event(
+            tool="delete_chat_history",
+            chat_id=chat_id,
+            outcome=f"error: {type(e).__name__}",
+            account=account,
+            revoke=revoke,
+            extra={"max_id": max_id},
+        )
         return log_and_format_error(
             "delete_chat_history",
             e,
@@ -2254,6 +2300,14 @@ async def delete_messages_bulk(
         entity = await resolve_entity(chat_id, cl)
         outside = await _ids_outside_chat(cl, entity, message_ids)
         if outside:
+            record_audit_event(
+                tool="delete_messages_bulk",
+                chat_id=chat_id,
+                outcome=f"refused: foreign message IDs {outside}",
+                account=account,
+                message_ids=message_ids,
+                revoke=revoke,
+            )
             return (
                 f"Message(s) {', '.join(map(str, outside))} are not in chat {chat_id}; "
                 "nothing was deleted."
@@ -2267,12 +2321,45 @@ async def delete_messages_bulk(
                 functions.messages.DeleteMessagesRequest(id=message_ids, revoke=revoke)
             )
         pts_count = getattr(result, "pts_count", 0)
+        record_audit_event(
+            tool="delete_messages_bulk",
+            chat_id=chat_id,
+            outcome=f"deleted {pts_count} of {len(message_ids)} messages",
+            account=account,
+            message_ids=message_ids,
+            revoke=revoke,
+            extra={"pts_count": pts_count},
+        )
         return f"Deleted {pts_count} of {len(message_ids)} messages from chat {chat_id}."
     except telethon.errors.rpcerrorlist.MessageIdInvalidError:
+        record_audit_event(
+            tool="delete_messages_bulk",
+            chat_id=chat_id,
+            outcome="refused: MessageIdInvalidError",
+            account=account,
+            message_ids=message_ids,
+            revoke=revoke,
+        )
         return "Cannot delete messages: one or more message IDs are invalid."
     except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+        record_audit_event(
+            tool="delete_messages_bulk",
+            chat_id=chat_id,
+            outcome="refused: ChatAdminRequiredError",
+            account=account,
+            message_ids=message_ids,
+            revoke=revoke,
+        )
         return "Cannot delete messages: admin privileges are required."
     except Exception as e:
+        record_audit_event(
+            tool="delete_messages_bulk",
+            chat_id=chat_id,
+            outcome=f"error: {type(e).__name__}",
+            account=account,
+            message_ids=message_ids,
+            revoke=revoke,
+        )
         return log_and_format_error(
             "delete_messages_bulk",
             e,
