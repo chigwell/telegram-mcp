@@ -14,6 +14,8 @@ _DEVICE_ENV = {
     "device_model": "TELEGRAM_DEVICE_MODEL",
     "system_version": "TELEGRAM_SYSTEM_VERSION",
     "app_version": "TELEGRAM_APP_VERSION",
+    "lang_code": "TELEGRAM_LANG_CODE",
+    "system_lang_code": "TELEGRAM_SYSTEM_LANG_CODE",
 }
 
 
