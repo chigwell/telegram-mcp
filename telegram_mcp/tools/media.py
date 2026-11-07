@@ -10,6 +10,11 @@ from uuid import uuid4
 
 from pypdf import PdfReader
 
+from starlette.requests import Request
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+
+from telegram_mcp import media_links
+from telegram_mcp import runtime as _runtime
 from telegram_mcp.runtime import *
 
 from telegram_mcp.contact_sheet import ContactSheetUnavailable, build_contact_sheet
@@ -599,6 +604,12 @@ async def download_media(
                     return path_error
 
             os.replace(temp_final_path, final_path)
+            url = media_links.download_url(final_path, _first_server_root())
+            if url:
+                return (
+                    f"Media downloaded to {final_path}. "
+                    f"From another machine, fetch it from {url} (expires in an hour)."
+                )
             return f"Media downloaded to {final_path}."
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -1234,3 +1245,84 @@ __all__ = [
     "send_gif",
     "inspect_document",
 ]
+
+
+def _first_server_root() -> Optional[Path]:
+    """The first server allowed root, which holds download links and uploads."""
+    roots = _runtime.SERVER_ALLOWED_ROOTS
+    return roots[0] if roots else None
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Prepare Upload", openWorldHint=False))
+async def prepare_upload(filename: str) -> str:
+    """
+    Get an upload URL for a file on the client's machine, to send it from this server.
+
+    For a client on another machine (http transport with TELEGRAM_MEDIA_BASE_URL
+    and a server allowed root configured). PUT the file's bytes to url, e.g.
+    `curl --fail -T ./report.pdf "<url>"`, then pass file_path to send_file,
+    send_album, send_voice or send_sticker. The url accepts one upload and
+    expires after an hour or when the server restarts.
+
+    Args:
+        filename: Name the file is stored and sent under, e.g. "report.pdf".
+    """
+    slot = media_links.upload_slot(filename, _first_server_root())
+    if slot is None:
+        return (
+            "prepare_upload needs TELEGRAM_MEDIA_BASE_URL, a server allowed root "
+            "(TELEGRAM_ALLOWED_ROOTS) and a non-empty filename."
+        )
+    return json.dumps(slot, ensure_ascii=False)
+
+
+@mcp.custom_route(media_links.MEDIA_ROUTE_PREFIX + "{path:path}", methods=["GET"])
+async def media_file(request: Request) -> Response:
+    """Serve a file named by a signed URL from download_media."""
+    target = media_links.resolve_download(
+        request.path_params["path"],
+        request.query_params.get("expires", ""),
+        request.query_params.get("sig", ""),
+        _first_server_root(),
+    )
+    if target is None:
+        return PlainTextResponse("Not found", status_code=404)
+    return FileResponse(target, filename=target.name)
+
+
+class _UploadTooLarge(Exception):
+    pass
+
+
+@mcp.custom_route(media_links.UPLOAD_ROUTE_PREFIX + "{path:path}", methods=["PUT"])
+async def upload_file_body(request: Request) -> Response:
+    """Stream a file named by a signed URL from prepare_upload to disk."""
+    target = media_links.resolve_upload(
+        request.path_params["path"],
+        request.query_params.get("expires", ""),
+        request.query_params.get("sig", ""),
+        _first_server_root(),
+    )
+    if target is None:
+        return PlainTextResponse("Not found", status_code=404)
+    limit = MAX_FILE_BYTES["send_file"]
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    partial = target.with_name(target.name + ".part")
+    size = 0
+    try:
+        with open(partial, "xb") as out:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > limit:
+                    raise _UploadTooLarge
+                out.write(chunk)
+    except FileExistsError:
+        return PlainTextResponse("Upload already in progress", status_code=409)
+    except _UploadTooLarge:
+        partial.unlink(missing_ok=True)
+        return PlainTextResponse(f"File too large (limit: {limit} bytes)", status_code=413)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    os.replace(partial, target)
+    return JSONResponse({"file_path": str(target), "size": size}, status_code=201)
