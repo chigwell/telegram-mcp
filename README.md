@@ -837,6 +837,8 @@ If `TELEGRAM_ALLOWED_CHAT_IDS` is unset or empty, the server operates in unrestr
 
 ## Docker
 
+For complete compose templates and client configurations (Claude Desktop, Cursor, etc.), see the [**Docker Deployment Guide**](examples/docker/README.md).
+
 Build the image:
 
 ```bash
