@@ -835,6 +835,24 @@ When `TELEGRAM_ALLOWED_CHAT_IDS` is set:
 
 If `TELEGRAM_ALLOWED_CHAT_IDS` is unset or empty, the server operates in unrestricted mode (default), preserving 100% backward compatibility.
 
+## Deletion Audit Log (Recent Actions for Private Chats)
+
+To maintain an immutable, local audit trail for destructive actions (e.g. tracking when and how messages were deleted without exposing message text), the server writes an append-only JSONL log (closes #321):
+
+```env
+# Optional custom path for the deletion audit log (defaults to telegram_audit.log next to the server)
+TELEGRAM_AUDIT_LOG=/path/to/telegram_audit.log
+```
+
+- **Operations logged:** `delete_message`, `delete_messages_bulk`, and `delete_chat_history`.
+- **Refusals and errors logged:** Refused cross-chat deletion attempts (attempting to delete IDs outside the target chat) and permission errors (`ChatAdminRequiredError`) are recorded with full diagnostic details.
+- **Privacy preservation:** Only operation metadata is persisted (`timestamp`, `account`, `tool`, `chat_id`, `message_ids`, `revoke`, `outcome`). Message content and bodies are **never** logged.
+- **Log entry format (JSONL):**
+  ```json
+  {"timestamp": "2026-11-07T18:25:00.123456+00:00", "account": "work", "tool": "delete_message", "chat_id": 12345678, "message_ids": [42], "revoke": null, "outcome": "deleted"}
+  {"timestamp": "2026-11-07T18:25:05.123456+00:00", "account": "work", "tool": "delete_messages_bulk", "chat_id": 12345678, "message_ids": [999], "revoke": true, "outcome": "refused: foreign message IDs [999]"}
+  ```
+
 ## Docker
 
 For complete compose templates and client configurations (Claude Desktop, Cursor, etc.), see the [**Docker Deployment Guide**](examples/docker/README.md).
