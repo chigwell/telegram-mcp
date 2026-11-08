@@ -331,6 +331,57 @@ async def list_topics(
         )
 
 
+@mcp.tool(annotations=ToolAnnotations(title="Mark Topic As Read", openWorldHint=True, destructiveHint=True, idempotentHint=True))
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def mark_topic_as_read(
+    chat_id: Union[int, str],
+    topic_id: int,
+    account: Optional[str] = None,
+) -> str:
+    """
+    Mark all messages as read in a specific forum topic of a supergroup.
+
+    Args:
+        chat_id: The forum-enabled supergroup ID or username.
+        topic_id: The forum topic ID.
+    """
+    try:
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+
+        if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
+            return "The specified chat is not a supergroup."
+
+        result = await cl(
+            GetForumTopicsRequest(
+                channel=entity,
+                offset_date=0,
+                offset_id=0,
+                offset_topic=0,
+                limit=200,
+            )
+        )
+        topic = next((t for t in getattr(result, "topics", []) if t.id == topic_id), None)
+        if topic is None:
+            return f"Topic {topic_id} not found in chat {chat_id}."
+
+        top_message = getattr(topic, "top_message", None)
+        if not top_message:
+            return f"Topic {topic_id} has no top message."
+
+        await cl(
+            functions.messages.ReadDiscussionRequest(
+                peer=entity,
+                msg_id=topic_id,
+                read_max_id=top_message,
+            )
+        )
+        return f"Marked all messages as read in topic {topic_id} of chat {chat_id}."
+    except Exception as e:
+        return log_and_format_error("mark_topic_as_read", e, chat_id=chat_id, topic_id=topic_id)
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="List Forum Topic Icons", openWorldHint=True, readOnlyHint=True
