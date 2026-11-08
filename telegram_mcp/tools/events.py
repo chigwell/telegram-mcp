@@ -384,7 +384,7 @@ async def _on_message_event(event, account: Optional[str] = None) -> None:
             return
         chat_id = event.chat_id
         # Cached chat entity (no request); kept so reads apply username and
-        # bare-id allowlist entries exactly as this check does.
+        # marked-id allowlist entries exactly as this check does.
         chat = getattr(event, "chat", None)
         if is_chat_allowlist_enabled():
             if not is_chat_allowed(chat_id, chat):
