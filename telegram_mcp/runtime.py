@@ -40,7 +40,9 @@ from telethon.sessions import StringSession
 from telethon.tl.types import (
     User,
     Chat,
+    ChatForbidden,
     Channel,
+    ChannelForbidden,
     ChatAdminRights,
     ChatBannedRights,
     ChannelParticipantsKicked,
@@ -105,9 +107,9 @@ def get_entity_type(entity: Any) -> str:
 
 def get_marked_id(entity: Any) -> int:
     """Return a Telethon-compatible marked ID for an entity."""
-    if isinstance(entity, Channel):
+    if isinstance(entity, (Channel, ChannelForbidden)):
         return -1000000000000 - entity.id
-    if isinstance(entity, Chat):
+    if isinstance(entity, (Chat, ChatForbidden)):
         return -entity.id
     return entity.id
 
@@ -1147,6 +1149,9 @@ ROOTS_REQUEST_TIMEOUT_DEFAULT = 10.0
 
 # Per-chat access control allowlist configuration (TELEGRAM_ALLOWED_CHAT_IDS)
 ALLOWED_CHAT_IDS: Optional[set[Union[int, str]]] = None
+# A marked chat ID: optional minus sign, digits only. A leading "+" is a phone
+# number, not an ID, and must go through entity resolution instead.
+_NUMERIC_CHAT_ID_RE = re.compile(r"-?\d+")
 # Every parameter that names a chat the tool reads or changes, whatever it is called:
 # contact_id is the private chat with that contact, group_id the group being administered.
 # user_id stays out: it names a member acted on inside an already-checked chat.
@@ -1158,12 +1163,18 @@ CHAT_PARAM_NAMES: frozenset[str] = frozenset(
 def _parse_allowed_chat_ids(
     raw: Optional[Union[str, Iterable[Union[int, str]]]],
 ) -> Optional[set[Union[int, str]]]:
-    """Parse TELEGRAM_ALLOWED_CHAT_IDS into a set of allowed IDs and usernames.
+    """Parse TELEGRAM_ALLOWED_CHAT_IDS into a set of allowed marked IDs and usernames.
 
-    Supports comma-separated integer IDs (e.g. '12345678,-100123456789') and
-    usernames/handles (e.g. '@mychat,other_channel').
-    Also automatically indexes marked variants for bare integers and vice versa
-    so that both marked IDs (-100...) and bare positive IDs match.
+    Supports comma-separated integer IDs and usernames/handles, e.g.
+    '12345678,-100123456789,-4567,@mychat'. Integer IDs are taken in Telegram's
+    marked (Bot API) form, the form every tool returns as ``chat_id``: a user is
+    ``12345678``, a basic group ``-4567`` and a channel/supergroup
+    ``-100123456789``.
+
+    Users, basic groups and channels have separate ID namespaces, so the same
+    bare number can name unrelated chats of different types. Each entry is kept
+    exactly as written and never widened to other peer types: allowing channel
+    ``-100123456789`` must not also allow user ``123456789``.
     """
     if raw is None:
         return None
@@ -1182,27 +1193,12 @@ def _parse_allowed_chat_ids(
 
     allowed: set[Union[int, str]] = set()
     for token in tokens:
-        try:
-            val = int(token)
-            allowed.add(val)
-            # If negative supergroup: -100XXXXXXXXXX
-            if str(val).startswith("-100") and len(str(val)) > 4:
-                try:
-                    channel_id = int(str(val)[4:])
-                    allowed.add(channel_id)
-                except ValueError:
-                    pass
-            # If positive bare ID: add supergroup (-100...) and group (-) variants
-            elif val > 0:
-                allowed.add(-1000000000000 - val)
-                allowed.add(-val)
-            elif val < 0:
-                # Basic group negative ID: -XXXXXX
-                allowed.add(-val)
-        except ValueError:
-            clean_handle = token.lstrip("@").strip().lower()
-            if clean_handle:
-                allowed.add(clean_handle)
+        if _NUMERIC_CHAT_ID_RE.fullmatch(token):
+            allowed.add(int(token))
+            continue
+        clean_handle = token.lstrip("@").strip().lower()
+        if clean_handle:
+            allowed.add(clean_handle)
 
     return allowed if allowed else None
 
@@ -1232,23 +1228,28 @@ def is_chat_allowlist_enabled() -> bool:
 def is_chat_allowed(chat_identifier: Any, entity: Any = None) -> bool:
     """Check whether a chat identifier or entity is permitted by the allowlist.
 
+    Integer identifiers are compared as marked IDs (see
+    ``_parse_allowed_chat_ids``); an entity is compared by its marked ID and
+    username only. Its bare ``id`` is never used: the same number is a
+    different chat in the user, basic-group and channel namespaces.
+
     If allowlist is not enabled, always returns True.
     """
     allowed = get_effective_allowed_chat_ids()
     if allowed is None:
         return True
 
-    if chat_identifier is not None:
+    if chat_identifier is not None and not isinstance(chat_identifier, bool):
         if isinstance(chat_identifier, int):
             if chat_identifier in allowed:
                 return True
         elif isinstance(chat_identifier, str):
-            try:
-                int_id = int(chat_identifier)
-                if int_id in allowed:
+            ident = chat_identifier.strip()
+            if _NUMERIC_CHAT_ID_RE.fullmatch(ident):
+                if int(ident) in allowed:
                     return True
-            except ValueError:
-                clean = chat_identifier.lstrip("@").strip().lower()
+            else:
+                clean = ident.lstrip("@").strip().lower()
                 if clean and clean in allowed:
                     return True
 
@@ -1259,10 +1260,6 @@ def is_chat_allowed(chat_identifier: Any, entity: Any = None) -> bool:
                 return True
         except Exception:
             pass
-
-        bare_id = getattr(entity, "id", None)
-        if isinstance(bare_id, int) and bare_id in allowed:
-            return True
 
         username = getattr(entity, "username", None)
         if username and str(username).lower() in allowed:

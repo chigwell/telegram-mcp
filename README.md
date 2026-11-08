@@ -537,12 +537,18 @@ For `http` and `sse`, the server binds `MCP_HOST`:`MCP_PORT` (default
 `127.0.0.1:8765`); the streamable HTTP endpoint is `/mcp`, the SSE endpoint is
 `/sse`.
 
+Host and Origin validation is always on for `http` and `sse`, so a web page
+open in your browser cannot send tool calls to the local server (cross-origin
+request forgery / DNS rebinding). By default only `127.0.0.1`, `localhost` and
+`[::1]` Host headers are accepted, and only browser pages served from those
+hosts; requests without an `Origin` header (regular MCP clients) are not
+affected. CORS preflights echo only an allowed origin, never `*`.
+
 If the server is reachable via a domain (e.g. behind a reverse proxy) rather
-than only `127.0.0.1`/`localhost`, set `MCP_ALLOWED_HOSTS` (and optionally
-`MCP_ALLOWED_ORIGINS`) to enable DNS-rebinding protection and allow that Host
-header, e.g. `MCP_ALLOWED_HOSTS=mcp.example.com`. Comma-separated; supports a
-`:*` suffix to allow any port. Left unset, DNS-rebinding protection stays off
-(the historical default).
+than only `127.0.0.1`/`localhost`, set `MCP_ALLOWED_HOSTS` to the Host headers
+to accept, e.g. `MCP_ALLOWED_HOSTS=mcp.example.com`, and `MCP_ALLOWED_ORIGINS`
+to any browser origins that may call the server. Each replaces the local
+default list. Comma-separated; supports a `:*` suffix to allow any port.
 
 Prefer `http` when more than one MCP client (or many coding-agent sessions)
 will use the server: a single long-lived process holds one Telegram
@@ -822,9 +828,11 @@ From an MCP client configuration, you can pass roots via `env` or as arguments a
 To restrict AI agents or MCP clients to specific chats only (preventing access to all private or corporate conversations), configure `TELEGRAM_ALLOWED_CHAT_IDS`:
 
 ```env
-# Comma-separated list of allowed chat IDs, supergroup IDs, or usernames
-TELEGRAM_ALLOWED_CHAT_IDS=12345678,-100123456789,@allowed_channel
+# Comma-separated list of allowed chat IDs (marked form) or usernames
+TELEGRAM_ALLOWED_CHAT_IDS=12345678,-100123456789,-4567,@allowed_channel
 ```
+
+Numeric IDs are matched exactly in Telegram's marked form, the same `chat_id` the tools return: a user is `12345678`, a basic group `-4567`, a channel or supergroup `-100123456789`. Users, basic groups and channels have separate ID namespaces, so the same bare number can be three unrelated chats; an entry is never widened to another type (allowing channel `-100123456789` does not allow user `123456789`). Write groups and channels with their `-`/`-100` prefix: a bare positive number only ever means a user.
 
 When `TELEGRAM_ALLOWED_CHAT_IDS` is set:
 - **`list_chats` / `get_chats`:** Only chats matching the allowlist are returned; all other conversations remain completely invisible to the agent.
