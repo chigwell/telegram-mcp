@@ -525,3 +525,45 @@ async def test_transcribe_voice_openai_caches_under_its_own_engine(
     assert result["text"] == "openai text"
     assert result["source"] == "openai"
     assert transcription.get_cached_transcript(1, 5, source="openai")["text"] == "openai text"
+
+
+@pytest.mark.asyncio
+async def test_transcribe_voice_gemini_without_api_key(monkeypatch, transcript_cache_dir):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE", "on-demand")
+    entity = SimpleNamespace()
+    client = _FakeClient(messages_by_id={5: _voice_msg(id=5)})
+    _patch_client(monkeypatch, client, entity, 1)
+
+    result = await messages.transcribe_voice(
+        chat_id=1, message_id=5, engine="gemini", account=None
+    )
+
+    assert "GEMINI_API_KEY" in result
+    assert client.download_calls == [], "downloaded a recording the engine could not transcribe"
+
+
+@pytest.mark.asyncio
+async def test_transcribe_voice_gemini_caches_under_its_own_engine(
+    monkeypatch, transcript_cache_dir
+):
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE", "on-demand")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    transcription.save_transcript(1, 5, "telegram", "native text")
+    monkeypatch.setattr(
+        transcription,
+        "transcribe",
+        _async_return({"status": "ok", "text": "gemini text", "lang": "ru"}),
+    )
+    entity = SimpleNamespace()
+    client = _FakeClient(messages_by_id={5: _voice_msg(id=5)})
+    _patch_client(monkeypatch, client, entity, 1)
+
+    result = json.loads(
+        await messages.transcribe_voice(chat_id=1, message_id=5, engine="Gemini", account=None)
+    )
+
+    assert result["text"] == "gemini text"
+    assert result["source"] == "gemini"
+    assert transcription.get_cached_transcript(1, 5, source="gemini")["text"] == "gemini text"
+    assert transcription.get_cached_transcript(1, 5, source="telegram")["text"] == "native text"
