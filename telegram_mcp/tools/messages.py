@@ -621,7 +621,9 @@ async def get_messages(
         )
 
 
-async def _send_rich(cl, entity, text: str, parse_mode: str, reply_to: Optional[int] = None):
+async def _send_rich(
+    cl, entity, text: str, parse_mode: str, reply_to: Optional[int] = None, silent: bool = False
+):
     """Send text as a server-parsed rich message. Returns a JSON result string."""
     import random
 
@@ -637,6 +639,7 @@ async def _send_rich(cl, entity, text: str, parse_mode: str, reply_to: Optional[
                     types.InputReplyToMessage(reply_to_msg_id=reply_to) if reply_to else None
                 ),
                 rich_message=make_rich_input(parse_mode, text),
+                silent=silent,
             )
         )
     except telethon.errors.RPCError as e:
@@ -930,6 +933,7 @@ async def send_message(
     custom_emojis: Optional[List[Dict[str, Any]]] = None,
     account: Optional[str] = None,
     reply_to: Optional[int] = None,
+    silent: bool = False,
 ) -> str:
     """
     Send a message to a specific chat.
@@ -966,6 +970,7 @@ async def send_message(
             (it can expire or be bought at any time).
         reply_to: Optional id of a message in the same chat to reply to. To post
             in a forum topic, pass the topic id (from list_topics).
+        silent: Send without a notification sound (default False).
     """
     try:
         cl = get_client(account)
@@ -985,7 +990,9 @@ async def send_message(
         if conflict:
             return conflict
         if parse_mode and parse_mode.lower() in RICH_PARSE_MODES:
-            return await _send_rich(cl, entity, message, parse_mode.lower(), reply_to=reply_to)
+            return await _send_rich(
+                cl, entity, message, parse_mode.lower(), reply_to=reply_to, silent=silent
+            )
         if format_date or custom_emojis:
             entities, error = _plain_entities(message, format_date, custom_emojis)
             if error:
@@ -1001,13 +1008,16 @@ async def send_message(
                         types.InputReplyToMessage(reply_to_msg_id=reply_to) if reply_to else None
                     ),
                     entities=entities,
+                    silent=silent,
                 )
             )
             return _sent_result(_first_sent_message_id(result))
-        sent = await cl.send_message(entity, message, parse_mode=parse_mode, reply_to=reply_to)
+        sent = await cl.send_message(
+            entity, message, parse_mode=parse_mode, reply_to=reply_to, silent=silent
+        )
         return _sent_result(sent)
     except Exception as e:
-        return log_and_format_error("send_message", e, chat_id=chat_id)
+        return log_and_format_error("send_message", e, chat_id=chat_id, silent=silent)
 
 
 def _first_sent_message_id(result) -> Optional[int]:
@@ -1052,6 +1062,7 @@ async def send_scheduled_message(
     schedule_date: Union[str, int],
     parse_mode: Optional[str] = None,
     account: Optional[str] = None,
+    silent: bool = False,
 ) -> str:
     """
     Schedule a message to be sent at a future time.
@@ -1061,6 +1072,7 @@ async def send_scheduled_message(
         schedule_date: When to send the message. Either an ISO-8601 string
             (e.g. "2026-05-01T14:30:00" or "2026-05-01T14:30:00Z") or a Unix
             timestamp (int). Naive datetimes are treated as UTC.
+        silent: Send without a notification sound when the scheduled message is delivered.
         parse_mode: Optional formatting mode. Use 'html' for HTML tags (<b>, <i>,
             <code>, <pre>, <a href="...">), 'md' or 'markdown' for Markdown (**bold**,
             __italic__, `code`, ```pre```), or 'plain' to send the text verbatim.
@@ -1081,7 +1093,7 @@ async def send_scheduled_message(
             return schedule_error
 
         entity = await resolve_entity(chat_id, cl)
-        kwargs = {"schedule": dt}
+        kwargs = {"schedule": dt, "silent": silent}
         if parse_mode is not None:
             # Omitted parse_mode keeps Telethon's client default (Markdown) for
             # backward compatibility; 'plain' maps to None, which disables parsing.
@@ -1091,7 +1103,11 @@ async def send_scheduled_message(
         return f"Scheduled message {message_id} for {dt.isoformat()} in chat {chat_id}."
     except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
         return log_and_format_error(
-            "send_scheduled_message", e, chat_id=chat_id, schedule_date=str(schedule_date)
+            "send_scheduled_message",
+            e,
+            chat_id=chat_id,
+            schedule_date=str(schedule_date),
+            silent=silent,
         )
     except telethon.errors.rpcerrorlist.ScheduleDateTooLateError as e:
         return log_and_format_error(
@@ -2020,6 +2036,7 @@ async def forward_messages(
     message_ids: List[int],
     to_chat_id: Union[int, str],
     account: Optional[str] = None,
+    silent: bool = False,
 ) -> str:
     """
     Forward a BATCH of messages from a source chat to a destination chat in
@@ -2041,6 +2058,7 @@ async def forward_messages(
             (e.g. [12345, 12346]). Must contain at least one id.
         to_chat_id: Destination chat (id or @username).
         account: Optional account label for multi-account mode.
+        silent: Send without a notification sound (default False).
     """
     try:
         if not message_ids:
@@ -2048,7 +2066,7 @@ async def forward_messages(
         cl = get_client(account)
         from_entity = await resolve_entity(from_chat_id, cl)
         to_entity = await resolve_entity(to_chat_id, cl)
-        await cl.forward_messages(to_entity, list(message_ids), from_entity)
+        await cl.forward_messages(to_entity, list(message_ids), from_entity, silent=silent)
         return f"{len(message_ids)} messages forwarded from " f"{from_chat_id} to {to_chat_id}."
     except Exception as e:
         return log_and_format_error(
@@ -2057,6 +2075,7 @@ async def forward_messages(
             from_chat_id=from_chat_id,
             message_ids=message_ids,
             to_chat_id=to_chat_id,
+            silent=silent,
         )
 
 
@@ -2579,6 +2598,7 @@ async def reply_to_message(
     format_date: Optional[str] = None,
     custom_emojis: Optional[List[Dict[str, Any]]] = None,
     account: Optional[str] = None,
+    silent: bool = False,
 ) -> str:
     """
     Reply to a specific message in a chat.
@@ -2604,6 +2624,7 @@ async def reply_to_message(
             'html', or 'rich'/'rich_markdown'/'rich_html' for full server-side formatting
             (tables, headings, formulas; REQUIRES Telegram Premium — without it nothing is
             sent and a structured telegram_premium_required result is returned).
+        silent: Send without a notification sound (default False).
     """
     try:
         cl = get_client(account)
@@ -2612,7 +2633,9 @@ async def reply_to_message(
         if conflict:
             return conflict
         if parse_mode and parse_mode.lower() in RICH_PARSE_MODES:
-            return await _send_rich(cl, entity, text, parse_mode.lower(), reply_to=message_id)
+            return await _send_rich(
+                cl, entity, text, parse_mode.lower(), reply_to=message_id, silent=silent
+            )
         if format_date or custom_emojis:
             entities, error = _plain_entities(text, format_date, custom_emojis)
             if error:
@@ -2626,14 +2649,22 @@ async def reply_to_message(
                     random_id=random.randint(0, 2**62),
                     reply_to=types.InputReplyToMessage(reply_to_msg_id=message_id),
                     entities=entities,
+                    silent=silent,
                 )
             )
             return f"Replied to message {message_id} in chat {chat_id}."
-        await cl.send_message(entity, text, reply_to=message_id, parse_mode=parse_mode)
+        await cl.send_message(
+            entity, text, reply_to=message_id, parse_mode=parse_mode, silent=silent
+        )
         return f"Replied to message {message_id} in chat {chat_id}."
     except Exception as e:
         return log_and_format_error(
-            "reply_to_message", e, chat_id=chat_id, message_id=message_id, text=text
+            "reply_to_message",
+            e,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            silent=silent,
         )
 
 

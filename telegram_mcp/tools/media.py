@@ -233,6 +233,7 @@ async def send_file(
     custom_emojis: Optional[List[Dict[str, Any]]] = None,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
+    silent: bool = False,
 ) -> str:
     """
     Send a file to a chat.
@@ -247,6 +248,7 @@ async def send_file(
         file_path: Absolute or relative path to the file under allowed roots.
             Pass a list of 2-10 paths to send them as one Telegram media group.
         caption: Optional caption for the file or media group.
+        silent: Send without a notification sound (default False).
         topic_id: Optional forum topic ID (from list_topics). Sends into that topic
             in a forum-enabled community/supergroup. Also works as reply_to for a message.
         schedule_date: Optional. When set, the file is placed in the chat's
@@ -281,6 +283,7 @@ async def send_file(
                 custom_emojis=custom_emojis,
                 ctx=ctx,
                 account=account,
+                silent=silent,
             )
 
         dt = None
@@ -315,6 +318,7 @@ async def send_file(
             schedule=dt,
             **send_kwargs,
             **caption_kwargs,
+            silent=silent,
         )
         if dt:
             return f"File from {safe_path} scheduled for {dt.isoformat()} in chat {chat_id}."
@@ -331,6 +335,7 @@ async def send_file(
             force_document=force_document,
             parse_mode=parse_mode,
             custom_emojis=custom_emojis,
+            silent=silent,
         )
 
 
@@ -345,6 +350,7 @@ async def _send_album(
     custom_emojis: Optional[List[Dict[str, Any]]] = None,
     ctx: Optional[Context] = None,
     account: str = None,
+    silent: bool = False,
 ) -> str:
     if not 2 <= len(file_paths) <= 10:
         return "Albums must contain between 2 and 10 files."
@@ -387,6 +393,7 @@ async def _send_album(
             schedule=dt,
             **_force_document_kwargs(force_document),
             **caption_kwargs,
+            silent=silent,
         )
     else:
         media_items = []
@@ -401,6 +408,7 @@ async def _send_album(
             reply_to=topic_id,
             schedule=dt,
             **caption_kwargs,
+            silent=silent,
         )
     if dt:
         return (
@@ -635,6 +643,7 @@ async def send_voice(
     topic_id: Optional[int] = None,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
+    silent: bool = False,
 ) -> str:
     """
     Send a voice message to a chat. File must be an OGG/OPUS voice note.
@@ -644,6 +653,7 @@ async def send_voice(
         file_path: Absolute or relative path under allowed roots to the OGG/OPUS file.
         topic_id: Optional forum topic ID (from list_topics). Sends into that topic
             in a forum-enabled community/supergroup. Also works as reply_to for a message.
+        silent: Send without a notification sound (default False).
     """
     try:
         cl = get_client(account)
@@ -667,11 +677,18 @@ async def send_voice(
             return "Voice file must be .ogg or .opus format."
 
         entity = await resolve_entity(chat_id, cl)
-        await cl.send_file(entity, str(safe_path), voice_note=True, reply_to=topic_id)
+        await cl.send_file(
+            entity, str(safe_path), voice_note=True, reply_to=topic_id, silent=silent
+        )
         return f"Voice message sent to chat {chat_id} from {safe_path}."
     except Exception as e:
         return log_and_format_error(
-            "send_voice", e, chat_id=chat_id, file_path=file_path, topic_id=topic_id
+            "send_voice",
+            e,
+            chat_id=chat_id,
+            file_path=file_path,
+            topic_id=topic_id,
+            silent=silent,
         )
 
 
@@ -778,6 +795,7 @@ async def send_sticker(
     topic_id: Optional[int] = None,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
+    silent: bool = False,
 ) -> str:
     """
     Send a sticker to a chat. File must be a valid .webp sticker file.
@@ -787,6 +805,7 @@ async def send_sticker(
         file_path: Absolute or relative path under allowed roots to the .webp sticker file.
         topic_id: Optional forum topic ID (from list_topics). Sends into that topic
             in a forum-enabled community/supergroup. Also works as reply_to for a message.
+        silent: Send without a notification sound (default False).
     """
     try:
         cl = get_client(account)
@@ -799,11 +818,18 @@ async def send_sticker(
             return path_error
 
         entity = await resolve_entity(chat_id, cl)
-        await cl.send_file(entity, str(safe_path), force_document=False, reply_to=topic_id)
+        await cl.send_file(
+            entity, str(safe_path), force_document=False, reply_to=topic_id, silent=silent
+        )
         return f"Sticker sent to chat {chat_id} from {safe_path}."
     except Exception as e:
         return log_and_format_error(
-            "send_sticker", e, chat_id=chat_id, file_path=file_path, topic_id=topic_id
+            "send_sticker",
+            e,
+            chat_id=chat_id,
+            file_path=file_path,
+            topic_id=topic_id,
+            silent=silent,
         )
 
 
@@ -869,6 +895,7 @@ async def send_gif(
     gif_id: int,
     topic_id: Optional[int] = None,
     account: Optional[str] = None,
+    silent: bool = False,
 ) -> str:
     """
     Send a GIF to a chat by Telegram GIF document ID (not a file path).
@@ -879,6 +906,7 @@ async def send_gif(
             saved in the account).
         topic_id: Optional forum topic ID (from list_topics). Sends into that topic
             in a forum-enabled community/supergroup. Also works as reply_to for a message.
+        silent: Send without a notification sound (default False).
     """
     try:
         cl = get_client(account)
@@ -894,11 +922,16 @@ async def send_gif(
                 f"GIF {gif_id} is unknown to this session. Run get_gif_search "
                 "first and use an ID from its result."
             )
-        await cl.send_file(entity, gif, reply_to=topic_id)
+        await cl.send_file(entity, gif, reply_to=topic_id, silent=silent)
         return f"GIF sent to chat {chat_id}."
     except Exception as e:
         return log_and_format_error(
-            "send_gif", e, chat_id=chat_id, gif_id=gif_id, topic_id=topic_id
+            "send_gif",
+            e,
+            chat_id=chat_id,
+            gif_id=gif_id,
+            topic_id=topic_id,
+            silent=silent,
         )
 
 
