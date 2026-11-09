@@ -593,7 +593,9 @@ async def get_messages(
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
 
-        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+        if (is_chat_allowlist_enabled() or is_chat_blocklist_enabled()) and not is_chat_allowed(
+            chat_id, entity
+        ):
             err = check_chat_access(chat_id, entity)
             return log_and_format_error(
                 "get_messages",
@@ -971,7 +973,9 @@ async def send_message(
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
 
-        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+        if (is_chat_allowlist_enabled() or is_chat_blocklist_enabled()) and not is_chat_allowed(
+            chat_id, entity
+        ):
             err = check_chat_access(chat_id, entity)
             return log_and_format_error(
                 "send_message",
@@ -2490,7 +2494,9 @@ async def send_typing(
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
 
-        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+        if (is_chat_allowlist_enabled() or is_chat_blocklist_enabled()) and not is_chat_allowed(
+            chat_id, entity
+        ):
             err = check_chat_access(chat_id, entity)
             return log_and_format_error(
                 "send_typing",
@@ -2860,7 +2866,14 @@ async def search_global(
         records = []
         for msg, chat in page_messages:
             chat_id = utils.get_peer_id(msg.peer_id)
-            if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, chat):
+            if chat is None and any(isinstance(x, str) for x in get_blocked_chat_ids()):
+                try:
+                    chat = await resolve_entity(chat_id, cl)
+                except Exception:
+                    warn_unchecked_blocked_username()
+            if (
+                is_chat_allowlist_enabled() or is_chat_blocklist_enabled()
+            ) and not is_chat_allowed(chat_id, chat):
                 continue
             chat_name = (
                 getattr(chat, "title", None) or getattr(chat, "first_name", "") or str(chat_id)
@@ -3109,7 +3122,9 @@ async def create_poll(
         await ensure_connected(cl)
         entity = await resolve_entity(chat_id, cl)
 
-        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+        if (is_chat_allowlist_enabled() or is_chat_blocklist_enabled()) and not is_chat_allowed(
+            chat_id, entity
+        ):
             err = check_chat_access(chat_id, entity)
             return log_and_format_error(
                 "create_poll",
@@ -3186,7 +3201,9 @@ async def vote_poll(
 
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
-        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+        if (is_chat_allowlist_enabled() or is_chat_blocklist_enabled()) and not is_chat_allowed(
+            chat_id, entity
+        ):
             raise ChatAccessDeniedError(check_chat_access(chat_id, entity))
 
         message = await cl.get_messages(entity, ids=message_id)
@@ -3486,11 +3503,28 @@ async def get_drafts(account: Optional[str] = None) -> str:
                             peer_id = -1000000000000 - peer.channel_id
 
                     if (
-                        is_chat_allowlist_enabled()
-                        and peer_id is not None
-                        and not is_chat_allowed(peer_id)
-                    ):
-                        continue
+                        is_chat_allowlist_enabled() or is_chat_blocklist_enabled()
+                    ) and peer_id is not None:
+                        chat = next(
+                            (
+                                entity
+                                for entity in [
+                                    *getattr(result, "users", []),
+                                    *getattr(result, "chats", []),
+                                ]
+                                if get_marked_id(entity) == peer_id
+                            ),
+                            None,
+                        )
+                        if chat is None and any(
+                            isinstance(x, str) for x in get_blocked_chat_ids()
+                        ):
+                            try:
+                                chat = await resolve_entity(peer_id, cl)
+                            except Exception:
+                                warn_unchecked_blocked_username()
+                        if not is_chat_allowed(peer_id, chat):
+                            continue
 
                     draft_data = {
                         "peer_id": peer_id,
@@ -3562,6 +3596,29 @@ async def clear_draft(chat_id: Union[int, str], account: Optional[str] = None) -
         return log_and_format_error("clear_draft", e, chat_id=chat_id)
 
 
+async def _blocked_prior_export(prior, client) -> bool:
+    """Refuse to rewrite a prior export containing a now-blocked chat."""
+    if not is_chat_blocklist_enabled():
+        return False
+    chats = prior.get("chats", {}) if isinstance(prior, dict) else {}
+    if not isinstance(chats, dict):
+        return False
+    has_handles = any(isinstance(item, str) for item in get_blocked_chat_ids())
+    for key, record in chats.items():
+        identifier = record.get("chat_id", key) if isinstance(record, dict) else key
+        if is_chat_blocked(identifier):
+            return True
+        if has_handles:
+            try:
+                entity = await resolve_entity(identifier, client)
+            except Exception:
+                warn_unchecked_blocked_username()
+                continue
+            if is_chat_blocked(identifier, entity):
+                return True
+    return False
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Export Unread Messages",
@@ -3620,6 +3677,11 @@ async def export_unread_messages(
             except (json.JSONDecodeError, OSError):
                 prior = {}
 
+        if await _blocked_prior_export(prior, cl):
+            return (
+                "Existing export contains a blocked chat; no file was changed. "
+                "Use another output path or set resume=false to create a new export."
+            )
         result: dict = dict(prior)
         result.setdefault("chats", {})
 
@@ -3627,7 +3689,7 @@ async def export_unread_messages(
 
         for raw_id in chat_ids:
             # Allowlist check
-            if is_chat_allowlist_enabled():
+            if is_chat_allowlist_enabled() or is_chat_blocklist_enabled():
                 entity_check = await resolve_entity(raw_id, cl)
                 if not is_chat_allowed(raw_id, entity_check):
                     err = check_chat_access(raw_id, entity_check)
@@ -3790,6 +3852,11 @@ async def export_chat_history(
             except (json.JSONDecodeError, OSError):
                 prior = {}
 
+        if await _blocked_prior_export(prior, cl):
+            return (
+                "Existing export contains a blocked chat; no file was changed. "
+                "Use another output path or set resume=false to create a new export."
+            )
         result: dict = dict(prior)
         result.setdefault("chats", {})
 
@@ -3799,7 +3866,7 @@ async def export_chat_history(
 
         for raw_id in chat_list:
             # Allowlist check
-            if is_chat_allowlist_enabled():
+            if is_chat_allowlist_enabled() or is_chat_blocklist_enabled():
                 entity_check = await resolve_entity(raw_id, cl)
                 if not is_chat_allowed(raw_id, entity_check):
                     err = check_chat_access(raw_id, entity_check)

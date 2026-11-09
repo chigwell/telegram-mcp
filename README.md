@@ -843,6 +843,28 @@ When `TELEGRAM_ALLOWED_CHAT_IDS` is set:
 
 If `TELEGRAM_ALLOWED_CHAT_IDS` is unset or empty, the server operates in unrestricted mode (default), preserving 100% backward compatibility.
 
+### Global chat blocklist
+
+Set `TELEGRAM_BLOCKED_CHAT_IDS` to a comma-separated list of marked chat IDs
+and/or usernames to exclude chats across all configured accounts:
+
+```env
+TELEGRAM_BLOCKED_CHAT_IDS=-100123456789,-4567,12345678,@unwanted_bot
+```
+
+The blocklist takes precedence over `TELEGRAM_ALLOWED_CHAT_IDS`. Direct operations
+on blocked chats are refused and blocked chats are filtered from aggregate results
+and events. A bot's username blocks its own chat, not messages it posts elsewhere.
+IDs are exact, including the `-` or `-100` prefix; usernames are case-insensitive.
+Prefer numeric IDs for reliable blocking: usernames can change, and if a username
+cannot be checked, the operation proceeds with a warning in the server log and
+tool response. Warnings are returned as an additional MCP text content item;
+the original JSON result is unchanged. Complete folder snapshots and updates
+are unavailable while a blocklist is active, since they can expose or change
+blocked peers. Incremental folder operations remain available for permitted chats.
+Resuming an existing export that contains a blocked chat is refused without
+changing the file; choose another output path or disable resume.
+
 ## Deletion Audit Log (Recent Actions for Private Chats)
 
 To maintain an immutable, local audit trail for destructive actions (e.g. tracking when and how messages were deleted without exposing message text), the server writes an append-only JSONL log (closes #321):

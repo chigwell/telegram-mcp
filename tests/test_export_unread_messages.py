@@ -339,3 +339,17 @@ async def test_export_relative_path_resolves_under_first_root(tmp_path, monkeypa
     out = tmp_path / "exports" / "out.json"
     assert out.exists()
     assert summary["output_path"] == str(out.resolve())
+
+
+@pytest.mark.asyncio
+async def test_resume_refuses_existing_blocked_chat_without_writing(monkeypatch, tmp_path):
+    client = FakeExportClient()
+    _patch_export(monkeypatch, client, tmp_path)
+    monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "42")
+    out = tmp_path / "old.json"
+    original = json.dumps({"chats": {"42": {"chat_id": 42, "messages": ["old"]}}})
+    out.write_text(original)
+    result = await messages.export_unread_messages(chat_ids=[7], output_path=str(out))
+    assert "blocked chat" in result
+    assert out.read_text() == original
+    assert not client.get_messages_calls
