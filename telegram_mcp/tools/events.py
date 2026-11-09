@@ -390,16 +390,12 @@ async def _on_message_event(event, account: Optional[str] = None) -> None:
         # Cached chat entity (no request); kept so reads apply username and
         # marked-id allowlist entries exactly as this check does.
         chat = getattr(event, "chat", None)
-        username_unchecked = False
         if is_chat_allowlist_enabled() or is_chat_blocklist_enabled():
             if chat is None and any(isinstance(x, str) for x in get_blocked_chat_ids()):
                 try:
                     chat = await event.get_chat()
                 except Exception:
                     pass
-                if chat is None:
-                    warn_unchecked_blocked_username()
-                    username_unchecked = True
             if is_chat_blocked(chat_id, chat):
                 return
             if not is_chat_allowed(chat_id, chat):
@@ -433,7 +429,6 @@ async def _on_message_event(event, account: Optional[str] = None) -> None:
                 "reply_to": message_reply_id(msg),
                 "service": getattr(msg, "action", None) is not None,
                 "date": _iso_utc(getattr(msg, "date", None)),
-                "privacy_warnings": ([_USERNAME_CHECK_WARNING] if username_unchecked else None),
                 "_chat": chat,
             }
         )

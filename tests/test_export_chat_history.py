@@ -237,17 +237,3 @@ async def test_export_chat_history_multiple_chats(monkeypatch, tmp_path):
         data = json.load(f)
     assert "2001" in data["chats"]
     assert "2002" in data["chats"]
-
-
-@pytest.mark.asyncio
-async def test_resume_refuses_existing_blocked_chat_without_writing(monkeypatch, tmp_path):
-    client = FakeChatHistoryClient()
-    _patch_export(monkeypatch, client, tmp_path)
-    monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "42")
-    out = tmp_path / "old.json"
-    original = json.dumps({"chats": {"42": {"chat_id": 42, "messages": ["old"]}}})
-    out.write_text(original)
-    result = await messages.export_chat_history(chat_id=7, output_path=str(out))
-    assert "blocked chat" in result
-    assert out.read_text() == original
-    assert not client.get_messages_calls

@@ -852,18 +852,18 @@ and/or usernames to exclude chats across all configured accounts:
 TELEGRAM_BLOCKED_CHAT_IDS=-100123456789,-4567,12345678,@unwanted_bot
 ```
 
-The blocklist takes precedence over `TELEGRAM_ALLOWED_CHAT_IDS`. Direct operations
-on blocked chats are refused and blocked chats are filtered from aggregate results
-and events. A bot's username blocks its own chat, not messages it posts elsewhere.
+The blocklist takes precedence over `TELEGRAM_ALLOWED_CHAT_IDS` for data returned
+to the agent. Messages from blocked chats are filtered from results and events;
+forwarding messages from those chats is also blocked. Other actions are not
+restricted by the blocklist. A bot's username blocks its own chat, not messages it
+posts elsewhere.
 IDs are exact, including the `-` or `-100` prefix; usernames are case-insensitive.
-Prefer numeric IDs for reliable blocking: usernames can change, and if a username
-cannot be checked, the operation proceeds with a warning in the server log and
-tool response. Warnings are returned as an additional MCP text content item;
-the original JSON result is unchanged. Complete folder snapshots and updates
-are unavailable while a blocklist is active, since they can expose or change
-blocked peers. Incremental folder operations remain available for permitted chats.
-Resuming an existing export that contains a blocked chat is refused without
-changing the file; choose another output path or disable resume.
+Prefer numeric IDs for reliable blocking: usernames can change, and chats whose
+username cannot be checked may still appear in results. Existing export files are
+not filtered retroactively. Complete folder snapshots remain unavailable when a
+blocklist is active because they contain unfiltered chat identifiers.
+Global-search cursors keep Telegram's original Base64-encoded offsets and may
+contain a blocked chat's ID and access hash, but not message text.
 
 ## Deletion Audit Log (Recent Actions for Private Chats)
 

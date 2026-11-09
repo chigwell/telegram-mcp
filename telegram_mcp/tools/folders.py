@@ -328,8 +328,6 @@ async def update_folder(
                 raise _FolderValidationError("Error: title_entities must be a list.")
         if is_chat_allowlist_enabled():
             return "Error: complete folder updates are unavailable with a chat allowlist."
-        if is_chat_blocklist_enabled():
-            return "Error: complete folder updates are unavailable with a chat blocklist."
         cl = get_client(account)
         result = await cl(functions.messages.GetDialogFiltersRequest())
         target = next((f for f in result.filters if getattr(f, "id", None) == folder_id), None)
@@ -521,8 +519,6 @@ def _hidden_unknown_peer(peer) -> bool:
         peer_id = None
     if is_chat_blocked(peer_id) or is_chat_allowlist_enabled():
         return True
-    if any(isinstance(x, str) for x in get_blocked_chat_ids()):
-        warn_unchecked_blocked_username()
     return False
 
 
@@ -714,28 +710,12 @@ async def create_folder(
                     peer = await resolve_input_entity(chat_id, cl)
                 except Exception:
                     return "Failed to resolve a requested chat."
-                entity = None
-                if any(isinstance(x, str) for x in get_blocked_chat_ids()):
-                    try:
-                        entity = await resolve_entity(chat_id, cl)
-                    except Exception:
-                        warn_unchecked_blocked_username()
-                # Saved Messages (InputPeerSelf) is the account's own chat: no allowlist
-                # check, and utils.get_peer_id() cannot cast that peer anyway.
                 if (
-                    (is_chat_allowlist_enabled() or is_chat_blocklist_enabled())
+                    is_chat_allowlist_enabled()
                     and not isinstance(peer, types.InputPeerSelf)
-                    and (
-                        is_chat_blocked(chat_id, entity)
-                        or is_chat_blocked(utils.get_peer_id(peer))
-                        or not (
-                            is_chat_allowed(chat_id) or is_chat_allowed(utils.get_peer_id(peer))
-                        )
-                    )
+                    and not (is_chat_allowed(chat_id) or is_chat_allowed(utils.get_peer_id(peer)))
                 ):
-                    return check_chat_access(chat_id, entity) or check_chat_access(
-                        utils.get_peer_id(peer)
-                    )
+                    return check_chat_access(chat_id)
                 include_peers.append(peer)
 
         # Create the folder (title must be TextWithEntities)

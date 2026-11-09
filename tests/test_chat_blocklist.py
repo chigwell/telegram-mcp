@@ -35,48 +35,22 @@ async def test_resolved_target_is_checked_before_call(monkeypatch, blocked, targ
     monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", blocked)
     monkeypatch.setattr(runtime, "get_client", lambda account=None: object())
 
-    async def resolve(identifier, client):
+    async def resolve(getter, identifier, client, label, try_marked=True):
         return User(id=42, username="hidden")
 
-    monkeypatch.setattr(runtime, "resolve_entity", resolve)
+    monkeypatch.setattr(runtime, "_resolve_with_retries", resolve)
     called = False
 
     @runtime.validate_id("chat_id")
     async def tool(chat_id, account=None):
         nonlocal called
+        await runtime.resolve_entity(chat_id, object())
         called = True
         return "ok"
 
-    response = await tool(chat_id=target)
-    assert "TELEGRAM_BLOCKED_CHAT_IDS" in response
+    with pytest.raises(runtime.ChatAccessDeniedError):
+        await tool(chat_id=target)
     assert not called
-
-
-@pytest.mark.asyncio
-async def test_unresolved_username_check_reports_warning(monkeypatch):
-    logged = []
-    monkeypatch.setattr(runtime.logger, "warning", logged.append)
-    monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "@hidden")
-    monkeypatch.setattr(runtime, "get_client", lambda account=None: object())
-
-    async def resolve(identifier, client):
-        raise ValueError("not cached")
-
-    monkeypatch.setattr(runtime, "resolve_entity", resolve)
-
-    @runtime.with_account(readonly=True)
-    @runtime.validate_id("chat_id")
-    async def tool(chat_id, account=None):
-        return json.dumps({"chat_id": chat_id})
-
-    result = await tool(chat_id=42)
-    response = json.loads(result.content[0].text)
-    assert response["chat_id"] == 42
-    assert "blocked username could not be checked" in result.content[1].text
-    assert result.structuredContent == {"result": result.content[0].text}
-    metadata = runtime.mcp._tool_manager.get_tool("get_messages").fn_metadata
-    assert metadata.convert_result(result) == result
-    assert "blocked username could not be checked" in logged[0]
 
 
 @pytest.mark.asyncio
@@ -90,6 +64,10 @@ async def test_list_chats_hides_blocked_username_for_each_account(monkeypatch):
     class Client:
         async def get_dialogs(self, *args, **kwargs):
             return dialogs
+
+        async def iter_dialogs(self, *args, **kwargs):
+            for dialog in dialogs:
+                yield dialog
 
     async def connected(client):
         pass
@@ -132,51 +110,25 @@ async def test_event_for_blocked_chat_is_not_recorded(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_retry_resolves_blocked_entity_before_action(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "42")
-    client = object()
-    monkeypatch.setattr(runtime, "get_client", lambda account=None: client)
-    attempts = 0
-
-    async def resolve_with_retries(getter, identifier, cl, label, try_marked=True):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise ValueError("temporarily unavailable")
-        return User(id=42, username="hidden")
-
-    monkeypatch.setattr(runtime, "_resolve_with_retries", resolve_with_retries)
-    called = False
-
-    @runtime.validate_id("chat_id")
-    async def tool(chat_id, account=None):
-        nonlocal called
-        await runtime.resolve_entity(chat_id, client)
-        called = True
-
-    with pytest.raises(runtime.ChatAccessDeniedError):
-        await tool(chat_id="@hidden")
-    assert not called
-
-
-@pytest.mark.asyncio
 async def test_positive_id_resolving_to_blocked_channel(monkeypatch):
     from telethon.tl.types import Channel
 
     monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "-1000000000042")
     monkeypatch.setattr(runtime, "get_client", lambda account=None: object())
 
-    async def resolve(identifier, client):
+    async def resolve(getter, identifier, client, label, try_marked=True):
         return Channel(id=42, title="Blocked", photo=None, date=None)
 
-    monkeypatch.setattr(runtime, "resolve_entity", resolve)
+    monkeypatch.setattr(runtime, "_resolve_with_retries", resolve)
 
     @runtime.validate_id("chat_id")
     async def tool(chat_id, account=None):
-        return "should not run"
+        return await runtime.resolve_entity(chat_id, object())
 
-    assert "TELEGRAM_BLOCKED_CHAT_IDS" in await tool(chat_id=42)
-    assert "TELEGRAM_BLOCKED_CHAT_IDS" in await tool(42)
+    with pytest.raises(runtime.ChatAccessDeniedError):
+        await tool(chat_id=42)
+    with pytest.raises(runtime.ChatAccessDeniedError):
+        await tool(42)
 
 
 @pytest.mark.asyncio
@@ -222,3 +174,142 @@ async def test_folder_snapshot_explains_blocklist(monkeypatch):
 
     monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "42")
     assert "blocklist" in await folders.get_folder_snapshot(account="default")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["join_chat_by_link", "import_chat_invite"])
+async def test_invite_does_not_expose_blocked_chat(monkeypatch, tool_name):
+    from telethon.tl import functions, types
+    from telegram_mcp.tools import groups
+
+    monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "-1000000000042")
+    chat = types.Channel(id=42, title="Hidden", photo=types.ChatPhotoEmpty(), date=None)
+    requests = []
+
+    class Client:
+        async def __call__(self, request):
+            requests.append(request)
+            return SimpleNamespace(chat=chat)
+
+    async def connected(client):
+        pass
+
+    monkeypatch.setattr(groups, "get_client", lambda account=None: Client())
+    monkeypatch.setattr(groups, "ensure_connected", connected)
+    tool = getattr(groups, tool_name)
+    result = await tool(
+        **({"link": "+hash"} if tool_name == "join_chat_by_link" else {"hash": "hash"})
+    )
+    assert "Hidden" not in result
+    assert not any(isinstance(r, functions.messages.ImportChatInviteRequest) for r in requests)
+
+
+@pytest.mark.asyncio
+async def test_list_chats_fetches_past_blocked_dialogs(monkeypatch):
+    from telegram_mcp.tools import chats
+
+    monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "1,2")
+    dialogs = [
+        SimpleNamespace(entity=User(id=i, first_name=f"user{i}"), unread_count=0)
+        for i in (1, 2, 3, 4)
+    ]
+    visited = []
+
+    class Client:
+        async def iter_dialogs(self, **kwargs):
+            for dialog in dialogs:
+                visited.append(dialog.entity.id)
+                yield dialog
+
+    async def connected(client):
+        pass
+
+    monkeypatch.setattr(chats, "get_client", lambda account=None: Client())
+    monkeypatch.setattr(chats, "ensure_connected", connected)
+    result = json.loads(await chats.list_chats(limit=1))
+    assert [r["chat_id"] for r in result["results"]] == [3]
+    assert visited == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_blocklist_filters_reads_but_does_not_block_actions(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "42")
+    actions = []
+
+    @runtime.with_account(readonly=True)
+    @runtime.validate_id("chat_id")
+    async def read(chat_id, account=None):
+        return "secret"
+
+    @runtime.with_account(readonly=False)
+    @runtime.validate_id("chat_id")
+    async def write(chat_id, account=None):
+        actions.append(chat_id)
+        return "done"
+
+    assert "secret" not in await read(chat_id=42)
+    assert "omitted" in await write(chat_id=42)
+    assert actions == [42]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["forward_message", "forward_messages"])
+async def test_forward_from_blocked_chat_is_refused(monkeypatch, tool_name):
+    from telegram_mcp.tools import messages
+
+    monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "@source")
+    calls = []
+
+    class Client:
+        async def forward_messages(self, *args, **kwargs):
+            calls.append(args)
+
+    async def resolve(identifier, client):
+        return User(id=42, username="source") if identifier == 42 else User(id=43)
+
+    monkeypatch.setattr(messages, "get_client", lambda account=None: Client())
+    monkeypatch.setattr(messages, "resolve_entity", resolve)
+    kwargs = {"from_chat_id": 42, "to_chat_id": 43}
+    kwargs["message_id" if tool_name == "forward_message" else "message_ids"] = (
+        1 if tool_name == "forward_message" else [1]
+    )
+    with pytest.raises(runtime.ToolError, match="blocked"):
+        await getattr(messages, tool_name)(**kwargs)
+    assert not calls
+
+
+@pytest.mark.asyncio
+async def test_download_media_from_blocked_chat_is_refused(monkeypatch):
+    from telegram_mcp.tools import media
+
+    monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "42")
+    calls = []
+
+    class Client:
+        async def get_messages(self, *args, **kwargs):
+            calls.append(args)
+
+    monkeypatch.setattr(media, "get_client", lambda account=None: Client())
+    result = await media.download_media(chat_id=42, message_id=1)
+    assert "block" in result.lower()
+    assert not calls
+
+
+@pytest.mark.asyncio
+async def test_forward_to_blocked_destination_is_allowed(monkeypatch):
+    from telegram_mcp.tools import messages
+
+    monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "43")
+    calls = []
+
+    class Client:
+        async def forward_messages(self, *args, **kwargs):
+            calls.append(args)
+
+    async def resolve(identifier, client):
+        return User(id=identifier)
+
+    monkeypatch.setattr(messages, "get_client", lambda account=None: Client())
+    monkeypatch.setattr(messages, "resolve_entity", resolve)
+    await messages.forward_messages(from_chat_id=42, to_chat_id=43, message_ids=[1])
+    assert len(calls) == 1

@@ -32,7 +32,7 @@ from mcp.server.fastmcp import FastMCP, Context, Image
 from mcp.server.fastmcp.exceptions import ToolError
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-from mcp.types import Annotations, CallToolResult, ImageContent, TextContent, ToolAnnotations
+from mcp.types import Annotations, ImageContent, TextContent, ToolAnnotations
 from mcp.shared.exceptions import McpError
 from pythonjsonlogger.json import JsonFormatter
 from telethon import TelegramClient, functions, types, utils
@@ -897,39 +897,11 @@ def is_multi_mode() -> bool:
     return len(clients) > 1
 
 
-_chat_policy_warnings: ContextVar = ContextVar("chat_policy_warnings", default=None)
 _chat_policy_targets: ContextVar = ContextVar("chat_policy_targets", default=())
-_USERNAME_CHECK_WARNING = (
-    "Warning: a blocked username could not be checked for one or more chats; "
-    "those chats were allowed unless their numeric ID was blocked."
-)
+_chat_policy_action: ContextVar = ContextVar("chat_policy_action", default=None)
 
 
-def warn_unchecked_blocked_username() -> None:
-    logger.warning(_USERNAME_CHECK_WARNING)
-    warnings = _chat_policy_warnings.get()
-    if warnings is not None:
-        warnings.add(_USERNAME_CHECK_WARNING)
-
-
-def _attach_chat_policy_warnings(result, warnings):
-    if not warnings:
-        return result
-    warning = "\n".join(sorted(warnings))
-    if isinstance(result, str):
-        return CallToolResult(
-            content=[
-                TextContent(type="text", text=result),
-                TextContent(type="text", text=warning),
-            ],
-            structuredContent={"result": result},
-        )
-    if isinstance(result, list):
-        return [*result, warning]
-    return [result, warning]
-
-
-def with_account(readonly=False):
+def with_account(readonly=False, *, returns_chat_data=False):
     """Decorator that adds multi-account support to MCP tools.
 
     - In single-mode: always uses the sole client, no output tagging.
@@ -942,60 +914,59 @@ def with_account(readonly=False):
 
     The wrapped function must accept ``account: str = None`` and use
     ``get_client(account)`` internally to obtain the TelegramClient.
+    Set ``returns_chat_data`` for read tools that require an explicit account.
     """
 
     def decorator(fn):
         @wraps(fn)
         async def wrapper(*args, **kwargs):
-            async def call_with_warnings(*call_args, **call_kwargs):
-                warnings = set()
-                token = _chat_policy_warnings.set(warnings)
-                try:
-                    result = await fn(*call_args, **call_kwargs)
-                    return result, warnings
-                finally:
-                    _chat_policy_warnings.reset(token)
+            redaction = None if readonly or returns_chat_data else [False]
+            token = _chat_policy_action.set(redaction)
+            try:
+                account = kwargs.get("account")
 
-            account = kwargs.get("account")
+                # Explicit account OR single-mode -> call once
+                if account is not None or not is_multi_mode():
+                    result = await fn(*args, **kwargs)
+                    if redaction and redaction[0]:
+                        return "Action response omitted because the chat is blocklisted."
+                    return result
 
-            # Explicit account OR single-mode -> call once
-            if account is not None or not is_multi_mode():
-                result, warnings = await call_with_warnings(*args, **kwargs)
-                return _attach_chat_policy_warnings(result, warnings)
+                # account is None AND multi-mode
+                if not readonly:
+                    labels = ", ".join(clients.keys())
+                    return f"Error: 'account' is required. Available accounts: {labels}"
 
-            # account is None AND multi-mode
-            if not readonly:
-                labels = ", ".join(clients.keys())
-                return f"Error: 'account' is required. Available accounts: {labels}"
+                # Read-only fan-out to all accounts concurrently
+                async def _call_for(label):
+                    kw = dict(kwargs)
+                    kw["account"] = label
+                    try:
+                        result = await fn(*args, **kw)
+                        failed = False
+                    except ToolError as error:
+                        result = str(error)
+                        failed = True
+                    return label, result, failed
 
-            # Read-only fan-out to all accounts concurrently
-            async def _call_for(label):
-                kw = dict(kwargs)
-                kw["account"] = label
-                try:
-                    result, warnings = await call_with_warnings(*args, **kw)
-                    failed = False
-                except ToolError as error:
-                    result = str(error)
-                    warnings = set()
-                    failed = True
-                return label, result, failed, warnings
+                results = await asyncio.gather(*(_call_for(label) for label in clients))
+                if all(failed for _, _, failed in results):
+                    raise ToolError(
+                        "\n\n".join(f"[{label}]\n{result}" for label, result, _ in results)
+                    )
+                if all(isinstance(result, str) for _, result, _ in results):
+                    return "\n\n".join(f"[{label}]\n{result}" for label, result, _ in results)
 
-            results = await asyncio.gather(*(_call_for(label) for label in clients))
-            all_warnings = set().union(*(warnings for _, _, _, warnings in results))
-            if all(failed for _, _, failed, _ in results):
-                raise ToolError(
-                    "\n\n".join(f"[{label}]\n{result}" for label, result, _, _ in results)
-                )
-            if all(isinstance(result, str) for _, result, _, _ in results):
-                combined = "\n\n".join(f"[{label}]\n{result}" for label, result, _, _ in results)
-                return _attach_chat_policy_warnings(combined, all_warnings)
+                account_labelled_content = []
+                for label, result, _ in results:
+                    account_labelled_content.append(f"[{label}]")
+                    account_labelled_content.extend(
+                        result if isinstance(result, list) else [result]
+                    )
+                return account_labelled_content
 
-            account_labelled_content = []
-            for label, result, _, _ in results:
-                account_labelled_content.append(f"[{label}]")
-                account_labelled_content.extend(result if isinstance(result, list) else [result])
-            return _attach_chat_policy_warnings(account_labelled_content, all_warnings)
+            finally:
+                _chat_policy_action.reset(token)
 
         return wrapper
 
@@ -1281,10 +1252,6 @@ def is_chat_blocklist_enabled() -> bool:
     return bool(get_blocked_chat_ids())
 
 
-def is_chat_access_policy_enabled() -> bool:
-    return is_chat_allowlist_enabled() or is_chat_blocklist_enabled()
-
-
 def is_chat_blocked(chat_identifier: Any, entity: Any = None) -> bool:
     blocked = get_blocked_chat_ids()
     if not blocked:
@@ -1311,16 +1278,16 @@ def is_chat_blocked(chat_identifier: Any, entity: Any = None) -> bool:
 
 
 def is_chat_allowed(chat_identifier: Any, entity: Any = None) -> bool:
-    """Check whether a chat identifier or entity is permitted by the allowlist.
+    """Check whether a chat is permitted by the active access policies.
 
     Integer identifiers are compared as marked IDs (see
     ``_parse_allowed_chat_ids``); an entity is compared by its marked ID and
     username only. Its bare ``id`` is never used: the same number is a
     different chat in the user, basic-group and channel namespaces.
 
-    If allowlist is not enabled, always returns True.
+    The blocklist filters reads, while the allowlist applies to all operations.
     """
-    if is_chat_blocked(chat_identifier, entity):
+    if _chat_policy_action.get() is None and is_chat_blocked(chat_identifier, entity):
         return False
     allowed = get_effective_allowed_chat_ids()
     if allowed is None:
@@ -1357,7 +1324,7 @@ def is_chat_allowed(chat_identifier: Any, entity: Any = None) -> bool:
 
 def check_chat_access(chat_identifier: Any, entity: Any = None) -> Optional[str]:
     """Return an error message if chat access is restricted, or None if allowed."""
-    if is_chat_blocked(chat_identifier, entity):
+    if _chat_policy_action.get() is None and is_chat_blocked(chat_identifier, entity):
         return (
             f"Access to chat '{chat_identifier}' is restricted by privacy policy "
             "(TELEGRAM_BLOCKED_CHAT_IDS)."
@@ -1550,12 +1517,11 @@ def validate_id(*param_names_to_validate, raise_errors=False):
                 ):
                     args = ()
                     kwargs = dict(bound.arguments)
-            values = kwargs
             for param_name in param_names_to_validate:
-                if param_name not in values or values[param_name] is None:
+                if param_name not in kwargs or kwargs[param_name] is None:
                     continue
 
-                param_value = values[param_name]
+                param_value = kwargs[param_name]
 
                 def validate_single_id(value, p_name):
                     # Handle integer IDs
@@ -1615,7 +1581,7 @@ def validate_id(*param_names_to_validate, raise_errors=False):
                                 )
                             )
                         validated_list.append(validated_item)
-                    values[param_name] = validated_list
+                    kwargs[param_name] = validated_list
                 else:
                     validated_value, error_msg = validate_single_id(param_value, param_name)
                     if error_msg:
@@ -1628,84 +1594,55 @@ def validate_id(*param_names_to_validate, raise_errors=False):
                                 **{param_name: param_value},
                             )
                         )
-                    values[param_name] = validated_value
+                    kwargs[param_name] = validated_value
 
-                # Check both representations before a tool can act on the chat.
-                if is_chat_access_policy_enabled() and param_name in CHAT_PARAM_NAMES:
-                    check_target = values[param_name]
-                    target_items = (
-                        check_target if isinstance(check_target, list) else [check_target]
-                    )
-                    for item in target_items:
-                        entity = None
-                        blocked = get_blocked_chat_ids()
-                        blocked_handles = any(isinstance(x, str) for x in blocked)
-                        non_numeric_target = isinstance(
-                            item, str
-                        ) and not _NUMERIC_CHAT_ID_RE.fullmatch(item.strip())
-                        if (
-                            blocked_handles
-                            or (blocked and non_numeric_target)
-                            or (blocked and isinstance(item, int) and item > 0)
-                        ) and not is_chat_blocked(item):
-                            try:
-                                cl = get_client(values.get("account"))
-                                entity = await resolve_entity(item, cl)
-                            except Exception:
-                                if blocked_handles:
-                                    warn_unchecked_blocked_username()
-                        if not is_chat_allowed(item, entity):
-                            resolved_allowed = False
-                            if (
-                                entity is None
-                                and isinstance(item, str)
-                                and not is_chat_blocked(item)
-                            ):
+                if param_name in CHAT_PARAM_NAMES:
+                    target = kwargs[param_name]
+                    items = target if isinstance(target, list) else [target]
+                    for item in items:
+                        if _chat_policy_action.get() is None and is_chat_blocked(item):
+                            err = check_chat_access(item)
+                        elif is_chat_allowlist_enabled() and not is_chat_allowed(item):
+                            entity = None
+                            if isinstance(item, str):
                                 try:
-                                    cl = get_client(values.get("account"))
+                                    cl = get_client(kwargs.get("account"))
                                     if cl:
-                                        ent = await resolve_entity(item, cl)
-                                        if is_chat_allowed(item, ent):
-                                            resolved_allowed = True
-                                        else:
-                                            entity = ent
+                                        entity = await resolve_entity(item, cl)
                                 except Exception:
                                     pass
-                            if not resolved_allowed:
-                                err = check_chat_access(item, entity)
-                                return error_result(
-                                    log_and_format_error(
-                                        func.__name__,
-                                        ChatAccessDeniedError(err),
-                                        prefix=ErrorCategory.PRIVACY,
-                                        user_message=err,
-                                        **{param_name: param_value},
-                                    )
+                            err = check_chat_access(item, entity)
+                        else:
+                            err = None
+                        if err:
+                            return error_result(
+                                log_and_format_error(
+                                    func.__name__,
+                                    ChatAccessDeniedError(err),
+                                    prefix=ErrorCategory.PRIVACY,
+                                    user_message=err,
+                                    **{param_name: param_value},
                                 )
+                            )
+
+            if not is_chat_blocklist_enabled():
+                return await func(*args, **kwargs)
 
             targets = []
             for name in param_names_to_validate:
-                if name in CHAT_PARAM_NAMES and values.get(name) is not None:
-                    value = values[name]
+                if name in CHAT_PARAM_NAMES and kwargs.get(name) is not None:
+                    value = kwargs[name]
                     targets.extend(value if isinstance(value, list) else [value])
+            redaction = _chat_policy_action.get()
+            if redaction is not None:
+                redaction[0] = redaction[0] or any(is_chat_blocked(target) for target in targets)
             token = _chat_policy_targets.set(tuple(targets))
             try:
                 return await func(*args, **kwargs)
             finally:
                 _chat_policy_targets.reset(token)
 
-        @wraps(func)
-        async def capture_warnings(*args, **kwargs):
-            if _chat_policy_warnings.get() is not None:
-                return await wrapper(*args, **kwargs)
-            warnings = set()
-            token = _chat_policy_warnings.set(warnings)
-            try:
-                return _attach_chat_policy_warnings(await wrapper(*args, **kwargs), warnings)
-            finally:
-                _chat_policy_warnings.reset(token)
-
-        return capture_warnings
+        return wrapper
 
     return decorator
 
@@ -2375,9 +2312,15 @@ async def _resolve(getter: str, identifier: Union[int, str], client, label: str)
             getter, identifier, client, label, try_marked=not from_alias
         )
         targets = _chat_policy_targets.get()
-        if targets and any(identifier == apply_alias(target) for target in targets):
-            if is_chat_blocked(identifier, entity):
+        if (
+            targets
+            and any(identifier == apply_alias(target) for target in targets)
+            and is_chat_blocked(identifier, entity)
+        ):
+            redaction = _chat_policy_action.get()
+            if redaction is None:
                 raise ChatAccessDeniedError(check_chat_access(identifier, entity))
+            redaction[0] = True
         return entity
     except (ValueError, *_PEER_ERRORS) as error:
         # An unknown or stale nickname is a question for the user, not a dead end:

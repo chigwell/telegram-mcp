@@ -217,3 +217,16 @@ async def test_rejects_bad_paging_before_any_request(server, kwargs):
     result = await messages.search_global("отчёт", **kwargs)
     assert "error" in result.lower()
     assert server.requests == []
+
+
+@pytest.mark.asyncio
+async def test_blocked_chat_is_filtered_and_cursor_still_pages(server, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", str(messages.utils.get_peer_id(CHANNEL)))
+    first = json.loads(await messages.search_global("отчёт", page_size=1))
+    assert first["results"] == []
+    cursor = first["next_cursor"]
+    # A fresh client can resume using the cursor.
+    monkeypatch.setattr(messages, "get_client", lambda account=None: GlobalSearchServer())
+    second = json.loads(await messages.search_global("отчёт", page_size=1, cursor=cursor))
+    assert second["results"] == []
+    assert len(server.requests) == 1

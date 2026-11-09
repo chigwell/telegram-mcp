@@ -146,16 +146,6 @@ def test_all_runtime_and_tool_logs_use_constant_privacy_safe_messages():
 
     for source_path in source_paths:
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        static_warning = [
-            node
-            for node in tree.body
-            if isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and node.targets[0].id == "_USERNAME_CHECK_WARNING"
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-        ]
         for node in ast.walk(tree):
             call = _persistent_log_call(node)
             if call is None:
@@ -170,16 +160,6 @@ def test_all_runtime_and_tool_logs_use_constant_privacy_safe_messages():
                 and isinstance(call.args[0].value, str)
                 and not call.keywords
             )
-            if (
-                source_path.name == "runtime.py"
-                and len(static_warning) == 1
-                and call.func.attr == "warning"
-                and len(call.args) == 1
-                and isinstance(call.args[0], ast.Name)
-                and call.args[0].id == "_USERNAME_CHECK_WARNING"
-                and not call.keywords
-            ):
-                literal_only = True
             if not literal_only:
                 unsafe.append(f"{source_path.relative_to(package_dir)}:{node.lineno}")
 
