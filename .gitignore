@@ -203,23 +203,5 @@ test_voice.ogg
 sticker.webp
 two.png
 
-# from strato-space/app
-.inbox/
-.inbox2/
-.idea/
-.venv/
-.wenv/
-.env
-logs/
-*.log
-wallet/
-news/
-node_modules/
-vendor/
-composer.phar
-symfony.lock
-package-lock.json
-
-# macOS specific files
-.DS_Store
+# macOS-specific files
 .DS_Store?
