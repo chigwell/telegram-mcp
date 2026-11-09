@@ -331,7 +331,11 @@ async def list_topics(
         )
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Mark Topic As Read", openWorldHint=True, destructiveHint=True, idempotentHint=True))
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Mark Topic As Read", openWorldHint=True, destructiveHint=True, idempotentHint=True
+    )
+)
 @with_account(readonly=False)
 @validate_id("chat_id")
 async def mark_topic_as_read(
