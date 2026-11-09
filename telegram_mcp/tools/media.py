@@ -453,6 +453,7 @@ async def send_album(
     custom_emojis: Optional[List[Dict[str, Any]]] = None,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
+    silent: bool = False,
 ) -> str:
     """
     Send multiple photos/videos as one Telegram media group (album).
@@ -464,6 +465,7 @@ async def send_album(
         chat_id: The chat ID or username.
         file_paths: 2-10 absolute or relative file paths under allowed roots.
         caption: Optional caption for the album. Telegram displays it on the first item.
+        silent: Send without a notification sound (default False).
         topic_id: Optional forum topic ID (from list_topics). Sends into that topic
             in a forum-enabled community/supergroup. Also works as reply_to for a message.
         schedule_date: Optional. When set, the album is placed in the chat's
@@ -487,6 +489,7 @@ async def send_album(
             custom_emojis=custom_emojis,
             ctx=ctx,
             account=account,
+            silent=silent,
         )
     except Exception as e:
         return log_and_format_error(
@@ -499,6 +502,7 @@ async def send_album(
             schedule_date=str(schedule_date),
             parse_mode=parse_mode,
             custom_emojis=custom_emojis,
+            silent=silent,
         )
 
 

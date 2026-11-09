@@ -107,7 +107,9 @@ def client(monkeypatch):
 @pytest.mark.asyncio
 async def test_send_message_attaches_chip_entity(client):
     text = "TODO 13/09 17:00"
-    result = await messages.send_message(42, text, format_date="13/09 17:00", account="test")
+    result = await messages.send_message(
+        42, text, format_date="13/09 17:00", account="test", silent=True
+    )
     assert "successfully" in result
     req = client.await_args.args[0]
     assert isinstance(req, functions.messages.SendMessageRequest)
@@ -115,6 +117,7 @@ async def test_send_message_attaches_chip_entity(client):
     assert len(req.entities) == 1
     assert isinstance(req.entities[0], types.MessageEntityFormattedDate)
     assert (req.entities[0].offset, req.entities[0].length) == (5, _utf16_length("13/09 17:00"))
+    assert req.silent is True
 
 
 @pytest.mark.asyncio
@@ -125,9 +128,21 @@ async def test_send_message_without_chip_keeps_telethon_path(client):
 
 
 @pytest.mark.asyncio
+async def test_send_message_passes_silent_to_telethon(client):
+    await messages.send_message(42, "quiet", silent=True)
+
+    assert client.send_message.await_args.kwargs["silent"] is True
+
+
+@pytest.mark.asyncio
 async def test_reply_to_message_attaches_chip_entity(client):
     result = await messages.reply_to_message(
-        42, 7, "At 13/09 17:00 ok", format_date="13/09 17:00", account="test"
+        42,
+        7,
+        "At 13/09 17:00 ok",
+        format_date="13/09 17:00",
+        account="test",
+        silent=True,
     )
     assert "Replied" in result
     req = client.await_args.args[0]
@@ -135,6 +150,14 @@ async def test_reply_to_message_attaches_chip_entity(client):
     assert isinstance(req.reply_to, types.InputReplyToMessage)
     assert req.reply_to.reply_to_msg_id == 7
     assert isinstance(req.entities[0], types.MessageEntityFormattedDate)
+    assert req.silent is True
+
+
+@pytest.mark.asyncio
+async def test_reply_to_message_passes_silent_to_telethon(client):
+    await messages.reply_to_message(42, 7, "quiet", silent=True)
+
+    assert client.send_message.await_args.kwargs["silent"] is True
 
 
 @pytest.mark.asyncio
