@@ -1102,13 +1102,16 @@ async def get_participants(chat_id: int) -> str:
 
 
 @mcp.tool()
-async def send_file(chat_id: int, file_path: str, caption: str = None) -> str:
+async def send_file(
+    chat_id: int, file_path: str, caption: str = None, silent: bool = False
+) -> str:
     """
     Send a file to a chat.
     Args:
         chat_id: The chat ID.
         file_path: Absolute path to the file to send (must exist and be readable).
         caption: Optional caption for the file.
+        silent: Whether to send the file without a notification sound.
     """
     try:
         if not os.path.isfile(file_path):
@@ -1116,11 +1119,16 @@ async def send_file(chat_id: int, file_path: str, caption: str = None) -> str:
         if not os.access(file_path, os.R_OK):
             return f"File is not readable: {file_path}"
         entity = await client.get_entity(chat_id)
-        await client.send_file(entity, file_path, caption=caption)
+        await client.send_file(entity, file_path, caption=caption, silent=silent)
         return f"File sent to chat {chat_id}."
     except Exception as e:
         return log_and_format_error(
-            "send_file", e, chat_id=chat_id, file_path=file_path, caption=caption
+            "send_file",
+            e,
+            chat_id=chat_id,
+            file_path=file_path,
+            caption=caption,
+            silent=silent,
         )
 
 
