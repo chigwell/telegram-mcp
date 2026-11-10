@@ -12,6 +12,7 @@ from telegram_mcp.runtime import *
 )
 @with_account(readonly=False)
 @validate_id("user_ids")
+@flood_category("channel_lifecycle")
 async def create_group(
     title: str, user_ids: List[Union[int, str]], account: Optional[str] = None
 ) -> str:
@@ -95,6 +96,7 @@ def _missing_invitee_ids(result) -> List[int]:
 )
 @with_account(readonly=False)
 @validate_id("group_id", "user_ids")
+@flood_category("admin_action")
 async def invite_to_group(
     group_id: Union[int, str], user_ids: List[Union[int, str]], account: Optional[str] = None
 ) -> str:
@@ -214,6 +216,7 @@ async def invite_to_group(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("channel_lifecycle")
 async def leave_chat(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Leave a group or channel by chat ID.
@@ -384,6 +387,7 @@ async def get_participants(
     annotations=ToolAnnotations(title="Create Channel", openWorldHint=True, destructiveHint=True)
 )
 @with_account(readonly=False)
+@flood_category("channel_lifecycle")
 async def create_channel(
     title: str, about: str = "", megagroup: bool = False, account: Optional[str] = None
 ) -> str:
@@ -425,6 +429,7 @@ def _migrated_supergroup_id(chat: Any) -> Optional[int]:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("channel_lifecycle")
 async def upgrade_group_to_supergroup(
     chat_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -487,6 +492,7 @@ async def upgrade_group_to_supergroup(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def edit_chat_title(
     chat_id: Union[int, str], title: str, account: Optional[str] = None
 ) -> str:
@@ -519,6 +525,7 @@ async def edit_chat_title(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def edit_chat_photo(
     chat_id: Union[int, str],
     file_path: str,
@@ -567,6 +574,7 @@ async def edit_chat_photo(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def edit_chat_about(
     chat_id: Union[int, str], about: str, account: Optional[str] = None
 ) -> str:
@@ -600,6 +608,7 @@ async def edit_chat_about(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def delete_chat_photo(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Delete the photo of a chat, group, or channel.
@@ -634,6 +643,7 @@ async def delete_chat_photo(chat_id: Union[int, str], account: Optional[str] = N
 )
 @with_account(readonly=False)
 @validate_id("group_id", "user_id")
+@flood_category("admin_action")
 async def promote_admin(
     group_id: Union[int, str],
     user_id: Union[int, str],
@@ -725,6 +735,7 @@ async def promote_admin(
 )
 @with_account(readonly=False)
 @validate_id("group_id", "user_id")
+@flood_category("admin_action")
 async def demote_admin(
     group_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -793,6 +804,7 @@ async def demote_admin(
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
+@flood_category("admin_action")
 async def ban_user(
     chat_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -855,6 +867,7 @@ async def ban_user(
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
+@flood_category("admin_action")
 async def unban_user(
     chat_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -971,6 +984,7 @@ def _ban_not_cleared_message(error: Exception) -> str:
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
+@flood_category("admin_action")
 async def remove_user(
     chat_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -1066,6 +1080,7 @@ async def remove_user(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def set_default_chat_permissions(
     chat_id: Union[int, str],
     send_messages: bool = True,
@@ -1145,6 +1160,7 @@ async def set_default_chat_permissions(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def toggle_slow_mode(
     chat_id: Union[int, str], seconds: int = 0, account: Optional[str] = None
 ) -> str:
@@ -1315,6 +1331,7 @@ async def _patch_admin_rights(
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
+@flood_category("admin_action")
 async def edit_admin_rights(
     chat_id: Union[int, str],
     user_id: Union[int, str],
@@ -1642,6 +1659,7 @@ async def get_invite_link(chat_id: Union[int, str], account: Optional[str] = Non
     )
 )
 @with_account(readonly=False)
+@flood_category("channel_lifecycle")
 async def join_chat_by_link(link: str, account: Optional[str] = None) -> str:
     """
     Join a chat by invite link.
@@ -1696,6 +1714,7 @@ async def join_chat_by_link(link: str, account: Optional[str] = None) -> str:
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def export_chat_invite(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Export a chat invite link.
@@ -1735,6 +1754,7 @@ async def export_chat_invite(chat_id: Union[int, str], account: Optional[str] = 
     )
 )
 @with_account(readonly=False)
+@flood_category("channel_lifecycle")
 async def import_chat_invite(hash: str, account: Optional[str] = None) -> str:
     """
     Import a chat invite by hash.

@@ -54,7 +54,7 @@ whisper = [
 
 [tool.setuptools]
 py-modules = ["main", "migrate_session", "sanitize", "session_string_generator"]
-packages = ["telegram_mcp", "telegram_mcp.tools", "telegram_mcp.transport"]
+packages = ["telegram_mcp", "telegram_mcp.tools", "telegram_mcp.transport", "telegram_mcp.floodgate"]
 
 [project.scripts]
 telegram-mcp = "main:main"
