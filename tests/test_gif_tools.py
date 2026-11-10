@@ -97,11 +97,12 @@ async def test_gif_search_returns_ids_that_send_gif_accepts(server):
 async def test_send_gif_sends_a_gif_found_by_the_search(server):
     await media.get_gif_search(query="cat")
 
-    result = await media.send_gif(chat_id=101, gif_id=GIF_ID)
+    result = await media.send_gif(chat_id=101, gif_id=GIF_ID, silent=True)
 
     assert result == "GIF sent to chat 101."
     sent = [r for r in server.requests if isinstance(r, functions.messages.SendMediaRequest)]
     assert len(sent) == 1
+    assert sent[0].silent is True
     document = sent[0].media.id
     assert (document.id, document.access_hash, document.file_reference) == (GIF_ID, 777, b"ref")
 

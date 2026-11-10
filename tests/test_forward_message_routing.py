@@ -75,6 +75,16 @@ async def test_legacy_call_is_unchanged(client):
 
 
 @pytest.mark.asyncio
+async def test_batch_forward_passes_silent_to_telethon(client):
+    result = await messages.forward_messages("source", [10, 11], "destination", silent=True)
+
+    assert result == "2 messages forwarded from source to destination."
+    assert client.legacy == [
+        ((client.peers["destination"], [10, 11], client.peers["source"]), {"silent": True})
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "message_id,expand,expected",
     [(10, True, [9, 10]), (10, False, 10), ([10, 12], True, [10, 12])],
