@@ -59,7 +59,9 @@ def _sent_message_ids(result) -> list[Optional[int]]:
 
 def _append_message_ids(result_text: str, sent) -> str:
     ids = _sent_message_ids(sent)
-    return f"{result_text}\nMessageIDs: {json.dumps(ids, ensure_ascii=False)}" if ids else result_text
+    return (
+        f"{result_text}\nMessageIDs: {json.dumps(ids, ensure_ascii=False)}" if ids else result_text
+    )
 
 
 def _video_send_attributes(path: str):

@@ -62,9 +62,7 @@ async def test_empty_caption_clears_caption(edit_client):
     )
 
     assert result == "Media in message 7 replaced."
-    client.edit_message.assert_awaited_once_with(
-        "entity:42", 7, "", file=str(replacement)
-    )
+    client.edit_message.assert_awaited_once_with("entity:42", 7, "", file=str(replacement))
 
 
 @pytest.mark.asyncio
@@ -142,7 +140,10 @@ async def test_rich_caption_mode_is_rejected(edit_client):
         account="test",
     )
 
-    assert result == "parse_mode='rich' is not supported for file captions. Use 'md', 'html' or 'plain'."
+    assert (
+        result
+        == "parse_mode='rich' is not supported for file captions. Use 'md', 'html' or 'plain'."
+    )
     client.edit_message.assert_not_awaited()
 
 
