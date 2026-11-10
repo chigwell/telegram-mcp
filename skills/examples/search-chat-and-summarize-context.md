@@ -157,4 +157,4 @@ The agent calls `get_message_context`:
    - *Recovery:* Suggest trying alternative keywords, broader date ranges, or checking the chat identifier.
 2. **Chat Access Denied:**
    - *Error:* `ChatAccessDeniedError`.
-   - *Recovery:* Verify that the chat ID is permitted under `ALLOWED_CHAT_IDS` and that the account is an active member of the chat.
+   - *Recovery:* Verify that the chat ID is permitted under `TELEGRAM_ALLOWED_CHAT_IDS` and that the account is an active member of the chat.

@@ -141,7 +141,7 @@ The agent calls `save_draft` (which saves to Telegram's cloud draft storage with
 ## Safety / Privacy Notes
 - **Strict "Do Not Send" Invariant:** The system prompt and tool constraints guarantee that tools with mutating delivery effects (`send_message`, `reply_to_message`) are never invoked.
 - **Safe Staging via `save_draft`:** Saving a draft invokes MTProto's `messages.SaveDraftRequest`. This populates the user's local message input box on all connected devices (mobile, desktop, web) but does not trigger push notifications or broadcast any message to the recipient.
-- **Privacy Allowlist:** Respects `ALLOWED_CHAT_IDS`.
+- **Privacy Allowlist:** Respects `TELEGRAM_ALLOWED_CHAT_IDS`.
 
 ---
 

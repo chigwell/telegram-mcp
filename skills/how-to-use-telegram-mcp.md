@@ -67,8 +67,9 @@ TELEGRAM_SESSION_STRING=your_session_string_here
 TELEGRAM_EXPOSED_TOOLS=all
 
 # Optional: Chat Access Allowlist (Privacy Guardrail)
-# Comma-separated list of allowed chat IDs, usernames, or phone numbers
-# ALLOWED_CHAT_IDS=123456789,@my_private_group
+# Comma-separated list of allowed marked chat IDs or usernames
+# (user 12345678, basic group -4567, channel/supergroup -100123456789)
+# TELEGRAM_ALLOWED_CHAT_IDS=12345678,-100123456789,@my_private_group
 
 # Optional: File Upload Security Roots (Enforce strict path boundaries)
 # Comma-separated absolute paths where file uploads/downloads are allowed
@@ -159,7 +160,7 @@ The server communicates over standard input/output using JSON-RPC according to t
    - Setting `TELEGRAM_EXPOSED_TOOLS=read-only` disables all mutating operations (`send_message`, `edit_message`, `delete_message`, etc.) and exposes only safe query tools (`list_chats`, `get_messages`, `get_message_context`, etc.).
    - Use `read-only+save_draft` to permit safe draft creation without exposing actual message transmission tools.
 
-2. **Chat Allowlist (`ALLOWED_CHAT_IDS`):**
+2. **Chat Allowlist (`TELEGRAM_ALLOWED_CHAT_IDS`):**
    - When set, any chat ID, username, or peer not included in the allowlist is blocked with a `ChatAccessDeniedError`. The server will refuse to read messages from or post to sensitive excluded chats.
 
 3. **File Path Security (`TELEGRAM_ALLOWED_ROOTS`):**
