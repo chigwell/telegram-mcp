@@ -22,6 +22,7 @@ class _DummyClient:
             "silent": silent,
         }
         self.schedule = schedule
+        return []
 
 
 @pytest.mark.asyncio
