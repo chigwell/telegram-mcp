@@ -843,6 +843,28 @@ When `TELEGRAM_ALLOWED_CHAT_IDS` is set:
 
 If `TELEGRAM_ALLOWED_CHAT_IDS` is unset or empty, the server operates in unrestricted mode (default), preserving 100% backward compatibility.
 
+### Global chat blocklist
+
+Set `TELEGRAM_BLOCKED_CHAT_IDS` to a comma-separated list of marked chat IDs
+and/or usernames to exclude chats across all configured accounts:
+
+```env
+TELEGRAM_BLOCKED_CHAT_IDS=-100123456789,-4567,12345678,@unwanted_bot
+```
+
+The blocklist takes precedence over `TELEGRAM_ALLOWED_CHAT_IDS` for data returned
+to the agent. Messages from blocked chats are filtered from results and events;
+forwarding messages from those chats is also blocked. Other actions are not
+restricted by the blocklist. A bot's username blocks its own chat, not messages it
+posts elsewhere.
+IDs are exact, including the `-` or `-100` prefix; usernames are case-insensitive.
+Prefer numeric IDs for reliable blocking: usernames can change, and chats whose
+username cannot be checked may still appear in results. Existing export files are
+not filtered retroactively. Complete folder snapshots remain unavailable when a
+blocklist is active because they contain unfiltered chat identifiers.
+Global-search cursors keep Telegram's original Base64-encoded offsets and may
+contain a blocked chat's ID and access hash, but not message text.
+
 ## Deletion Audit Log (Recent Actions for Private Chats)
 
 To maintain an immutable, local audit trail for destructive actions (e.g. tracking when and how messages were deleted without exposing message text), the server writes an append-only JSONL log (closes #321):

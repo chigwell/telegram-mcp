@@ -537,7 +537,11 @@ async def download_media(
     """
     try:
         cl = get_client(account)
+        if is_chat_blocked(chat_id):
+            return "Message data is restricted by TELEGRAM_BLOCKED_CHAT_IDS."
         entity = await resolve_entity(chat_id, cl)
+        if is_chat_blocked(chat_id, entity):
+            return "Message data is restricted by TELEGRAM_BLOCKED_CHAT_IDS."
         msg = await cl.get_messages(entity, ids=message_id)
         if not msg:
             return "No media found in the specified message."

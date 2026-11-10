@@ -74,7 +74,9 @@ def _scan_settled(
     """
     soonest_remaining = None
     for cid, rec in list(_pending_msgs.items()):
-        if is_chat_allowlist_enabled() and not is_chat_allowed(cid):
+        if (is_chat_allowlist_enabled() or is_chat_blocklist_enabled()) and not is_chat_allowed(
+            cid
+        ):
             continue
         if only is not None and cid != only:
             continue
@@ -230,7 +232,9 @@ async def _on_new_incoming(event) -> None:
         if getattr(sender, "bot", False) or getattr(sender, "is_self", False):
             return
         chat_id = event.chat_id
-        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, sender):
+        if (is_chat_allowlist_enabled() or is_chat_blocklist_enabled()) and not is_chat_allowed(
+            chat_id, sender
+        ):
             return
         now = time.monotonic()
         msg_id = event.message.id
@@ -386,7 +390,14 @@ async def _on_message_event(event, account: Optional[str] = None) -> None:
         # Cached chat entity (no request); kept so reads apply username and
         # marked-id allowlist entries exactly as this check does.
         chat = getattr(event, "chat", None)
-        if is_chat_allowlist_enabled():
+        if is_chat_allowlist_enabled() or is_chat_blocklist_enabled():
+            if chat is None and any(isinstance(x, str) for x in get_blocked_chat_ids()):
+                try:
+                    chat = await event.get_chat()
+                except Exception:
+                    pass
+            if is_chat_blocked(chat_id, chat):
+                return
             if not is_chat_allowed(chat_id, chat):
                 try:
                     chat = await event.get_chat()
@@ -451,7 +462,9 @@ def _select_events(
             continue
         if account is not None and rec.get("account") not in (None, label):
             continue
-        if is_chat_allowlist_enabled() and not is_chat_allowed(rec["chat_id"], rec.get("_chat")):
+        if (is_chat_allowlist_enabled() or is_chat_blocklist_enabled()) and not is_chat_allowed(
+            rec["chat_id"], rec.get("_chat")
+        ):
             continue
         picked.append(_public_event(rec))
         if len(picked) >= limit:
@@ -512,7 +525,7 @@ async def wait_for_events(
     """
     try:
         target = await _wait_target(chat_id, account)
-        if target is not None and is_chat_allowlist_enabled():
+        if target is not None and (is_chat_allowlist_enabled() or is_chat_blocklist_enabled()):
             resolved = apply_alias(chat_id)
             entity = None
             if not is_chat_allowed(resolved):
@@ -606,7 +619,9 @@ async def get_messages_after(
             )
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
-        if is_chat_allowlist_enabled() and not is_chat_allowed(chat_id, entity):
+        if (is_chat_allowlist_enabled() or is_chat_blocklist_enabled()) and not is_chat_allowed(
+            chat_id, entity
+        ):
             err = check_chat_access(chat_id, entity)
             return log_and_format_error(
                 "get_messages_after",
@@ -715,7 +730,10 @@ async def wait_for_new_message(
                 cid: rec
                 for cid, rec in _pending_msgs.items()
                 if (target is None or cid == target)
-                and (not is_chat_allowlist_enabled() or is_chat_allowed(cid))
+                and (
+                    not (is_chat_allowlist_enabled() or is_chat_blocklist_enabled())
+                    or is_chat_allowed(cid)
+                )
             }
             if pending:
                 chats = [
