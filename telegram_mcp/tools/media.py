@@ -1,6 +1,7 @@
 """Media MCP tools."""
 
 import io
+import json
 import mimetypes
 import os
 import shutil
@@ -48,6 +49,19 @@ def _force_document_kwargs(force_document: bool) -> Dict[str, bool]:
     # Only pass force_document when the caller set it, so the default call
     # reaches Telethon exactly as before.
     return {"force_document": True} if force_document else {}
+
+
+def _sent_message_ids(result) -> list[Optional[int]]:
+    """Positional IDs returned by Telethon for a message or media group."""
+    messages = result if isinstance(result, (list, tuple)) else [result]
+    return [getattr(message, "id", None) for message in messages]
+
+
+def _append_message_ids(result_text: str, sent) -> str:
+    ids = _sent_message_ids(sent)
+    return (
+        f"{result_text}\nMessageIDs: {json.dumps(ids, ensure_ascii=False)}" if ids else result_text
+    )
 
 
 def _video_send_attributes(path: str):
@@ -238,6 +252,8 @@ async def send_file(
 ) -> str:
     """
     Send a file to a chat.
+    On success, the existing status line is followed by MessageIDs containing
+    the message ID for a single file or the ordered message IDs for an album.
     Reuse custom_emojis from message-reading tools in the caption with
     parse_mode='html' and <tg-emoji emoji-id="ID">EMOJI</tg-emoji>, using the
     returned id and emoji. HTML-escape the emoji and other literal text. Custom
@@ -311,7 +327,7 @@ async def send_file(
             video_attributes = _video_send_attributes(str(safe_path))
             if video_attributes is not None:
                 send_kwargs["attributes"] = [video_attributes]
-        await cl.send_file(
+        sent = await cl.send_file(
             entity,
             str(safe_path),
             caption=caption,
@@ -322,8 +338,10 @@ async def send_file(
             silent=silent,
         )
         if dt:
-            return f"File from {safe_path} scheduled for {dt.isoformat()} in chat {chat_id}."
-        return f"File sent to chat {chat_id} from {safe_path}."
+            result = f"File from {safe_path} scheduled for {dt.isoformat()} in chat {chat_id}."
+        else:
+            result = f"File sent to chat {chat_id} from {safe_path}."
+        return _append_message_ids(result, sent)
     except Exception as e:
         return log_and_format_error(
             "send_file",
@@ -386,7 +404,7 @@ async def _send_album(
         [_video_send_attributes(path) for path in safe_paths] if not force_document else None
     )
     if per_file_attributes is None or not any(per_file_attributes):
-        await cl.send_file(
+        sent = await cl.send_file(
             entity,
             safe_paths,
             caption=caption,
@@ -402,7 +420,7 @@ async def _send_album(
             media_items.append(
                 _album_media_item(safe_path, await cl.upload_file(safe_path), video_attributes)
             )
-        await cl.send_file(
+        sent = await cl.send_file(
             entity,
             media_items,
             caption=caption,
@@ -412,10 +430,12 @@ async def _send_album(
             silent=silent,
         )
     if dt:
-        return (
+        result = (
             f"Album of {len(safe_paths)} files scheduled for {dt.isoformat()} in chat {chat_id}."
         )
-    return f"Album sent to chat {chat_id} with {len(safe_paths)} files."
+    else:
+        result = f"Album sent to chat {chat_id} with {len(safe_paths)} files."
+    return _append_message_ids(result, sent)
 
 
 def _album_media_item(path: str, file_handle, video_attributes):
@@ -459,6 +479,7 @@ async def send_album(
 ) -> str:
     """
     Send multiple photos/videos as one Telegram media group (album).
+    On success, the existing status line is followed by MessageIDs in file order.
     The caption is formatted as in send_file: parse_mode='html' reads
     <tg-emoji emoji-id="ID">EMOJI</tg-emoji>, and custom_emojis marks emoji in a
     plain-text caption.
@@ -505,6 +526,72 @@ async def send_album(
             parse_mode=parse_mode,
             custom_emojis=custom_emojis,
             silent=silent,
+        )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Edit Message Media", openWorldHint=True, destructiveHint=True, idempotentHint=True
+    )
+)
+@with_account(readonly=False)
+@validate_id("chat_id")
+async def edit_message_media(
+    chat_id: Union[int, str],
+    message_id: int,
+    file_path: str,
+    caption: Optional[str] = None,
+    parse_mode: Optional[str] = None,
+    ctx: Optional[Context] = None,
+    account: Optional[str] = None,
+) -> str:
+    """Replace the media in one message you sent.
+
+    For an album, message_id selects one item to replace. Telegram enforces the
+    album's media-type restrictions. An omitted caption keeps the current caption
+    and formatting; an empty caption clears it. Since preserving an omitted
+    caption requires a read followed by an edit, a concurrent caption change from
+    another client can be overwritten; pass caption explicitly to set its value.
+    """
+    try:
+        safe_path, path_error = await _resolve_readable_file_path(
+            raw_path=file_path,
+            ctx=ctx,
+            tool_name="edit_message_media",
+        )
+        if path_error:
+            return path_error
+
+        cl = get_client(account)
+        entity = await resolve_entity(chat_id, cl)
+        current = await cl.get_messages(entity, ids=message_id)
+        if current is None:
+            return f"Message {message_id} not found in chat {chat_id}."
+
+        new_caption = current.message if caption is None else caption
+        kwargs = {"file": str(safe_path)}
+        video_attributes = _video_send_attributes(str(safe_path))
+        if video_attributes is not None:
+            kwargs["attributes"] = [video_attributes]
+        if caption is None:
+            kwargs.update(parse_mode=None, formatting_entities=current.entities or [])
+        else:
+            caption_kwargs, caption_error = _caption_format_kwargs(caption, parse_mode, None)
+            if caption_error:
+                return caption_error
+            kwargs.update(caption_kwargs)
+
+        await cl.edit_message(entity, message_id, new_caption, **kwargs)
+        return f"Media in message {message_id} replaced."
+    except telethon.errors.MessageNotModifiedError:
+        return f"Message {message_id} not modified: the media and caption are unchanged."
+    except Exception as e:
+        return log_and_format_error(
+            "edit_message_media",
+            e,
+            chat_id=chat_id,
+            message_id=message_id,
+            file_path=file_path,
         )
 
 
@@ -1279,6 +1366,7 @@ async def inspect_document(
 __all__ = [
     "send_file",
     "send_album",
+    "edit_message_media",
     "download_media",
     "list_photos",
     "open_photo",
