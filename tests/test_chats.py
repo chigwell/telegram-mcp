@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from telethon.tl import functions
 from telethon.tl.types import Channel
 
 from telegram_mcp.tools import chats
@@ -83,7 +84,7 @@ async def test_list_topics_int_chat_id(monkeypatch):
     assert data["results"][0]["title"] == "General"
     assert resolved_ids == [12345]
     assert len(client.requests) == 1
-    assert isinstance(client.requests[0], chats.GetForumTopicsRequest)
+    assert isinstance(client.requests[0], functions.messages.GetForumTopicsRequest)
 
 
 @pytest.mark.asyncio
