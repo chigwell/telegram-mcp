@@ -2,6 +2,7 @@
 
 import inspect
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -44,7 +45,7 @@ def _local(url):
 async def test_upload_round_trip_lands_under_first_root(root, client):
     slot = json.loads(await _prepare_upload("../../etc/report 1.pdf"))
     assert slot["file_path"].startswith(str(root / "uploads"))
-    assert slot["file_path"].endswith("/report 1.pdf")
+    assert slot["file_path"].endswith(("/report 1.pdf", "\\report 1.pdf"))
 
     response = client.put(_local(slot["url"]), content=iter([b"%PDF-", b"bytes"]))
 
@@ -166,3 +167,36 @@ def test_sweep_removes_only_stale_upload_slots(root):
         os.utime(uploads / slot, (stamp, stamp))
     media_links.sweep_expired_uploads(root)
     assert [p.name for p in uploads.iterdir()] == ["new"]
+
+
+def test_sweep_handles_os_errors_gracefully(root, monkeypatch, caplog):
+    """Permission errors during sweep are logged rather than raised unhandled."""
+    uploads = root / "uploads"
+    slot = uploads / "locked"
+    slot.mkdir(parents=True)
+    (slot / "f").write_bytes(b"x")
+    stamp = time.time() - 3 * media_links.URL_TTL_SECONDS
+    os.utime(slot, (stamp, stamp))
+
+    def fail_unlink(*args, **kwargs):
+        raise PermissionError("Locked by another process")
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    with caplog.at_level(logging.WARNING, logger="telegram_mcp.media_links"):
+        media_links.sweep_expired_uploads(root)
+
+    assert "Permission denied removing upload entry" in caplog.text
+
+
+def test_sweep_cleans_subdirectories_inside_expired_slot(root):
+    """Expired slots with subdirectories are completely removed."""
+    uploads = root / "uploads"
+    slot = uploads / "nested"
+    sub = slot / "subdir"
+    sub.mkdir(parents=True)
+    (sub / "nested_file.bin").write_bytes(b"payload")
+    stamp = time.time() - 3 * media_links.URL_TTL_SECONDS
+    os.utime(slot, (stamp, stamp))
+
+    media_links.sweep_expired_uploads(root)
+    assert not slot.exists()
