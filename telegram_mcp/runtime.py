@@ -2006,6 +2006,61 @@ def _rich_text_target(node):
     return None
 
 
+LINK_ENTITY_TYPES = (
+    types.MessageEntityTextUrl,
+    types.MessageEntityUrl,
+    types.MessageEntityMentionName,
+    types.InputMessageEntityMentionName,
+)
+
+
+def mention_user_id(entity):
+    """Numeric user ID of a mention-name entity (InputUser for the Input variant)."""
+    user_id = getattr(entity, "user_id", None)
+    if user_id is not None and not isinstance(user_id, int):
+        user_id = getattr(user_id, "user_id", None)
+    return user_id
+
+
+def get_link_metadata(msg) -> dict:
+    """Links carried by message entities, paired with the text they sit on.
+
+    Returns {"links": [...]} with {text, url} for text links (MessageEntityTextUrl)
+    and explicit URLs (MessageEntityUrl), and {text, user_id} for mentions of
+    users without a username (MessageEntityMentionName and its Input variant).
+    Returns {} when the message has none, so callers can splat it into records.
+
+    Like custom emojis, text is cut from the original message: entity offsets
+    are UTF-16 code units, and sanitizing first would shift them.
+    """
+    entities = [
+        entity
+        for entity in getattr(msg, "entities", None) or []
+        if isinstance(entity, LINK_ENTITY_TYPES)
+    ]
+    text = getattr(msg, "message", None)
+    if not text or not entities:
+        return {}
+    links = []
+    for entity, inner in zip(entities, utils.get_inner_text(text, entities)):
+        link_text = sanitize_user_content(inner, max_length=256, preserve_emoji=True)
+        if isinstance(
+            entity, (types.MessageEntityMentionName, types.InputMessageEntityMentionName)
+        ):
+            user_id = mention_user_id(entity)
+            if user_id is None:
+                continue
+            link = {"text": link_text, "user_id": user_id}
+        else:
+            url = getattr(entity, "url", None) or inner
+            if not url:
+                continue
+            link = {"text": link_text, "url": sanitize_user_content(url, max_length=2048)}
+        if link not in links:
+            links.append(link)
+    return {"links": links} if links else {}
+
+
 def rich_message_link_urls(msg) -> List[str]:
     """Targets behind rich-block anchors and embeds, deduplicated, [] if none.
 

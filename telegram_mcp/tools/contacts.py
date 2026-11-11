@@ -294,6 +294,9 @@ async def get_last_interaction(contact_id: Union[int, str], account: Optional[st
     """
     Get the most recent message with a contact.
 
+    Records include links when present: {text, url} for text links and
+    explicit URLs, {text, user_id} for mentions of users without a username.
+
     Args:
         contact_id: The ID or username of the contact.
 
@@ -322,6 +325,7 @@ async def get_last_interaction(contact_id: Union[int, str], account: Optional[st
                     "date": msg.date,
                     "from": "You" if msg.out else contact_name,
                     "text": sanitize_user_content(msg.message),
+                    **get_link_metadata(msg),
                 }
             )
 
