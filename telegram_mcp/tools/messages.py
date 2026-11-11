@@ -130,6 +130,14 @@ def _link_urls(msg):
     return out
 
 
+def _links_line_part(msg) -> str:
+    """'links: [...]' fragment for one-line message renderings, '' if none."""
+    links = get_link_metadata(msg)
+    if not links:
+        return ""
+    return "links: " + json.dumps(links["links"], ensure_ascii=False)
+
+
 def _rich_custom_emojis(node):
     """Walk nested PageBlock/RichText objects without fetching their documents."""
     if isinstance(node, types.TextCustomEmoji):
@@ -343,6 +351,7 @@ def message_to_dict(msg, chat_id: Optional[int] = None, forum: bool = False) -> 
     if rich:
         d["rich"] = True  # text rebuilt from page blocks, not a verbatim .message
     d.update(get_custom_emoji_metadata(msg))
+    d.update(get_link_metadata(msg))
 
     media_label = get_media_label(msg)
     if media_label:
@@ -554,6 +563,9 @@ def format_message_line(msg, chat_id: Optional[int] = None, forum: bool = False)
         parts.append(
             f"custom_emojis: {json.dumps(custom_emojis['custom_emojis'], ensure_ascii=False)}"
         )
+    links_part = _links_line_part(msg)
+    if links_part:
+        parts.append(links_part)
 
     raw = sanitize_user_content(msg.message) if getattr(msg, "message", None) else ""
     if not raw:
@@ -580,6 +592,8 @@ async def get_messages(
     Get paginated messages from a specific chat.
     In forums, messages in a topic carry "topic" (the topic's id, 1 for General) and the
     response ends with one "Topics: {id: title}" line; "reply_to" is only a real reply.
+    Lines include links when present: {text, url} for text links and
+    explicit URLs, {text, user_id} for mentions of users without a username.
     Lines include custom_emojis when present: unique {emoji, id} pairs, with IDs
     as strings. Reuse them with send_message/reply_to_message and parse_mode='html'.
     Args:
@@ -1139,6 +1153,8 @@ async def send_scheduled_message(
 async def get_scheduled_messages(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     List all scheduled (pending) messages in a chat.
+    Lines include links when present: {text, url} for text links and
+    explicit URLs, {text, user_id} for mentions of users without a username.
     Lines include custom_emojis when present: unique {emoji, id} pairs for reuse
     with parse_mode='html' and <tg-emoji emoji-id="ID">EMOJI</tg-emoji>.
     Args:
@@ -1168,6 +1184,9 @@ async def get_scheduled_messages(chat_id: Union[int, str], account: Optional[str
                     f" | custom_emojis: "
                     f"{json.dumps(custom_emojis['custom_emojis'], ensure_ascii=False)}"
                 )
+            links_part = _links_line_part(msg)
+            if links_part:
+                line += f" | {links_part}"
             lines.append(line)
         return "\n".join(lines)
     except telethon.errors.rpcerrorlist.ChatAdminRequiredError as e:
@@ -1476,6 +1495,8 @@ async def list_messages(
     In forums, messages in a topic carry "topic" (the topic's id, 1 for General) and the
     response carries one "topics" map of id to title; "reply_to" is only a real reply.
 
+    Records include links when present: {text, url} for text links and
+    explicit URLs, {text, user_id} for mentions of users without a username.
     Records include custom_emojis when present: unique {emoji, id} pairs for reuse
     with parse_mode='html' and <tg-emoji emoji-id="ID">EMOJI</tg-emoji>.
 
@@ -1753,6 +1774,8 @@ async def get_message_context(
     In forums, messages in a topic carry "topic" (the topic's id, 1 for General) and the
     response carries one "topics" map of id to title; "reply_to" is only a real reply.
 
+    Messages and replied_message include links when present: {text, url} for
+    text links and explicit URLs, {text, user_id} for username-less mentions.
     Messages and replied_message include custom_emojis when present: unique
     {emoji, id} pairs for reuse with parse_mode='html' and
     <tg-emoji emoji-id="ID">EMOJI</tg-emoji>.
@@ -2718,6 +2741,8 @@ async def search_messages(
     In forums, messages in a topic carry "topic" (the topic's id, 1 for General) and the
     response carries one "topics" map of id to title; "reply_to" is only a real reply.
 
+    Records include links when present: {text, url} for text links and
+    explicit URLs, {text, user_id} for mentions of users without a username.
     Records include custom_emojis when present: unique {emoji, id} pairs for reuse
     with parse_mode='html' and <tg-emoji emoji-id="ID">EMOJI</tg-emoji>.
 
@@ -2873,6 +2898,8 @@ async def search_global(
     page_size must be between 1 and 100. A page shortened by the chat allowlist is
     not the end of the results; only exhausted is.
 
+    Records include links when present: {text, url} for text links and
+    explicit URLs, {text, user_id} for mentions of users without a username.
     Records include custom_emojis when present: unique {emoji, id} pairs for reuse
     with parse_mode='html' and <tg-emoji emoji-id="ID">EMOJI</tg-emoji>.
 
@@ -2979,6 +3006,8 @@ async def get_history(
     In forums, messages in a topic carry "topic" (the topic's id, 1 for General) and the
     response carries one "topics" map of id to title; "reply_to" is only a real reply.
 
+    Records include links when present: {text, url} for text links and
+    explicit URLs, {text, user_id} for mentions of users without a username.
     Records include custom_emojis when present: unique {emoji, id} pairs for reuse
     with parse_mode='html' and <tg-emoji emoji-id="ID">EMOJI</tg-emoji>.
 
@@ -3034,6 +3063,8 @@ async def get_pinned_messages(chat_id: Union[int, str], account: Optional[str] =
     In forums, messages in a topic carry "topic" (the topic's id, 1 for General) and the
     response carries one "topics" map of id to title; "reply_to" is only a real reply.
 
+    Records include links when present: {text, url} for text links and
+    explicit URLs, {text, user_id} for mentions of users without a username.
     Records include custom_emojis when present: unique {emoji, id} pairs for reuse
     with parse_mode='html' and <tg-emoji emoji-id="ID">EMOJI</tg-emoji>.
 
@@ -3068,6 +3099,7 @@ async def get_pinned_messages(chat_id: Union[int, str], account: Optional[str] =
                 "date": msg.date,
                 "text": sanitize_user_content(msg.message),
                 **get_custom_emoji_metadata(msg),
+                **get_link_metadata(msg),
             }
             forum = bool(getattr(entity, "forum", False))
             topic_id = message_topic_id(msg, forum)
@@ -3535,6 +3567,8 @@ async def get_drafts(account: Optional[str] = None) -> str:
     """
     Get all draft messages across all chats.
     Returns a list of drafts with their chat info and message content.
+    Drafts include links when present: {text, url} for text links and
+    explicit URLs, {text, user_id} for mentions of users without a username.
     Drafts include custom_emojis when present: unique {emoji, id} pairs for reuse
     with parse_mode='html' and <tg-emoji emoji-id="ID">EMOJI</tg-emoji>.
     A formatted draft (bold, underline, links, ...) also has 'message_html': the
@@ -3591,6 +3625,7 @@ async def get_drafts(account: Optional[str] = None) -> str:
                         "peer_id": peer_id,
                         "message": sanitize_user_content(getattr(draft, "message", "")),
                         **get_custom_emoji_metadata(draft),
+                        **get_link_metadata(draft),
                         "date": (
                             draft.date.isoformat()
                             if hasattr(draft, "date") and draft.date
