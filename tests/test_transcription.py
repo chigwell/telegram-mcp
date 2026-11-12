@@ -311,9 +311,7 @@ def test_voice_attachment_info_corrupt_cache_is_pending(monkeypatch):
     assert info["transcript_status"] == "pending"
 
 
-def test_cache_dir_falls_back_to_temp_dir_when_cwd_and_home_are_read_only(
-    monkeypatch, tmp_path
-):
+def test_cache_dir_falls_back_to_temp_dir_when_cwd_and_home_are_read_only(monkeypatch, tmp_path):
     monkeypatch.delenv("TELEGRAM_TRANSCRIPT_CACHE_DIR", raising=False)
     read_only = tmp_path / "ro"
     read_only.mkdir()
