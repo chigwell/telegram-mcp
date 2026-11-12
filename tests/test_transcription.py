@@ -275,6 +275,78 @@ def test_voice_attachment_info_cache_miss_is_pending(monkeypatch, transcript_cac
     assert info["transcript"] is None
 
 
+def _unwritable_cache(monkeypatch):
+    def _raise():
+        raise OSError(30, "Read-only file system", "/home/app/.cache")
+
+    monkeypatch.setattr(transcription, "cache_dir", _raise)
+    monkeypatch.setattr(transcription, "_cache_unavailable_warned", False)
+
+
+def test_voice_attachment_info_unwritable_cache_is_pending(monkeypatch, caplog):
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE", "on-demand")
+    _unwritable_cache(monkeypatch)
+
+    with caplog.at_level("WARNING", logger=transcription.__name__):
+        first = transcription.voice_attachment_info(_voice_msg(id=1), chat_id=1)
+        second = transcription.voice_attachment_info(_voice_msg(id=2), chat_id=1)
+
+    for info in (first, second):
+        assert info["transcript_status"] == "pending"
+        assert info["transcript"] is None
+        assert info["duration"] == 23
+    warnings = [r for r in caplog.records if "Transcript cache unavailable" in r.message]
+    assert len(warnings) == 1  # warned once, not per message
+
+
+def test_voice_attachment_info_corrupt_cache_is_pending(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE", "on-demand")
+    monkeypatch.setattr(transcription, "_cache_unavailable_warned", False)
+
+    def _corrupt():
+        raise transcription.sqlite3.DatabaseError("file is not a database")
+
+    monkeypatch.setattr(transcription, "_connect", _corrupt)
+    info = transcription.voice_attachment_info(_voice_msg(id=1), chat_id=1)
+    assert info["transcript_status"] == "pending"
+
+
+def test_cache_dir_falls_back_to_temp_dir_when_cwd_and_home_are_read_only(
+    monkeypatch, tmp_path
+):
+    monkeypatch.delenv("TELEGRAM_TRANSCRIPT_CACHE_DIR", raising=False)
+    read_only = tmp_path / "ro"
+    read_only.mkdir()
+    monkeypatch.chdir(read_only)
+    monkeypatch.setattr(transcription.Path, "home", lambda: read_only / "home")
+    monkeypatch.setattr(transcription.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
+
+    real_mkdir = Path.mkdir
+
+    def _mkdir(self, *args, **kwargs):
+        if str(self).startswith(str(read_only)) or not self.is_absolute():
+            raise OSError(30, "Read-only file system", str(self))
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(transcription.Path, "mkdir", _mkdir)
+
+    d = transcription.cache_dir()
+    assert d.is_relative_to(tmp_path / "tmp")
+    assert d.is_dir()
+
+
+def test_cache_dir_raises_when_no_candidate_is_writable(monkeypatch, tmp_path):
+    monkeypatch.delenv("TELEGRAM_TRANSCRIPT_CACHE_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    def _mkdir(self, *args, **kwargs):
+        raise OSError(30, "Read-only file system", str(self))
+
+    monkeypatch.setattr(transcription.Path, "mkdir", _mkdir)
+    with pytest.raises(OSError):
+        transcription.cache_dir()
+
+
 def test_render_voice_text_ready_marks_source_and_not_verbatim():
     info = {
         "duration": 23,
@@ -578,6 +650,23 @@ async def test_prefetch_is_noop_outside_auto_mode(monkeypatch, transcript_cache_
     await transcription.prefetch_transcripts(None, None, 1, [_voice_msg(id=1)])
 
     assert transcription.get_cached_transcript(1, 1) is None
+
+
+@pytest.mark.asyncio
+async def test_prefetch_skips_when_cache_unavailable(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE", "auto")
+    _unwritable_cache(monkeypatch)
+    calls = []
+
+    async def _fake_transcribe(cl, entity, msg, engine):
+        calls.append(msg.id)
+        return {"status": "ok", "text": "x"}
+
+    monkeypatch.setattr(transcription, "transcribe", _fake_transcribe)
+
+    await transcription.prefetch_transcripts(None, None, 1, [_voice_msg(id=1)])
+
+    assert calls == []  # nothing paid for when the result could not be cached
 
 
 @pytest.mark.asyncio
