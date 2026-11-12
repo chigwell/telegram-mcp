@@ -123,6 +123,24 @@ def test_message_to_dict_voice_off_mode_shows_duration_only(monkeypatch, transcr
     assert "transcript_status" not in d
 
 
+def test_message_to_dict_voice_unwritable_cache_still_returns_record(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_TRANSCRIBE", "on-demand")
+    monkeypatch.setattr(transcription, "_cache_unavailable_warned", False)
+
+    def _raise():
+        raise OSError(30, "Read-only file system", "/home/app/.cache")
+
+    monkeypatch.setattr(transcription, "cache_dir", _raise)
+
+    d = message_to_dict(_voice_msg(id=5), chat_id=1)
+    assert d["media"] == "voice"
+    assert d["duration"] == 23
+    assert d["transcript_status"] == "pending"
+
+    line = format_message_line(_voice_msg(id=5), chat_id=1)
+    assert "transcript pending" in line
+
+
 def test_message_to_dict_text_message_untouched():
     d = message_to_dict(_msg(message="hello"))
     assert d["text"] == "hello"

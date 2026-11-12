@@ -29,8 +29,10 @@ alongside ``text`` rather than presenting it as exact speech.
 import asyncio
 import importlib.util
 import io
+import logging
 import os
 import sqlite3
+import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -41,6 +43,8 @@ import httpx
 from telethon.tl import functions
 
 from telegram_mcp.runtime import account_is_premium, get_marked_id, is_premium_rpc_error
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -265,17 +269,58 @@ def cache_dir() -> Path:
         # started the server: often "/" or another read-only folder when the installed
         # `telegram-mcp` script is used. Fall back to a per-user cache instead of failing
         # every listing that contains a voice message.
-        d = Path(DEFAULT_CACHE_DIR)
-        try:
-            d.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            d = Path.home() / ".cache" / "telegram-mcp" / "transcripts"
-            d.mkdir(parents=True, exist_ok=True)
+        # A read-only container (read_only root, HOME not writable) refuses both of those, so
+        # the system temp directory (usually a tmpfs there) is the last resort.
+        candidates = (
+            Path(DEFAULT_CACHE_DIR),
+            Path.home() / ".cache" / "telegram-mcp" / "transcripts",
+            Path(tempfile.gettempdir()) / f"telegram-mcp-{_uid_suffix()}" / "transcripts",
+        )
+        for d in candidates:
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                break
+            except OSError as e:
+                last_error = e
+        else:
+            raise last_error
     try:
         os.chmod(d, 0o700)
     except OSError:
         pass
     return d
+
+
+def _uid_suffix() -> str:
+    getuid = getattr(os, "getuid", None)
+    return str(getuid()) if getuid is not None else "user"
+
+
+_cache_unavailable_warned = False
+
+
+def _lookup_cached_best_effort(chat_id: int, message_id: int) -> tuple:
+    """``(row, available)`` for the read paths that only display or skip.
+
+    A cache that cannot be opened (read-only filesystem, corrupt database, ...)
+    means "no cached transcript", not a failed listing: one voice message in
+    range would otherwise fail get_history/get_messages/list_messages for the
+    whole batch. Warns once per process so the cause is visible in the logs.
+    """
+    global _cache_unavailable_warned
+    try:
+        return get_cached_transcript(chat_id, message_id), True
+    except (OSError, sqlite3.Error) as e:
+        if not _cache_unavailable_warned:
+            _cache_unavailable_warned = True
+            logger.warning(
+                "Transcript cache unavailable (%s: %s); voice transcripts will show as "
+                "pending. Set TELEGRAM_TRANSCRIPT_CACHE_DIR to a writable directory or "
+                "TELEGRAM_TRANSCRIBE=off.",
+                type(e).__name__,
+                e,
+            )
+        return None, False
 
 
 def _cache_db_path() -> Path:
@@ -791,7 +836,12 @@ async def prefetch_transcripts(cl, entity, chat_id: int, messages) -> None:
             continue
         if getattr(msg, "message", None):
             continue  # already has text, nothing to fill
-        if get_cached_transcript(chat_id, msg.id) is not None:
+        cached, available = _lookup_cached_best_effort(chat_id, msg.id)
+        if not available:
+            # Without a cache every prefetched transcript would be paid for
+            # and thrown away, on every read of this range.
+            return
+        if cached is not None:
             continue
         duration = voice_duration(msg)
         if not budget.can_afford(duration):
@@ -833,7 +883,7 @@ def voice_attachment_info(msg, chat_id: Optional[int]) -> Optional[dict]:
     }
     if chat_id is None or transcribe_mode() == "off":
         return info
-    cached = get_cached_transcript(chat_id, msg.id)
+    cached, _ = _lookup_cached_best_effort(chat_id, msg.id)
     if cached is not None:
         info["transcript"] = cached["text"]
         info["transcript_source"] = cached["source"]
