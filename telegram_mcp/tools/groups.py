@@ -272,11 +272,9 @@ async def leave_chat(chat_id: Union[int, str], account: Optional[str] = None) ->
             entity_type = type(entity).__name__
             return log_and_format_error(
                 "leave_chat",
-                Exception(
-                    f"Cannot leave chat ID {chat_id} of type {entity_type}. "
-                    "This function is for groups and channels only."
-                ),
+                Exception(f"Cannot leave a chat of type {entity_type}."),
                 chat_id=chat_id,
+                user_message="Error: chat_id must be a group or channel, not a user.",
             )
 
     except Exception as e:
