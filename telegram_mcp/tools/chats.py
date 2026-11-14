@@ -7,6 +7,11 @@ from telethon.errors import BotMethodInvalidError
 from telethon.tl.tlobject import TLObject, TLRequest
 
 from telegram_mcp.runtime import *
+from telegram_mcp.tools.messages import in_allowed_topics, topic_thread_kwargs
+
+# Recent messages get_chat looks through for the last one of a chat's allowed topics
+# when they cannot be read as one thread (General, or several topics).
+LAST_MESSAGE_TOPIC_WINDOW = 20
 
 
 class GetForumTopicsRequest(TLRequest):
@@ -241,7 +246,7 @@ async def subscribe_public_channel(channel: Union[int, str], account: Optional[s
 
 @mcp.tool(annotations=ToolAnnotations(title="List Topics", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
-@validate_id("chat_id")
+@validate_id("chat_id", topic_aware=True)
 async def list_topics(
     chat_id: Union[int, str],
     limit: int = 200,
@@ -275,18 +280,35 @@ async def list_topics(
         if not getattr(entity, "forum", False):
             return "The specified supergroup does not have forum topics enabled."
 
-        result = await cl(
-            GetForumTopicsRequest(
-                channel=entity,
-                offset_date=0,
-                offset_id=0,
-                offset_topic=offset_topic,
-                limit=limit,
-                q=search_query or None,
+        allowed_topics = get_allowed_topics(chat_id, entity)
+        if allowed_topics is None:
+            result = await cl(
+                GetForumTopicsRequest(
+                    channel=entity,
+                    offset_date=0,
+                    offset_id=0,
+                    offset_topic=offset_topic,
+                    limit=limit,
+                    q=search_query or None,
+                )
             )
-        )
+        else:
+            # Ask for the allowed topics by id: a page of all topics may not hold them.
+            result = await cl(
+                functions.messages.GetForumTopicsByIDRequest(
+                    peer=entity, topics=sorted(allowed_topics)
+                )
+            )
 
         topics = getattr(result, "topics", None) or []
+        if allowed_topics is not None:
+            query = (search_query or "").casefold()
+            topics = [
+                topic
+                for topic in topics
+                if topic.id in allowed_topics
+                and query in (getattr(topic, "title", None) or "").casefold()
+            ]
         if not topics:
             return "No topics found for this chat."
 
@@ -886,7 +908,7 @@ async def list_chats(
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chat", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
-@validate_id("chat_id")
+@validate_id("chat_id", topic_aware=True)
 async def get_chat(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Get detailed information about a specific chat.
@@ -971,7 +993,17 @@ async def get_chat(chat_id: Union[int, str], account: Optional[str] = None) -> s
                 # folder_id == 1 is the Archive folder (None/0 == main list)
                 record["archived"] = getattr(dialog, "folder_id", 0) == 1
 
-            last_messages = await cl.get_messages(entity, limit=1)
+            # In a topic-limited chat the last message is the allowed topics' newest, if
+            # any: one thread is read directly, General or several topics from a short
+            # window of the chat.
+            allowed_topics = get_allowed_topics(chat_id, entity)
+            thread = topic_thread_kwargs(allowed_topics)
+            window = 1 if allowed_topics is None or thread else LAST_MESSAGE_TOPIC_WINDOW
+            last_messages = [
+                msg
+                for msg in await cl.get_messages(entity, limit=window, **thread)
+                if in_allowed_topics(msg, allowed_topics)
+            ]
             if last_messages:
                 last_msg = last_messages[0]
                 sender_name = "Unknown"

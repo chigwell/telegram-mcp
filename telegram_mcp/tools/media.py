@@ -27,7 +27,12 @@ from telegram_mcp.photo_source import (
     list_photo_references,
     validate_source,
 )
-from telegram_mcp.tools.messages import _plain_entities, _plain_text_conflict
+from telegram_mcp.tools.messages import (
+    _plain_entities,
+    _plain_text_conflict,
+    in_allowed_topics,
+    topic_refusal,
+)
 
 PHOTO_IDENTIFIER_SEARCH_DEPTH = 100
 PHOTO_SHEET_MAXIMUM_TILES = 12
@@ -831,7 +836,7 @@ async def upload_file(
     annotations=ToolAnnotations(title="Get Media Info", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
-@validate_id("chat_id")
+@validate_id("chat_id", topic_aware=True)
 async def get_media_info(
     chat_id: Union[int, str], message_id: int, account: Optional[str] = None
 ) -> str:
@@ -849,6 +854,11 @@ async def get_media_info(
 
         if not msg:
             return "No media found in the specified message."
+        allowed_topics = get_allowed_topics(chat_id, entity)
+        if not in_allowed_topics(msg, allowed_topics):
+            return topic_refusal(
+                "get_media_info", chat_id, allowed_topics, f"Message {message_id}"
+            )
         if msg.media:
             return str(msg.media)
         # Block-format posts keep their embedded photos/videos in
@@ -1095,7 +1105,7 @@ async def list_photos(
 
 @mcp.tool(annotations=ToolAnnotations(title="Open Photo", openWorldHint=True, readOnlyHint=True))
 @with_account(readonly=True)
-@validate_id("chat_id")
+@validate_id("chat_id", topic_aware=True)
 async def open_photo(
     chat_id: Union[int, str],
     photo_id: Optional[int] = None,
@@ -1119,6 +1129,15 @@ async def open_photo(
     try:
         cl = get_client(account)
         entity = await resolve_entity(chat_id, cl)
+
+        # Avatars belong to the chat; a photo posted in it must be in an allowed topic.
+        allowed_topics = get_allowed_topics(chat_id, entity)
+        if message_id is not None and allowed_topics is not None:
+            posted = await cl.get_messages(entity, ids=message_id)
+            if posted is not None and not in_allowed_topics(posted, allowed_topics):
+                return topic_refusal(
+                    "open_photo", chat_id, allowed_topics, f"Message {message_id}"
+                )
 
         wanted_source = "messages" if message_id is not None else AVATAR_SOURCE
         wanted_identifier = message_id if message_id is not None else photo_id
@@ -1256,7 +1275,7 @@ def _sniff_image_format(data: bytes) -> Optional[str]:
     )
 )
 @with_account(readonly=True)
-@validate_id("chat_id")
+@validate_id("chat_id", topic_aware=True)
 async def inspect_document(
     chat_id: Union[int, str],
     message_id: int,
@@ -1278,6 +1297,11 @@ async def inspect_document(
         entity = await resolve_entity(chat_id, cl)
         msg = await cl.get_messages(entity, ids=message_id)
 
+        allowed_topics = get_allowed_topics(chat_id, entity)
+        if msg and not in_allowed_topics(msg, allowed_topics):
+            return topic_refusal(
+                "inspect_document", chat_id, allowed_topics, f"Message {message_id}"
+            )
         if not msg or not msg.media:
             return "There is no attached document or media file in the specified message."
 

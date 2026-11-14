@@ -1397,10 +1397,23 @@ _NUMERIC_CHAT_ID_RE = re.compile(r"-?\d+")
 CHAT_PARAM_NAMES: frozenset[str] = frozenset(
     {"chat_id", "from_chat_id", "to_chat_id", "channel", "contact_id", "group_id"}
 )
+# "<chat>:<topic id>" in TELEGRAM_ALLOWED_CHAT_IDS allows a chat but only that forum
+# topic (1 is General). The chat part is written like a plain entry: marked ID or username.
+_TOPIC_ENTRY_RE = re.compile(r"(?P<chat>-?\d+|@?[A-Za-z0-9_]+)\s*:\s*(?P<topic>[1-9]\d*)")
+
+
+def _split_topic_entry(token: str) -> tuple[str, Optional[int]]:
+    """Split an allowlist token into its chat part and forum topic (None for a plain entry)."""
+    match = _TOPIC_ENTRY_RE.fullmatch(token)
+    if match is None:
+        return token, None
+    return match.group("chat"), int(match.group("topic"))
 
 
 def _parse_allowed_chat_ids(
     raw: Optional[Union[str, Iterable[Union[int, str]]]],
+    *,
+    allow_topics: bool = False,
 ) -> Optional[set[Union[int, str]]]:
     """Parse TELEGRAM_ALLOWED_CHAT_IDS into a set of allowed marked IDs and usernames.
 
@@ -1414,6 +1427,10 @@ def _parse_allowed_chat_ids(
     bare number can name unrelated chats of different types. Each entry is kept
     exactly as written and never widened to other peer types: allowing channel
     ``-100123456789`` must not also allow user ``123456789``.
+
+    With ``allow_topics`` a ``<chat>:<topic id>`` entry allows its chat here;
+    ``get_allowed_topics`` then limits that chat to the listed forum topics. The
+    blocklist parses without it, so such an entry never blocks a whole chat.
     """
     if raw is None:
         return None
@@ -1432,6 +1449,8 @@ def _parse_allowed_chat_ids(
 
     allowed: set[Union[int, str]] = set()
     for token in tokens:
+        if allow_topics:
+            token, _topic = _split_topic_entry(token)
         if _NUMERIC_CHAT_ID_RE.fullmatch(token):
             allowed.add(int(token))
             continue
@@ -1444,7 +1463,7 @@ def _parse_allowed_chat_ids(
 
 def _load_allowed_chat_ids() -> Optional[set[Union[int, str]]]:
     """Load ALLOWED_CHAT_IDS from the TELEGRAM_ALLOWED_CHAT_IDS environment variable."""
-    return _parse_allowed_chat_ids(os.getenv("TELEGRAM_ALLOWED_CHAT_IDS"))
+    return _parse_allowed_chat_ids(os.getenv("TELEGRAM_ALLOWED_CHAT_IDS"), allow_topics=True)
 
 
 # Initial load from environment
@@ -1455,13 +1474,97 @@ def get_effective_allowed_chat_ids() -> Optional[set[Union[int, str]]]:
     """Return the currently effective set of allowed chat IDs, or None if allowlist is disabled."""
     env_raw = os.getenv("TELEGRAM_ALLOWED_CHAT_IDS")
     if env_raw is not None:
-        return _parse_allowed_chat_ids(env_raw)
+        return _parse_allowed_chat_ids(env_raw, allow_topics=True)
     return ALLOWED_CHAT_IDS
 
 
 def is_chat_allowlist_enabled() -> bool:
     """Return True if chat allowlist filtering is active."""
     return get_effective_allowed_chat_ids() is not None
+
+
+def _allowlist_chat_key(token: str) -> Optional[Union[int, str]]:
+    """An allowlist entry's chat part as matched: a marked ID or a lowercase username."""
+    if _NUMERIC_CHAT_ID_RE.fullmatch(token):
+        return int(token)
+    return token.lstrip("@").strip().lower() or None
+
+
+_TopicLimits = tuple[dict[Union[int, str], frozenset[int]], frozenset[Union[int, str]]]
+
+
+def _parse_allowed_topics(raw: Optional[str]) -> _TopicLimits:
+    """Forum topic limits from the ``<chat>:<topic id>`` entries of TELEGRAM_ALLOWED_CHAT_IDS.
+
+    Returns the allowed topics per chat key and the chat keys that are also listed
+    without a topic: those chats are allowed whole.
+    """
+    topics: dict[Union[int, str], set[int]] = {}
+    whole: set[Union[int, str]] = set()
+    for token in (raw or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        chat, topic = _split_topic_entry(token)
+        key = _allowlist_chat_key(chat)
+        if key is None:
+            continue
+        if topic is None:
+            whole.add(key)
+        else:
+            topics.setdefault(key, set()).add(topic)
+    return {key: frozenset(ids) for key, ids in topics.items()}, frozenset(whole)
+
+
+def _effective_allowed_topics() -> _TopicLimits:
+    return _parse_allowed_topics(os.getenv("TELEGRAM_ALLOWED_CHAT_IDS"))
+
+
+def is_topic_allowlist_enabled() -> bool:
+    """True when TELEGRAM_ALLOWED_CHAT_IDS limits at least one chat to forum topics."""
+    return bool(_effective_allowed_topics()[0])
+
+
+def topic_limits_need_entity() -> bool:
+    """True when a topic limit or whole entry is listed by username, so only the
+    resolved chat entity can tell whether a numeric ID is limited."""
+    by_chat, whole = _effective_allowed_topics()
+    return bool(by_chat) and any(isinstance(key, str) for key in (*by_chat, *whole))
+
+
+def get_allowed_topics(
+    chat_identifier: Any = None, entity: Any = None
+) -> Optional[frozenset[int]]:
+    """Forum topic IDs a chat is limited to by TELEGRAM_ALLOWED_CHAT_IDS.
+
+    None means no topic limit: the chat is listed whole, or not listed at all (the
+    chat allowlist decides about that). The identifier and the entity are matched
+    like ``is_chat_allowed`` does, by marked ID and username; a chat that matches a
+    whole entry under one of them is allowed whole.
+    """
+    by_chat, whole = _effective_allowed_topics()
+    if not by_chat:
+        return None
+    keys: set[Union[int, str]] = set()
+    if chat_identifier is not None and not isinstance(chat_identifier, bool):
+        if isinstance(chat_identifier, int):
+            keys.add(int(chat_identifier))
+        else:
+            key = _allowlist_chat_key(str(chat_identifier).strip())
+            if key is not None:
+                keys.add(key)
+    if entity is not None:
+        try:
+            keys.add(get_marked_id(entity))
+        except Exception:
+            pass
+        username = getattr(entity, "username", None)
+        if username:
+            keys.add(str(username).lstrip("@").lower())
+    if keys & whole:
+        return None
+    limits = [by_chat[key] for key in keys if key in by_chat]
+    return frozenset().union(*limits) if limits else None
 
 
 def get_blocked_chat_ids() -> set[Union[int, str]]:
@@ -1556,6 +1659,47 @@ def check_chat_access(chat_identifier: Any, entity: Any = None) -> Optional[str]
             "(TELEGRAM_ALLOWED_CHAT_IDS)."
         )
     return None
+
+
+def _topic_ids_text(topics: Iterable[int]) -> str:
+    return ", ".join(str(topic) for topic in sorted(topics))
+
+
+def topic_limited_tool_message(chat_identifier: Any, topics: Iterable[int], tool_name: str) -> str:
+    """Refusal for a tool that cannot keep to the forum topics a chat is limited to."""
+    return (
+        f"Access to chat '{chat_identifier}' is restricted by privacy policy "
+        f"(TELEGRAM_ALLOWED_CHAT_IDS): only forum topic(s) {_topic_ids_text(topics)} are "
+        f"allowed, and {tool_name} cannot be limited to a topic."
+    )
+
+
+def topic_outside_message(chat_identifier: Any, topics: Iterable[int], subject: str) -> str:
+    """Refusal for a message or topic outside the forum topics a chat is limited to."""
+    return (
+        f"{subject} in chat '{chat_identifier}' is restricted by privacy policy "
+        f"(TELEGRAM_ALLOWED_CHAT_IDS): only forum topic(s) {_topic_ids_text(topics)} "
+        "are allowed."
+    )
+
+
+async def _topic_limit_for_param(item: Any, account: Optional[str]) -> Optional[frozenset[int]]:
+    """The forum topic limit on the chat a tool parameter names, for validate_id.
+
+    A name is resolved first: the limit may be listed under the chat's ID. A numeric
+    ID is resolved too when entries name chats by username, so the gate matches the
+    same keys as the tools do. A chat that cannot be resolved is matched as written.
+    """
+    if not is_topic_allowlist_enabled():
+        return None
+    if not isinstance(item, str) and not topic_limits_need_entity():
+        return get_allowed_topics(item)
+    entity = None
+    try:
+        entity = await resolve_entity(item, get_client(account))
+    except Exception:
+        pass
+    return get_allowed_topics(item, entity)
 
 
 # Error code prefix mapping for better error tracing
@@ -1710,13 +1854,17 @@ def log_and_format_error(
     return f"An error occurred (code: {error_code})."
 
 
-def validate_id(*param_names_to_validate, raise_errors=False):
+def validate_id(*param_names_to_validate, raise_errors=False, topic_aware=False):
     """
     Decorator to validate chat_id and user_id parameters, including lists of IDs.
     It checks for valid integer ranges, string representations of integers,
     and username formats.
     Set raise_errors to surface validation/privacy failures as MCP tool errors;
     other tools retain their existing return contract by default.
+    Set topic_aware on tools that keep to the forum topics a chat is limited to by
+    ``<chat>:<topic>`` entries of TELEGRAM_ALLOWED_CHAT_IDS (see get_allowed_topics);
+    every other tool is refused for such a chat, so a tool that does not know about
+    topics can never read or change the rest of it.
     """
 
     def error_result(message):
@@ -1838,6 +1986,10 @@ def validate_id(*param_names_to_validate, raise_errors=False):
                             err = check_chat_access(item, entity)
                         else:
                             err = None
+                        if err is None and not topic_aware:
+                            topics = await _topic_limit_for_param(item, kwargs.get("account"))
+                            if topics is not None:
+                                err = topic_limited_tool_message(item, topics, func.__name__)
                         if err:
                             return error_result(
                                 log_and_format_error(
