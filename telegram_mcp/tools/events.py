@@ -32,11 +32,14 @@ from telegram_mcp.account_labels import canonical_account_label
 from telegram_mcp.runtime import *  # mcp, clients, ToolAnnotations, log_and_format_error
 from telegram_mcp.runtime import _tool_timeout_seconds
 from telegram_mcp.tools.messages import (
+    in_allowed_topics,
+    keep_allowed_topics,
     message_reply_id,
     message_to_dict,
     message_topic_id,
     topics_for_messages,
     topics_metadata,
+    topic_thread_kwargs,
 )
 
 # chat_id -> {first_ts, last_ts, count, first_id, last_id, name, username}
@@ -406,14 +409,27 @@ async def _on_message_event(event, account: Optional[str] = None) -> None:
             if not is_chat_allowed(chat_id, chat):
                 return
         msg = event.message
+        topic_limited = False
+        if is_topic_allowlist_enabled():
+            # The limit may be listed under the chat's username, which needs the entity.
+            if chat is None and topic_limits_need_entity():
+                try:
+                    chat = await event.get_chat()
+                except Exception:
+                    pass
+            allowed_topics = get_allowed_topics(chat_id, chat)
+            if not in_allowed_topics(msg, allowed_topics):
+                return
+            topic_limited = allowed_topics is not None
         # Cached sender only: get_sender() may call Telegram for every message
         # of a busy group. Readers get the full sender from get_messages_after.
         sender = getattr(event, "sender", None)
         name = None
         if sender is not None:
             name = utils.get_display_name(sender) or None
-        # A forum is what its cached entity says, as in the reads.
-        forum = bool(getattr(chat, "forum", False))
+        # A forum is what its cached entity says, as in the reads; a topic-limited chat
+        # is read as a forum even when its entity is not cached.
+        forum = topic_limited or bool(getattr(chat, "forum", False))
         _append_event(
             {
                 "account": account,
@@ -475,7 +491,7 @@ def _select_events(
 @mcp.tool(
     annotations=ToolAnnotations(title="Wait For Events", openWorldHint=True, readOnlyHint=True)
 )
-@validate_id("chat_id")
+@validate_id("chat_id", topic_aware=True)
 async def wait_for_events(
     chat_id: Optional[Union[int, str]] = None,
     after_seq: int = 0,
@@ -578,7 +594,7 @@ async def wait_for_events(
     annotations=ToolAnnotations(title="Get Messages After", openWorldHint=True, readOnlyHint=True)
 )
 @with_account(readonly=True)
-@validate_id("chat_id")
+@validate_id("chat_id", topic_aware=True)
 @flood_category("history")
 async def get_messages_after(
     chat_id: Union[int, str],
@@ -599,7 +615,9 @@ async def get_messages_after(
     forum, a message in a topic carries `topic` (the topic's id, 1 for General)
     and the result has one `topics` map of topic id to title for the topics
     present; `reply_to` is only a real reply. With several accounts, pass the
-    event's `account`.
+    event's `account`. In a chat limited to forum topics by TELEGRAM_ALLOWED_CHAT_IDS,
+    other topics' messages are left out and `next_after_id` names the newest message
+    read: pass it as `after_id` to continue past them.
 
     Args:
         chat_id: The ID or username of the chat.
@@ -632,13 +650,16 @@ async def get_messages_after(
                 chat_id=chat_id,
             )
         limit = max(1, min(int(limit), _HISTORY_BATCH_MAX))
+        allowed_topics = get_allowed_topics(chat_id, entity)
+        thread = topic_thread_kwargs(allowed_topics)
         if after_id is not None:
-            messages = await cl.get_messages(
-                entity, limit=limit, min_id=int(after_id), reverse=True
+            fetched = await cl.get_messages(
+                entity, limit=limit, min_id=int(after_id), reverse=True, **thread
             )
-            messages = [m for m in messages if m.id > int(after_id)]
+            fetched = [m for m in fetched if m.id > int(after_id)]
         else:
-            messages = list(reversed(await cl.get_messages(entity, limit=limit)))
+            fetched = list(reversed(await cl.get_messages(entity, limit=limit, **thread)))
+        messages = keep_allowed_topics(fetched, allowed_topics)
         kind = _chat_kind(entity) or "channel"
         numeric_chat_id = get_marked_id(entity)
         forum = bool(getattr(entity, "forum", False))
@@ -651,17 +672,18 @@ async def get_messages_after(
             rec["addressed"] = _is_addressed(kind, msg) if kind != "channel" else False
             records.append(rec)
         topics = await topics_for_messages(cl, entity, messages)
-        return json.dumps(
-            {
-                "chat_id": numeric_chat_id,
-                "chat_type": kind,
-                "has_more": len(messages) >= limit,
-                "messages": records,
-                **(topics_metadata(topics) or {}),
-            },
-            ensure_ascii=False,
-            default=json_serializer,
-        )
+        payload = {
+            "chat_id": numeric_chat_id,
+            "chat_type": kind,
+            "has_more": len(fetched) >= limit,
+            "messages": records,
+            **(topics_metadata(topics) or {}),
+        }
+        if allowed_topics is not None and fetched:
+            # Messages of other topics were read and dropped: continue after them,
+            # or a batch that dropped everything would be asked for again forever.
+            payload["next_after_id"] = max(m.id for m in fetched)
+        return json.dumps(payload, ensure_ascii=False, default=json_serializer)
     except Exception as e:
         return log_and_format_error("get_messages_after", e, chat_id=chat_id)
 

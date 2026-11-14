@@ -70,6 +70,8 @@ TELEGRAM_EXPOSED_TOOLS=all
 # Comma-separated list of allowed marked chat IDs or usernames
 # (user 12345678, basic group -4567, channel/supergroup -100123456789)
 # TELEGRAM_ALLOWED_CHAT_IDS=12345678,-100123456789,@my_private_group
+# "<chat>:<topic id>" allows only that forum topic of a chat (ids from list_topics)
+# TELEGRAM_ALLOWED_CHAT_IDS=-100123456789:163
 
 # Optional: File Upload Security Roots (Enforce strict path boundaries)
 # Comma-separated absolute paths where file uploads/downloads are allowed

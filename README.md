@@ -864,6 +864,23 @@ When `TELEGRAM_ALLOWED_CHAT_IDS` is set:
 
 If `TELEGRAM_ALLOWED_CHAT_IDS` is unset or empty, the server operates in unrestricted mode (default), preserving 100% backward compatibility.
 
+### Forum topics
+
+An entry written as `<chat>:<topic id>` allows the chat, but only that forum topic (`1` is General). Several entries allow several topics of one chat; a plain entry for the same chat allows it whole again. Topic ids come from `list_topics`.
+
+```env
+# Only the topic with id 163 of a forum supergroup, plus one whole private chat
+TELEGRAM_ALLOWED_CHAT_IDS=-100123456789:163,12345678
+```
+
+For a chat limited to topics:
+- **Reading tools that keep to the topics:** `get_history` (the allowed topic is the default when there is only one), `list_messages`, `get_messages`, `search_messages`, `get_message_context`, `get_messages_after`, `list_topics` (only the allowed topics), `get_chat` (`last_message` only from an allowed topic), `open_photo`, `inspect_document`, `get_media_info`, `transcribe_voice` and `wait_for_events`. Messages of other topics are left out, and a message id from another topic is refused. `get_messages_after` also returns `next_after_id`, the newest message it read, so a reader can continue past messages it left out.
+- **Every other tool that takes the chat** (sending, editing, pinned and scheduled messages, members, the admin log, exports, …) is refused with `Access to chat '<chat_id>' is restricted by privacy policy (TELEGRAM_ALLOWED_CHAT_IDS): only forum topic(s) <ids> are allowed, and <tool> cannot be limited to a topic.` A tool has to be taught about topics before it can be used, so a tool that does not know about them never reaches the rest of the chat.
+- **Tools that read many chats:** `search_global`, `get_drafts` and the incoming event log leave out the chat's other topics.
+- Chat-level metadata stays visible: the title, the member count and the chat's total unread count.
+
+`TELEGRAM_BLOCKED_CHAT_IDS` takes whole chats only; a `<chat>:<topic>` entry there blocks nothing.
+
 ### Global chat blocklist
 
 Set `TELEGRAM_BLOCKED_CHAT_IDS` to a comma-separated list of marked chat IDs
