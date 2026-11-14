@@ -111,6 +111,10 @@ TELEGRAM_RESOLVE_PHONE_STATE_FILE=/path/to/resolve-phone.json  # keep the count 
 
 Without a state file the count lives in memory and restarts from zero with the server. The state file holds only lookup timestamps (owner-only, written atomically), is shared by every server process that points at it, and covers all accounts together. A `<state file>.lock` file next to it serialises those processes. If it exists but cannot be parsed, lookups are refused until you fix or delete it; deleting it resets the count. A malformed limit value also refuses lookups instead of running unlimited. The history keeps only the newest `max(MAX_PER_DAY, 1)` timestamps, so after raising the cap the first window counts only the lookups that were kept.
 
+### Call history
+
+`list_calls(chat_id=None, from_date=None, to_date=None, limit=50, account=None)` lists voice and video calls, newest first, from Telegram's phone-call search filter. Each record has `peer` (`id`, `name`, and `username`/`phone` when visible), `date`, `direction` (`outgoing` or `incoming`), `duration` in seconds (0 for a call that never connected), `end_reason` (`missed`, `busy`, `hangup`, `disconnect`, another Telegram reason in lower case, or `null` when Telegram gives none) and `video`. Pass `chat_id` for one user's calls, and `from_date`/`to_date` (`YYYY-MM-DD`, UTC, both inclusive) for a date range. `limit` is 1 to 500. It is read-only, so it is part of `TELEGRAM_EXPOSED_TOOLS=read-only`.
+
 ### Remembered contacts
 
 `set_contact_alias` teaches the server what you call someone, and every tool that takes a `chat_id` understands it from then on — `send_message("андрей бекендер", ...)` just works. A contact can carry any number of aliases, which is how tags work: save both `андрей бекендер` and `бекендер` for the same person and either resolves.
@@ -854,7 +858,7 @@ Numeric IDs are matched exactly in Telegram's marked form, the same `chat_id` th
 When `TELEGRAM_ALLOWED_CHAT_IDS` is set:
 - **`list_chats` / `get_chats`:** Only chats matching the allowlist are returned; all other conversations remain completely invisible to the agent.
 - **Messaging & Chat Tools (`send_message`, `get_messages`, `get_chat`, `create_poll`, etc.):** Any attempt to interact with a chat outside the allowlist is rejected with a structured error message: `Access to chat '<chat_id>' is restricted by privacy policy (TELEGRAM_ALLOWED_CHAT_IDS)`.
-- **Search & Drafts (`search_global`, `get_drafts`):** Global searches and draft listings omit unallowed conversations.
+- **Search, Drafts & Calls (`search_global`, `get_drafts`, `list_calls`):** Global searches, draft listings and the call list omit unallowed conversations.
 - **Contact, folder & group-admin tools:** a chat named by `contact_id` or `group_id` (`get_last_interaction`, `get_contact_chats`, `invite_to_group`, `promote_admin`, `demote_admin`) is checked like `chat_id`; `get_common_chats`, `get_contact_chats`, `get_direct_chat_by_contact` and `get_folder` leave unallowed chats out of their results; `create_folder` refuses unallowed `chat_ids`.
 - **Incoming Events:** Notifications and debounce feeds only process events from allowed chats.
 
