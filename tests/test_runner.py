@@ -718,3 +718,60 @@ async def test_main_serves_labelled_accounts_when_preset_default_is_not_logged_i
     assert list(accounts) == ["work"]
     assert "Skipping account 'default'" in err
     assert "Telegram client(s) started (work)." in err
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, 0.0),
+        ("", 0.0),
+        ("0", 0.0),
+        ("120", 120.0),
+        ("2.5", 30.0),
+        ("-5", 0.0),
+        ("soon", 0.0),
+    ],
+)
+def test_catch_up_interval(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv("TELEGRAM_CATCH_UP_INTERVAL", raising=False)
+    else:
+        monkeypatch.setenv("TELEGRAM_CATCH_UP_INTERVAL", raw)
+    assert runner._catch_up_interval() == expected
+
+
+class _CatchUpClient:
+    def __init__(self, connected=True, error=None):
+        self.connected = connected
+        self.error = error
+        self.catch_ups = 0
+
+    def is_connected(self):
+        return self.connected
+
+    async def catch_up(self):
+        self.catch_ups += 1
+        if self.error:
+            raise self.error
+
+
+@pytest.mark.asyncio
+async def test_periodic_catch_up_skips_disconnected_clients_and_survives_errors(monkeypatch):
+    up = _CatchUpClient()
+    down = _CatchUpClient(connected=False)
+    failing = _CatchUpClient(error=ConnectionError("gone"))
+    monkeypatch.setattr(runner, "clients", {"up": up, "down": down, "failing": failing})
+
+    task = asyncio.create_task(runner._periodic_catch_up(0.01))
+
+    async def _two_rounds():
+        while up.catch_ups < 2:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_two_rounds(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert down.catch_ups == 0
+    assert failing.catch_ups >= 2  # an error does not stop the loop

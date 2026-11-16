@@ -1238,6 +1238,11 @@ async def _force_reconnect(cl: TelegramClient):
             "outside the server (session_string_generator.py) and restart."
         )
     _last_conn_verified[id(cl)] = time.time()
+    # Telegram does not push again the updates that arrived while the connection was
+    # down, and a fresh connection gets no getDifference of its own: without this, a
+    # message received during the outage reaches the event handlers (incoming feed,
+    # wait_for_events) only after Telethon's 15-minute no-updates timeout, if at all.
+    await cl.catch_up()
     reconnect_logger.warning("Forced reconnect successful")
 
 
