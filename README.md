@@ -230,6 +230,8 @@ Every new message of a private chat, basic group or supergroup gets one numbered
 
 The debounce tools above keep their private-only behaviour.
 
+**Updates missed while offline.** After a reconnect the server asks Telegram for the updates it missed (`catch_up`), so messages received during a network outage still reach the incoming feed and the event log. Telethon's own automatic reconnect does not do this, and it fetches a difference by itself only after 15 minutes without updates. On a flaky network set `TELEGRAM_CATCH_UP_INTERVAL` (seconds, e.g. `120`, at least `30`; default `0`, off) to ask for missed updates periodically; when nothing was missed the request returns an empty difference.
+
 ## Requirements
 
 - Python 3.10+

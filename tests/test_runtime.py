@@ -822,6 +822,9 @@ class _ConnectivityClient:
         self.calls.append("start")
         self.authorized = True
 
+    async def catch_up(self):
+        self.calls.append("catch_up")
+
     async def __call__(self, _request):
         self.calls.append("ping")
         if self.ping_error:
@@ -836,7 +839,13 @@ async def test_ensure_connected_reconnects_disconnected_client(monkeypatch):
 
     await runtime.ensure_connected(client)
 
-    assert client.calls == ["is_connected", "disconnect", "connect", "is_user_authorized"]
+    assert client.calls == [
+        "is_connected",
+        "disconnect",
+        "connect",
+        "is_user_authorized",
+        "catch_up",
+    ]
     assert runtime._last_conn_verified[id(client)] > 0
 
 
@@ -850,6 +859,7 @@ async def test_force_reconnect_never_starts_interactive_login(monkeypatch):
 
     assert "session_string_generator.py" in str(excinfo.value)
     assert "start" not in client.calls
+    assert "catch_up" not in client.calls
     # The unauthorized connection is dropped so the next tool call reconnects
     # and reports the same error instead of reusing a half-open session.
     assert client.calls == ["disconnect", "connect", "is_user_authorized", "disconnect"]
@@ -875,7 +885,7 @@ async def test_ensure_connected_pings_and_reconnects_on_failed_ping(monkeypatch)
     await runtime.ensure_connected(client)
 
     assert "ping" in client.calls
-    assert client.calls[-3:] == ["disconnect", "connect", "is_user_authorized"]
+    assert client.calls[-4:] == ["disconnect", "connect", "is_user_authorized", "catch_up"]
 
 
 @pytest.mark.asyncio
@@ -956,6 +966,8 @@ async def test_force_reconnect_times_out_instead_of_hanging(monkeypatch):
 
     with pytest.raises(RuntimeError, match="timed out"):
         await runtime._force_reconnect(client)
+
+    assert "catch_up" not in client.calls
 
 
 @pytest.mark.asyncio

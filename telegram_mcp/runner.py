@@ -43,6 +43,43 @@ def _lock_grace_seconds() -> float:
         return DEFAULT_GRACE_SECONDS
 
 
+_MIN_CATCH_UP_INTERVAL = 30.0
+
+
+def _catch_up_interval() -> float:
+    """Seconds between forced update catch-ups (TELEGRAM_CATCH_UP_INTERVAL); 0 = off.
+
+    Positive values below 30 s are raised to 30 s: each catch-up is one getDifference.
+    """
+    raw = os.getenv("TELEGRAM_CATCH_UP_INTERVAL")
+    if not raw:
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.0
+    return max(value, _MIN_CATCH_UP_INTERVAL) if value > 0 else 0.0
+
+
+async def _periodic_catch_up(interval: float) -> None:
+    """Ask Telegram for missed updates every `interval` seconds.
+
+    Telethon only fetches a difference by itself after 15 minutes without updates, and
+    its automatic reconnect does not catch up. On a flaky network this bounds how late
+    an update can reach the event handlers. When nothing was missed, the request returns
+    an empty difference.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        for label, cl in list(clients.items()):
+            if not cl.is_connected():
+                continue
+            try:
+                await cl.catch_up()
+            except Exception as exc:
+                print(f"Update catch-up failed for '{label}': {exc}", file=sys.stderr)
+
+
 _SESSION_LOCK_MODES = ("exclusive", "shared")
 
 
@@ -275,6 +312,10 @@ async def _main() -> None:
                 print(f"Entity cache warm failed: {warm_exc}", file=sys.stderr)
 
         asyncio.create_task(_warm_caches())
+
+        catch_up_interval = _catch_up_interval()
+        if catch_up_interval:
+            asyncio.create_task(_periodic_catch_up(catch_up_interval))
 
         transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
 
