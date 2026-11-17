@@ -161,10 +161,10 @@ class SessionLock:
                     "process already exited, this lock will clear on its own -- "
                     "retry."
                 )
-            # Sleep at most until the grace deadline: the deadline check above
-            # already raised when it passed, so the remainder is positive and a
-            # refusal lands at the grace boundary instead of one poll late.
-            time.sleep(min(poll_interval, deadline - time.monotonic()))
+            # Sleep at most until the grace deadline so a refusal lands at the
+            # grace boundary instead of one poll late. Clamp at zero: the clock
+            # can cross the deadline between the check above and this read.
+            time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
 
     def release(self) -> None:
         if self._fh is not None:
