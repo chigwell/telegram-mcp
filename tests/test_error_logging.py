@@ -4,6 +4,7 @@ import ast
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -331,15 +332,25 @@ def test_error_code_is_stable_across_processes():
         "from telegram_mcp import runtime;"
         "print(runtime.log_and_format_error('leave_chat', RuntimeError('boom')))"
     )
-    outputs = {
-        subprocess.run(
+    # Drop COVERAGE_* so pytest-cov does not trace the children: the hashed-code
+    # line is already covered in-process above, and three traced interpreter
+    # startups dominate the suite's wall time.
+    child_env = {
+        key: value for key, value in os.environ.items() if not key.startswith("COVERAGE_")
+    }
+
+    def run_with_seed(seed):
+        return subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHASHSEED": seed},
+            env={**child_env, "PYTHONHASHSEED": seed},
             check=True,
         ).stdout.strip()
-        for seed in ("1", "2", "3")
-    }
+
+    # Interpreter startup dominates each run; the seeds are independent, so
+    # overlap them instead of paying the cost three times.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        outputs = set(pool.map(run_with_seed, ("1", "2", "3")))
 
     assert outputs == {"An error occurred (code: CHAT-ERR-954)."}
