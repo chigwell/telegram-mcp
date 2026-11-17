@@ -43,6 +43,43 @@ def _lock_grace_seconds() -> float:
         return DEFAULT_GRACE_SECONDS
 
 
+_MIN_CATCH_UP_INTERVAL = 30.0
+
+
+def _catch_up_interval() -> float:
+    """Seconds between forced update catch-ups (TELEGRAM_CATCH_UP_INTERVAL); 0 = off.
+
+    Positive values below 30 s are raised to 30 s: each catch-up is one getDifference.
+    """
+    raw = os.getenv("TELEGRAM_CATCH_UP_INTERVAL")
+    if not raw:
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.0
+    return max(value, _MIN_CATCH_UP_INTERVAL) if value > 0 else 0.0
+
+
+async def _periodic_catch_up(interval: float) -> None:
+    """Ask Telegram for missed updates every `interval` seconds.
+
+    Telethon only fetches a difference by itself after 15 minutes without updates, and
+    its automatic reconnect does not catch up. On a flaky network this bounds how late
+    an update can reach the event handlers. When nothing was missed, the request returns
+    an empty difference.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        for label, cl in list(clients.items()):
+            if not cl.is_connected():
+                continue
+            try:
+                await cl.catch_up()
+            except Exception as exc:
+                print(f"Update catch-up failed for '{label}': {exc}", file=sys.stderr)
+
+
 _SESSION_LOCK_MODES = ("exclusive", "shared")
 
 
@@ -183,20 +220,33 @@ async def _connect_or_skip(label, client) -> None:
         )
 
 
-def _configure_transport_security() -> None:
-    """Wire MCP_ALLOWED_HOSTS/MCP_ALLOWED_ORIGINS into FastMCP's DNS-rebinding
-    protection, e.g. when the server sits behind a reverse proxy on a public
-    domain instead of only being reached via 127.0.0.1/localhost.
-    """
-    raw_hosts = os.getenv("MCP_ALLOWED_HOSTS", "")
-    allowed_hosts = [h.strip() for h in raw_hosts.split(",") if h.strip()]
-    if not allowed_hosts:
-        return
+_LOCAL_ALLOWED_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*")
+_LOCAL_ALLOWED_ORIGINS = ("http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*")
 
+
+def _configure_transport_security() -> None:
+    """Always enable FastMCP's Host/Origin validation for the HTTP transports.
+
+    Without it any web page open in the user's browser could POST tool calls
+    (send, delete, forward...) to the local server: cross-origin request
+    forgery, or DNS rebinding through a hostile domain. The protection is set
+    here explicitly rather than left to FastMCP's constructor, which only turns
+    it on for the host the instance was built with, not for MCP_HOST.
+
+    By default only 127.0.0.1/localhost/[::1] Host headers and browser origins
+    are accepted. MCP_ALLOWED_HOSTS/MCP_ALLOWED_ORIGINS replace those lists,
+    e.g. when the server sits behind a reverse proxy on a public domain.
+    """
     from mcp.server.transport_security import TransportSecuritySettings
 
+    raw_hosts = os.getenv("MCP_ALLOWED_HOSTS", "")
+    allowed_hosts = [h.strip() for h in raw_hosts.split(",") if h.strip()]
     raw_origins = os.getenv("MCP_ALLOWED_ORIGINS", "")
     allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    if not allowed_hosts:
+        allowed_hosts = list(_LOCAL_ALLOWED_HOSTS)
+        if not allowed_origins:
+            allowed_origins = list(_LOCAL_ALLOWED_ORIGINS)
 
     mcp.settings.transport_security = TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
@@ -262,6 +312,10 @@ async def _main() -> None:
                 print(f"Entity cache warm failed: {warm_exc}", file=sys.stderr)
 
         asyncio.create_task(_warm_caches())
+
+        catch_up_interval = _catch_up_interval()
+        if catch_up_interval:
+            asyncio.create_task(_periodic_catch_up(catch_up_interval))
 
         transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
 

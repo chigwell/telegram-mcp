@@ -12,6 +12,7 @@ from telegram_mcp.runtime import *
 )
 @with_account(readonly=False)
 @validate_id("user_ids")
+@flood_category("channel_lifecycle")
 async def create_group(
     title: str, user_ids: List[Union[int, str]], account: Optional[str] = None
 ) -> str:
@@ -95,6 +96,7 @@ def _missing_invitee_ids(result) -> List[int]:
 )
 @with_account(readonly=False)
 @validate_id("group_id", "user_ids")
+@flood_category("admin_action")
 async def invite_to_group(
     group_id: Union[int, str], user_ids: List[Union[int, str]], account: Optional[str] = None
 ) -> str:
@@ -214,6 +216,7 @@ async def invite_to_group(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("channel_lifecycle")
 async def leave_chat(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Leave a group or channel by chat ID.
@@ -332,6 +335,8 @@ async def get_participants(
     try:
         cl = get_client(account)
         await ensure_connected(cl)
+        if is_chat_blocklist_enabled():
+            chat_id = await resolve_entity(chat_id, cl)
 
         # Skip the prefix without retaining it. Basic groups can ignore limit,
         # so explicitly stop once one extra participant proves a next page.
@@ -380,6 +385,7 @@ async def get_participants(
     annotations=ToolAnnotations(title="Create Channel", openWorldHint=True, destructiveHint=True)
 )
 @with_account(readonly=False)
+@flood_category("channel_lifecycle")
 async def create_channel(
     title: str, about: str = "", megagroup: bool = False, account: Optional[str] = None
 ) -> str:
@@ -421,6 +427,7 @@ def _migrated_supergroup_id(chat: Any) -> Optional[int]:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("channel_lifecycle")
 async def upgrade_group_to_supergroup(
     chat_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -483,6 +490,7 @@ async def upgrade_group_to_supergroup(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def edit_chat_title(
     chat_id: Union[int, str], title: str, account: Optional[str] = None
 ) -> str:
@@ -515,6 +523,7 @@ async def edit_chat_title(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def edit_chat_photo(
     chat_id: Union[int, str],
     file_path: str,
@@ -563,6 +572,7 @@ async def edit_chat_photo(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def edit_chat_about(
     chat_id: Union[int, str], about: str, account: Optional[str] = None
 ) -> str:
@@ -596,6 +606,7 @@ async def edit_chat_about(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def delete_chat_photo(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Delete the photo of a chat, group, or channel.
@@ -630,6 +641,7 @@ async def delete_chat_photo(chat_id: Union[int, str], account: Optional[str] = N
 )
 @with_account(readonly=False)
 @validate_id("group_id", "user_id")
+@flood_category("admin_action")
 async def promote_admin(
     group_id: Union[int, str],
     user_id: Union[int, str],
@@ -721,6 +733,7 @@ async def promote_admin(
 )
 @with_account(readonly=False)
 @validate_id("group_id", "user_id")
+@flood_category("admin_action")
 async def demote_admin(
     group_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -789,6 +802,7 @@ async def demote_admin(
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
+@flood_category("admin_action")
 async def ban_user(
     chat_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -851,6 +865,7 @@ async def ban_user(
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
+@flood_category("admin_action")
 async def unban_user(
     chat_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -967,6 +982,7 @@ def _ban_not_cleared_message(error: Exception) -> str:
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
+@flood_category("admin_action")
 async def remove_user(
     chat_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -1062,6 +1078,7 @@ async def remove_user(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def set_default_chat_permissions(
     chat_id: Union[int, str],
     send_messages: bool = True,
@@ -1141,6 +1158,7 @@ async def set_default_chat_permissions(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def toggle_slow_mode(
     chat_id: Union[int, str], seconds: int = 0, account: Optional[str] = None
 ) -> str:
@@ -1311,6 +1329,7 @@ async def _patch_admin_rights(
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
+@flood_category("admin_action")
 async def edit_admin_rights(
     chat_id: Union[int, str],
     user_id: Union[int, str],
@@ -1638,6 +1657,7 @@ async def get_invite_link(chat_id: Union[int, str], account: Optional[str] = Non
     )
 )
 @with_account(readonly=False)
+@flood_category("channel_lifecycle")
 async def join_chat_by_link(link: str, account: Optional[str] = None) -> str:
     """
     Join a chat by invite link.
@@ -1654,20 +1674,25 @@ async def join_chat_by_link(link: str, account: Optional[str] = None) -> str:
             hash_part = link
 
         # Try checking the invite before joining
+        invite_info = None
         try:
             # Try to check invite info first (will often fail if not a member)
             invite_info = await cl(functions.messages.CheckChatInviteRequest(hash=hash_part))
-            if hasattr(invite_info, "chat") and invite_info.chat:
-                # If we got chat info, we're already a member
-                chat_title = sanitize_name(getattr(invite_info.chat, "title", "Unknown Chat"))
-                return f"You are already a member of this chat: {chat_title}"
         except Exception:
             # This often fails if not a member - just continue
             pass
 
+        if getattr(invite_info, "chat", None):
+            if is_chat_blocked(get_marked_id(invite_info.chat), invite_info.chat):
+                return "Already a member of this chat."
+            chat_title = sanitize_name(getattr(invite_info.chat, "title", "Unknown Chat"))
+            return f"You are already a member of this chat: {chat_title}"
+
         # Join the chat using the hash
         result = await cl(functions.messages.ImportChatInviteRequest(hash=hash_part))
         if result and hasattr(result, "chats") and result.chats:
+            if is_chat_blocked(get_marked_id(result.chats[0]), result.chats[0]):
+                return "Joined chat via invite hash."
             chat_title = sanitize_name(getattr(result.chats[0], "title", "Unknown Chat"))
             return f"Successfully joined chat: {chat_title}"
         return "Joined chat via invite hash."
@@ -1687,6 +1712,7 @@ async def join_chat_by_link(link: str, account: Optional[str] = None) -> str:
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def export_chat_invite(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Export a chat invite link.
@@ -1726,6 +1752,7 @@ async def export_chat_invite(chat_id: Union[int, str], account: Optional[str] = 
     )
 )
 @with_account(readonly=False)
+@flood_category("channel_lifecycle")
 async def import_chat_invite(hash: str, account: Optional[str] = None) -> str:
     """
     Import a chat invite by hash.
@@ -1738,6 +1765,7 @@ async def import_chat_invite(hash: str, account: Optional[str] = None) -> str:
             hash = hash[1:]
 
         # Try checking the invite before joining
+        invite_info = None
         try:
             from telethon.errors import (
                 InviteHashExpiredError,
@@ -1749,18 +1777,22 @@ async def import_chat_invite(hash: str, account: Optional[str] = None) -> str:
 
             # Try to check invite info first (will often fail if not a member)
             invite_info = await cl(functions.messages.CheckChatInviteRequest(hash=hash))
-            if hasattr(invite_info, "chat") and invite_info.chat:
-                # If we got chat info, we're already a member
-                chat_title = sanitize_name(getattr(invite_info.chat, "title", "Unknown Chat"))
-                return f"You are already a member of this chat: {chat_title}"
         except Exception:
             # This often fails if not a member - just continue
             pass
+
+        if getattr(invite_info, "chat", None):
+            if is_chat_blocked(get_marked_id(invite_info.chat), invite_info.chat):
+                return "Already a member of this chat."
+            chat_title = sanitize_name(getattr(invite_info.chat, "title", "Unknown Chat"))
+            return f"You are already a member of this chat: {chat_title}"
 
         # Join the chat using the hash
         try:
             result = await cl(functions.messages.ImportChatInviteRequest(hash=hash))
             if result and hasattr(result, "chats") and result.chats:
+                if is_chat_blocked(get_marked_id(result.chats[0]), result.chats[0]):
+                    return "Joined chat via invite hash."
                 chat_title = sanitize_name(getattr(result.chats[0], "title", "Unknown Chat"))
                 return f"Successfully joined chat: {chat_title}"
             return "Joined chat via invite hash."
@@ -1798,6 +1830,8 @@ async def get_recent_actions(chat_id: Union[int, str], account: Optional[str] = 
     try:
         cl = get_client(account)
         await ensure_connected(cl)
+        if is_chat_blocklist_enabled():
+            chat_id = await resolve_entity(chat_id, cl)
         result = await cl(
             functions.channels.GetAdminLogRequest(
                 channel=chat_id,

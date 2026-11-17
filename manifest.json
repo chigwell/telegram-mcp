@@ -54,7 +54,7 @@
     "allowed_chat_ids": {
       "type": "string",
       "title": "Allowed chats",
-      "description": "Optional comma-separated chat IDs or @usernames. When set, every other chat is hidden from Claude.",
+      "description": "Optional comma-separated chat IDs or @usernames. When set, every other chat is hidden from Claude. Use marked IDs: groups as -4567, channels/supergroups as -100123456789; a bare positive number means a user.",
       "required": false,
       "default": ""
     },

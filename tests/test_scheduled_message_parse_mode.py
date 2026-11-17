@@ -47,6 +47,15 @@ async def test_default_keeps_client_parse_mode(client):
 
     assert result.startswith("Scheduled message 42 for ")
     assert "parse_mode" not in client.calls[0]
+    assert client.calls[0]["silent"] is False
+
+
+@pytest.mark.asyncio
+async def test_silent_is_forwarded_to_scheduled_message(client):
+    result = await messages.send_scheduled_message(123, "quiet", _future(), silent=True)
+
+    assert result.startswith("Scheduled message 42 for ")
+    assert client.calls[0]["silent"] is True
 
 
 @pytest.mark.asyncio

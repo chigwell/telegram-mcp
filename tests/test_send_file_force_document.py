@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,9 +10,11 @@ from telegram_mcp.tools import media
 class _RecordingClient:
     def __init__(self):
         self.calls = []
+        self.result = []
 
     async def send_file(self, entity, file, **kwargs):
         self.calls.append({"entity": entity, "file": file, **kwargs})
+        return self.result
 
 
 @pytest.fixture
@@ -47,6 +50,7 @@ async def test_single_file_omits_force_document_by_default(client_and_root):
             "caption": "cap",
             "reply_to": None,
             "schedule": None,
+            "silent": False,
         }
     ]
 
@@ -66,6 +70,7 @@ async def test_single_file_force_document_true_is_passed_through(client_and_root
             "reply_to": None,
             "schedule": None,
             "force_document": True,
+            "silent": False,
         }
     ]
 
@@ -79,6 +84,36 @@ async def test_album_omits_force_document_by_default(client_and_root):
     assert result == "Album sent to chat Chat with 2 files."
     assert "force_document" not in client.calls[0]
     assert client.calls[0]["file"] == [str(root / "one.png"), str(root / "two.png")]
+
+
+@pytest.mark.asyncio
+async def test_album_result_includes_telethon_message_ids(client_and_root):
+    client, _ = client_and_root
+    client.result = [SimpleNamespace(id=101), SimpleNamespace(id=102)]
+
+    result = await media.send_file("Chat", ["one.png", "two.png"])
+
+    assert result == "Album sent to chat Chat with 2 files.\nMessageIDs: [101, 102]"
+
+
+@pytest.mark.asyncio
+async def test_album_result_keeps_positions_when_telethon_cannot_map_an_id(client_and_root):
+    client, _ = client_and_root
+    client.result = [SimpleNamespace(id=101), None, SimpleNamespace(id=103)]
+
+    result = await media.send_file("Chat", ["one.png", "two.png", "shot.png"])
+
+    assert result == "Album sent to chat Chat with 3 files.\nMessageIDs: [101, null, 103]"
+
+
+@pytest.mark.asyncio
+async def test_single_file_result_includes_telethon_message_id(client_and_root):
+    client, _ = client_and_root
+    client.result = SimpleNamespace(id=101)
+
+    result = await media.send_file("Chat", "shot.png")
+
+    assert result.endswith("\nMessageIDs: [101]")
 
 
 @pytest.mark.asyncio
@@ -98,6 +133,7 @@ async def test_album_force_document_true_is_passed_through(client_and_root):
             "reply_to": 9,
             "schedule": None,
             "force_document": True,
+            "silent": False,
         }
     ]
 
@@ -143,3 +179,13 @@ async def test_force_document_does_not_bypass_path_validation(client_and_root):
 
     assert result == "Path traversal is not allowed."
     assert client.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("file_paths", ["shot.png", ["one.png", "two.png"]])
+async def test_send_file_passes_silent_true_to_telethon(client_and_root, file_paths):
+    client, _ = client_and_root
+
+    await media.send_file("Chat", file_paths, silent=True)
+
+    assert client.calls[0]["silent"] is True

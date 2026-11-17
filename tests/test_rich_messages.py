@@ -50,12 +50,15 @@ async def test_send_rich_without_premium_sends_nothing():
 @pytest.mark.asyncio
 async def test_send_rich_with_premium_sends_rich_request():
     cl = _FakeClient(premium=True)
-    result = json.loads(await messages._send_rich(cl, "peer", "| a |", "rich", reply_to=5))
+    result = json.loads(
+        await messages._send_rich(cl, "peer", "| a |", "rich", reply_to=5, silent=True)
+    )
 
     assert result == {"sent": True, "rich": True, "message_id": None}
     (req,) = cl.requests
     assert isinstance(req.rich_message, runtime.types.InputRichMessageMarkdown)
     assert req.reply_to.reply_to_msg_id == 5
+    assert req.silent is True
 
 
 @pytest.mark.asyncio
@@ -439,7 +442,7 @@ def test_message_to_dict_reports_rich_links_and_media():
     d = messages.message_to_dict(_msg(rich_message=_post_like_issue_370()))
 
     assert d["link_urls"] == ["https://example.com/report"]
-    assert d["rich_media"] == [{"type": "video", "id": 7001}]
+    assert d["rich_media"] == [{"type": "video", "id": "7001"}]
     assert d["media"] == "video"  # the embedded video reads as media in listings
 
 
@@ -584,6 +587,42 @@ async def test_download_media_media_id_picks_among_rich_blocks(tmp_path, monkeyp
     result = await _download_media(123, 225, media_id=9999)
     assert "No rich media with id 9999" in result
     assert [d.id for d in client.downloaded] == [7002]
+
+
+@pytest.mark.asyncio
+async def test_rich_media_ids_round_trip_as_strings_above_2_53(tmp_path, monkeypatch):
+    # Telegram document ids exceed 2^53; a JSON client that parses numbers
+    # into doubles rounds them, so the id is reported as a string and the
+    # same string selects the media (#381).
+    big = 4996884764574090643
+    doc = _document(big)
+    msg = _msg(
+        media=None,
+        rich_message=types.RichMessage(
+            blocks=[types.PageBlockVideo(video_id=big, caption=_caption())],
+            photos=[],
+            documents=[doc],
+        ),
+    )
+    reported = messages.message_to_dict(msg)["rich_media"][0]["id"]
+    assert reported == str(big)
+    assert json.loads(json.dumps(reported)) == str(big)
+
+    client = _MediaClient(msg)
+    _patch_media_client(monkeypatch, client)
+
+    async def _resolve_path(**kwargs):
+        return tmp_path / kwargs["default_filename"], None
+
+    monkeypatch.setattr(media, "_resolve_writable_file_path", _resolve_path)
+
+    await _download_media(123, 225, media_id=reported)
+    assert [d.id for d in client.downloaded] == [big]
+
+    # the double-rounded value a JavaScript client used to send
+    result = await _download_media(123, 225, media_id=4996884764574090000)
+    assert "No rich media with id" in result
+    assert [d.id for d in client.downloaded] == [big]
 
 
 @pytest.mark.asyncio

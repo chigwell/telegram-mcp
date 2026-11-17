@@ -1,3 +1,4 @@
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -104,7 +105,8 @@ async def test_migrate_copies_auth_key_verifies_and_hardens_file(tmp_path, monke
     assert saved["client"][1:] == (123, "hash", {"device_model": "test"})
     assert saved["connected"] is True
     assert saved["disconnected"] is True
-    assert session_file.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":  # POSIX permissions only
+        assert session_file.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.asyncio
