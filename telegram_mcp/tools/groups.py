@@ -1,5 +1,7 @@
 """Groups MCP tools."""
 
+from typing import Literal, get_args
+
 from mcp.server.fastmcp.exceptions import ToolError
 
 from telegram_mcp.runtime import *
@@ -10,6 +12,7 @@ from telegram_mcp.runtime import *
 )
 @with_account(readonly=False)
 @validate_id("user_ids")
+@flood_category("channel_lifecycle")
 async def create_group(
     title: str, user_ids: List[Union[int, str]], account: Optional[str] = None
 ) -> str:
@@ -93,6 +96,7 @@ def _missing_invitee_ids(result) -> List[int]:
 )
 @with_account(readonly=False)
 @validate_id("group_id", "user_ids")
+@flood_category("admin_action")
 async def invite_to_group(
     group_id: Union[int, str], user_ids: List[Union[int, str]], account: Optional[str] = None
 ) -> str:
@@ -212,6 +216,7 @@ async def invite_to_group(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("channel_lifecycle")
 async def leave_chat(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Leave a group or channel by chat ID.
@@ -267,11 +272,9 @@ async def leave_chat(chat_id: Union[int, str], account: Optional[str] = None) ->
             entity_type = type(entity).__name__
             return log_and_format_error(
                 "leave_chat",
-                Exception(
-                    f"Cannot leave chat ID {chat_id} of type {entity_type}. "
-                    "This function is for groups and channels only."
-                ),
+                Exception(f"Cannot leave a chat of type {entity_type}."),
                 chat_id=chat_id,
+                user_message="Error: chat_id must be a group or channel, not a user.",
             )
 
     except Exception as e:
@@ -332,6 +335,8 @@ async def get_participants(
     try:
         cl = get_client(account)
         await ensure_connected(cl)
+        if is_chat_blocklist_enabled():
+            chat_id = await resolve_entity(chat_id, cl)
 
         # Skip the prefix without retaining it. Basic groups can ignore limit,
         # so explicitly stop once one extra participant proves a next page.
@@ -354,9 +359,7 @@ async def get_participants(
         for p in participants:
             rec = {
                 "id": p.id,
-                "name": sanitize_name(
-                    f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
-                ),
+                "name": sanitize_name(person_name(p)),
             }
             uname = getattr(p, "username", None)
             if uname:
@@ -382,6 +385,7 @@ async def get_participants(
     annotations=ToolAnnotations(title="Create Channel", openWorldHint=True, destructiveHint=True)
 )
 @with_account(readonly=False)
+@flood_category("channel_lifecycle")
 async def create_channel(
     title: str, about: str = "", megagroup: bool = False, account: Optional[str] = None
 ) -> str:
@@ -423,6 +427,7 @@ def _migrated_supergroup_id(chat: Any) -> Optional[int]:
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("channel_lifecycle")
 async def upgrade_group_to_supergroup(
     chat_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -485,6 +490,7 @@ async def upgrade_group_to_supergroup(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def edit_chat_title(
     chat_id: Union[int, str], title: str, account: Optional[str] = None
 ) -> str:
@@ -517,6 +523,7 @@ async def edit_chat_title(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def edit_chat_photo(
     chat_id: Union[int, str],
     file_path: str,
@@ -565,6 +572,7 @@ async def edit_chat_photo(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def edit_chat_about(
     chat_id: Union[int, str], about: str, account: Optional[str] = None
 ) -> str:
@@ -598,6 +606,7 @@ async def edit_chat_about(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def delete_chat_photo(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Delete the photo of a chat, group, or channel.
@@ -632,6 +641,7 @@ async def delete_chat_photo(chat_id: Union[int, str], account: Optional[str] = N
 )
 @with_account(readonly=False)
 @validate_id("group_id", "user_id")
+@flood_category("admin_action")
 async def promote_admin(
     group_id: Union[int, str],
     user_id: Union[int, str],
@@ -653,6 +663,17 @@ async def promote_admin(
         cl = get_client(account)
         chat = await resolve_entity(group_id, cl)
         user = await resolve_entity(user_id, cl)
+        if isinstance(chat, types.Chat):
+            # Basic groups have a single admin level: there are no per-right settings.
+            await cl(
+                functions.messages.EditChatAdminRequest(
+                    chat_id=chat.id, user_id=utils.get_input_user(user), is_admin=True
+                )
+            )
+            return (
+                f"Successfully promoted user {user_id} to admin in {sanitize_name(chat.title)} "
+                "(a basic group has one admin level, so rights were not applied)."
+            )
 
         # Set default admin rights if not provided
         if not rights:
@@ -712,6 +733,7 @@ async def promote_admin(
 )
 @with_account(readonly=False)
 @validate_id("group_id", "user_id")
+@flood_category("admin_action")
 async def demote_admin(
     group_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -729,6 +751,13 @@ async def demote_admin(
         cl = get_client(account)
         chat = await resolve_entity(group_id, cl)
         user = await resolve_entity(user_id, cl)
+        if isinstance(chat, types.Chat):
+            await cl(
+                functions.messages.EditChatAdminRequest(
+                    chat_id=chat.id, user_id=utils.get_input_user(user), is_admin=False
+                )
+            )
+            return f"Successfully demoted user {user_id} from admin in {sanitize_name(chat.title)}"
 
         # Create empty admin rights (regular user)
         admin_rights = ChatAdminRights(
@@ -773,6 +802,7 @@ async def demote_admin(
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
+@flood_category("admin_action")
 async def ban_user(
     chat_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -789,6 +819,8 @@ async def ban_user(
     try:
         cl = get_client(account)
         chat = await resolve_entity(chat_id, cl)
+        if isinstance(chat, types.Chat):
+            return BASIC_GROUP_NO_BANS
         user = await resolve_entity(user_id, cl)
 
         # Create banned rights (all restrictions enabled)
@@ -833,6 +865,7 @@ async def ban_user(
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
+@flood_category("admin_action")
 async def unban_user(
     chat_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -849,6 +882,8 @@ async def unban_user(
     try:
         cl = get_client(account)
         chat = await resolve_entity(chat_id, cl)
+        if isinstance(chat, types.Chat):
+            return BASIC_GROUP_NO_BANS
         user = await resolve_entity(user_id, cl)
 
         # Create unbanned rights (no restrictions)
@@ -947,6 +982,7 @@ def _ban_not_cleared_message(error: Exception) -> str:
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
+@flood_category("admin_action")
 async def remove_user(
     chat_id: Union[int, str], user_id: Union[int, str], account: Optional[str] = None
 ) -> str:
@@ -1042,6 +1078,7 @@ async def remove_user(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def set_default_chat_permissions(
     chat_id: Union[int, str],
     send_messages: bool = True,
@@ -1121,6 +1158,7 @@ async def set_default_chat_permissions(
 )
 @with_account(readonly=False)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def toggle_slow_mode(
     chat_id: Union[int, str], seconds: int = 0, account: Optional[str] = None
 ) -> str:
@@ -1150,6 +1188,137 @@ async def toggle_slow_mode(
         return log_and_format_error("toggle_slow_mode", e, chat_id=chat_id, seconds=seconds)
 
 
+# edit_admin_rights modes: "replace" sends exactly the rights passed as True, "patch"
+# changes only the rights passed and keeps the rest of the user's current rights.
+AdminRightsMode = Literal["replace", "patch"]
+# The only right the creator can change on their own account (besides the rank):
+# Telegram's own apps disable every other right in the creator's admin settings.
+CREATOR_SELF_EDITABLE_RIGHTS = ("anonymous",)
+
+
+def _admin_right_names() -> List[str]:
+    """Every right of the installed ChatAdminRights schema, in constructor order."""
+    return [key for key in ChatAdminRights().to_dict() if key != "_"]
+
+
+def _rank_text(rank: str) -> str:
+    return repr(sanitize_name(rank)) if rank else "none"
+
+
+def _admin_rights_change(
+    before: Dict[str, bool], after: Dict[str, bool], rank_before: str, rank_after: Optional[str]
+) -> str:
+    """The rights turned on and off and the rank change, or "" when nothing changes."""
+    parts = []
+    turned_on = [name for name in after if after[name] and not before[name]]
+    turned_off = [name for name in after if before[name] and not after[name]]
+    if turned_on:
+        parts.append(f"Turned on: {', '.join(turned_on)}.")
+    if turned_off:
+        parts.append(f"Turned off: {', '.join(turned_off)}.")
+    if rank_after is not None and rank_after != rank_before:
+        parts.append(f"Rank: {_rank_text(rank_before)} -> {_rank_text(rank_after)}.")
+    return " ".join(parts)
+
+
+_NOT_CREATOR_SELF = (
+    "Error: {user_id} is your own account, and you are not this chat's creator. "
+    "Telegram lets only the creator change their own admin settings. Nothing was changed."
+)
+
+
+async def _admin_to_patch(cl, chat, user, user_id, changes: Dict[str, bool]):
+    """Return (current participant, None) for an admin whose rights may be patched, or
+    (None, refusal). Your own account qualifies only as the chat's creator, and then
+    only CREATOR_SELF_EDITABLE_RIGHTS may change."""
+    is_self = getattr(user, "is_self", False)
+    try:
+        result = await cl(
+            functions.channels.GetParticipantRequest(
+                channel=chat, participant=types.InputPeerSelf() if is_self else user
+            )
+        )
+    except telethon.errors.rpcerrorlist.UserNotParticipantError:
+        who = "you are" if is_self else f"{user_id} is"
+        return None, (
+            f"Error: {who} not in this chat, so there are no admin rights to patch. "
+            "Nothing was changed."
+        )
+    participant = result.participant
+    if is_self:
+        if not isinstance(participant, types.ChannelParticipantCreator):
+            return None, _NOT_CREATOR_SELF.format(user_id=user_id)
+        fixed = sorted(name for name in changes if name not in CREATOR_SELF_EDITABLE_RIGHTS)
+        if fixed:
+            editable = ", ".join(CREATOR_SELF_EDITABLE_RIGHTS)
+            return None, (
+                f"Error: as the creator you hold every right; on your own account only "
+                f"{editable} and rank can be changed. Leave out {', '.join(fixed)}. "
+                "Nothing was changed."
+            )
+        return participant, None
+    if isinstance(participant, types.ChannelParticipantCreator):
+        return None, (
+            f"Error: {user_id} is the chat's creator, whose admin settings only the "
+            "creator can change. Nothing was changed."
+        )
+    if not isinstance(participant, types.ChannelParticipantAdmin):
+        return None, (
+            f"Error: {user_id} is not an admin of this chat, so there are no rights to "
+            "patch. Promote them with promote_admin first. Nothing was changed."
+        )
+    if participant.is_self:  # your own account under another id or username
+        return None, _NOT_CREATOR_SELF.format(user_id=user_id)
+    return participant, None
+
+
+async def _patch_admin_rights(
+    cl, chat, user, user_id, changes: Dict[str, bool], rank: Optional[str]
+) -> str:
+    """Change only `changes` (and rank, if given) on top of the user's current rights.
+
+    The current rights and rank are read with channels.getParticipant and the merged
+    full set is sent with channels.editAdmin, as Telegram's own apps do. Rights of the
+    installed layer that are not parameters of edit_admin_rights are kept too.
+    """
+    if not changes and rank is None:
+        return (
+            'Error: mode="patch" changes only the rights and rank passed, and none were. '
+            "Pass at least one right (True or False) or rank."
+        )
+    if not isinstance(chat, Channel):
+        return 'Error: mode="patch" works in supergroups and channels only.'
+    participant, error = await _admin_to_patch(cl, chat, user, user_id, changes)
+    if error:
+        return error
+
+    before = {
+        name: bool(getattr(participant.admin_rights, name, False)) for name in _admin_right_names()
+    }
+    after = {**before, **changes}
+    if not any(after.values()):
+        return (
+            "Error: the patch would turn off every right, which demotes the user; "
+            "use demote_admin for that. Nothing was changed."
+        )
+    rank_before = participant.rank or ""
+    changed = _admin_rights_change(before, after, rank_before, rank)
+    if not changed:
+        return (
+            f"Nothing to change for user {user_id} in {sanitize_name(chat.title)}: the "
+            "rights and rank passed are already set. Nothing was sent."
+        )
+    await cl(
+        functions.channels.EditAdminRequest(
+            channel=chat,
+            user_id=user,
+            admin_rights=ChatAdminRights(**after),
+            rank=rank,  # None leaves the current rank unchanged
+        )
+    )
+    return f"Admin rights patched for user {user_id} in {sanitize_name(chat.title)}. {changed}"
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Edit Admin Rights",
@@ -1160,35 +1329,52 @@ async def toggle_slow_mode(
 )
 @with_account(readonly=False)
 @validate_id("chat_id", "user_id")
+@flood_category("admin_action")
 async def edit_admin_rights(
     chat_id: Union[int, str],
     user_id: Union[int, str],
-    rank: str = "",
-    change_info: bool = False,
-    post_messages: bool = False,
-    edit_messages: bool = False,
-    delete_messages: bool = False,
-    ban_users: bool = False,
-    invite_users: bool = False,
-    pin_messages: bool = False,
-    add_admins: bool = False,
-    anonymous: bool = False,
-    manage_call: bool = False,
-    manage_topics: bool = False,
-    other: bool = False,
+    rank: Optional[str] = None,
+    change_info: Optional[bool] = None,
+    post_messages: Optional[bool] = None,
+    edit_messages: Optional[bool] = None,
+    delete_messages: Optional[bool] = None,
+    ban_users: Optional[bool] = None,
+    invite_users: Optional[bool] = None,
+    pin_messages: Optional[bool] = None,
+    add_admins: Optional[bool] = None,
+    anonymous: Optional[bool] = None,
+    manage_call: Optional[bool] = None,
+    manage_topics: Optional[bool] = None,
+    other: Optional[bool] = None,
+    mode: AdminRightsMode = "replace",
     account: Optional[str] = None,
 ) -> str:
     """
     Set granular admin rights for a user in a supergroup or channel.
 
     Extends `promote_admin` (which uses a default set) by letting each right
-    be specified individually. Pass True to grant, False to revoke. Passing
-    all False revokes admin status (equivalent to `demote_admin`).
+    be specified individually.
+
+    mode="replace" (default): pass True to grant, False or nothing to revoke; the
+    rights passed become the user's whole set. Passing all False revokes admin
+    status (equivalent to `demote_admin`). rank omitted clears the custom title.
+
+    mode="patch": only the rights passed (True or False) and rank, if passed,
+    change. The user's current rights and rank are looked up first and everything
+    else is kept, including rights that are not parameters here. The user must
+    already be an admin, and a patch that would turn off every right is refused
+    (use demote_admin). The result lists what changed; if nothing would change,
+    nothing is sent. Patch mode can also edit your own account, but only if you
+    are the chat's creator, and then only anonymous and rank (the creator holds
+    every other right). In a group, anonymous=False makes your messages show your
+    name instead of the group's; in a channel, it shows you in the admin list.
+    Telegram does not let other admins edit their own rights.
 
     Args:
         chat_id: ID or username of the supergroup/channel.
         user_id: User ID or username.
-        rank: Custom admin title (max 16 chars). Empty = no custom title.
+        rank: Custom admin title (max 16 chars). In replace mode, omitted or ""
+            means no custom title; in patch mode, omitted keeps the current one.
         change_info: can change chat info (title, photo, description)
         post_messages: can post in channel (channel-only)
         edit_messages: can edit other users' messages
@@ -1202,29 +1388,37 @@ async def edit_admin_rights(
         manage_topics: can create, edit, close and reopen forum topics
         (forum-enabled supergroups only)
         other: reserved for future rights
+        mode: "replace" (default) or "patch", see above.
     """
+    flags = {
+        "change_info": change_info,
+        "post_messages": post_messages,
+        "edit_messages": edit_messages,
+        "delete_messages": delete_messages,
+        "ban_users": ban_users,
+        "invite_users": invite_users,
+        "pin_messages": pin_messages,
+        "add_admins": add_admins,
+        "anonymous": anonymous,
+        "manage_call": manage_call,
+        "manage_topics": manage_topics,
+        "other": other,
+    }
     try:
+        if mode not in get_args(AdminRightsMode):
+            known = ", ".join(get_args(AdminRightsMode))
+            return f"Error: unknown mode {mode!r}. Known modes: {known}."
         cl = get_client(account)
         await ensure_connected(cl)
         entity = await resolve_entity(chat_id, cl)
         user = await resolve_entity(user_id, cl)
-        admin_rights = ChatAdminRights(
-            change_info=change_info,
-            post_messages=post_messages,
-            edit_messages=edit_messages,
-            delete_messages=delete_messages,
-            ban_users=ban_users,
-            invite_users=invite_users,
-            pin_messages=pin_messages,
-            add_admins=add_admins,
-            anonymous=anonymous,
-            manage_call=manage_call,
-            manage_topics=manage_topics,
-            other=other,
-        )
+        if mode == "patch":
+            changes = {name: value for name, value in flags.items() if value is not None}
+            return await _patch_admin_rights(cl, entity, user, user_id, changes, rank)
+        admin_rights = ChatAdminRights(**{name: bool(value) for name, value in flags.items()})
         await cl(
             functions.channels.EditAdminRequest(
-                channel=entity, user_id=user, admin_rights=admin_rights, rank=rank
+                channel=entity, user_id=user, admin_rights=admin_rights, rank=rank or ""
             )
         )
         return f"Admin rights updated for user {user_id} in chat {chat_id}."
@@ -1257,15 +1451,16 @@ async def get_admins(chat_id: Union[int, str], account: Optional[str] = None) ->
     try:
         cl = get_client(account)
         await ensure_connected(cl)
-        # Fix: Use the correct filter type ChannelParticipantsAdmins
-        participants = await cl.get_participants(chat_id, filter=ChannelParticipantsAdmins())
+        entity = await resolve_entity(chat_id, cl)
+        if isinstance(entity, types.Chat):
+            participants = await _basic_group_admins(cl, entity)
+        else:
+            participants = await cl.get_participants(entity, filter=ChannelParticipantsAdmins())
         records = []
         for p in participants:
             rec = {
                 "id": p.id,
-                "name": sanitize_name(
-                    f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
-                ),
+                "name": sanitize_name(person_name(p)),
             }
             uname = getattr(p, "username", None)
             if uname:
@@ -1274,6 +1469,29 @@ async def get_admins(chat_id: Union[int, str], account: Optional[str] = None) ->
         return format_tool_result(records) if records else "No admins found."
     except Exception as e:
         return log_and_format_error("get_admins", e, chat_id=chat_id)
+
+
+BASIC_GROUP_NO_BANS = (
+    "Error: chat_id is a basic group, which has no ban list. Use remove_user to remove a "
+    "member, or convert the group to a supergroup first."
+)
+
+
+async def _basic_group_admins(cl, chat) -> list:
+    """Creator and admins of a basic group, read from its participant list.
+
+    Telegram's participant filters only exist for supergroups and channels; for a basic group
+    Telethon ignores the filter and returns every member.
+    """
+    full = await cl(functions.messages.GetFullChatRequest(chat_id=chat.id))
+    users = {user.id: user for user in full.users}
+    participants = getattr(full.full_chat.participants, "participants", [])
+    return [
+        users[p.user_id]
+        for p in participants
+        if isinstance(p, (types.ChatParticipantCreator, types.ChatParticipantAdmin))
+        and p.user_id in users
+    ]
 
 
 def _format_admin_rights(admin_rights) -> dict:
@@ -1367,15 +1585,15 @@ async def get_banned_users(chat_id: Union[int, str], account: Optional[str] = No
     try:
         cl = get_client(account)
         await ensure_connected(cl)
-        # Fix: Use the correct filter type ChannelParticipantsKicked
-        participants = await cl.get_participants(chat_id, filter=ChannelParticipantsKicked(q=""))
+        entity = await resolve_entity(chat_id, cl)
+        if isinstance(entity, types.Chat):
+            return "No banned users: a basic group has no ban list."
+        participants = await cl.get_participants(entity, filter=ChannelParticipantsKicked(q=""))
         records = []
         for p in participants:
             rec = {
                 "id": p.id,
-                "name": sanitize_name(
-                    f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
-                ),
+                "name": sanitize_name(person_name(p)),
             }
             uname = getattr(p, "username", None)
             if uname:
@@ -1439,6 +1657,7 @@ async def get_invite_link(chat_id: Union[int, str], account: Optional[str] = Non
     )
 )
 @with_account(readonly=False)
+@flood_category("channel_lifecycle")
 async def join_chat_by_link(link: str, account: Optional[str] = None) -> str:
     """
     Join a chat by invite link.
@@ -1455,20 +1674,25 @@ async def join_chat_by_link(link: str, account: Optional[str] = None) -> str:
             hash_part = link
 
         # Try checking the invite before joining
+        invite_info = None
         try:
             # Try to check invite info first (will often fail if not a member)
             invite_info = await cl(functions.messages.CheckChatInviteRequest(hash=hash_part))
-            if hasattr(invite_info, "chat") and invite_info.chat:
-                # If we got chat info, we're already a member
-                chat_title = sanitize_name(getattr(invite_info.chat, "title", "Unknown Chat"))
-                return f"You are already a member of this chat: {chat_title}"
         except Exception:
             # This often fails if not a member - just continue
             pass
 
+        if getattr(invite_info, "chat", None):
+            if is_chat_blocked(get_marked_id(invite_info.chat), invite_info.chat):
+                return "Already a member of this chat."
+            chat_title = sanitize_name(getattr(invite_info.chat, "title", "Unknown Chat"))
+            return f"You are already a member of this chat: {chat_title}"
+
         # Join the chat using the hash
         result = await cl(functions.messages.ImportChatInviteRequest(hash=hash_part))
         if result and hasattr(result, "chats") and result.chats:
+            if is_chat_blocked(get_marked_id(result.chats[0]), result.chats[0]):
+                return "Joined chat via invite hash."
             chat_title = sanitize_name(getattr(result.chats[0], "title", "Unknown Chat"))
             return f"Successfully joined chat: {chat_title}"
         return "Joined chat via invite hash."
@@ -1488,6 +1712,7 @@ async def join_chat_by_link(link: str, account: Optional[str] = None) -> str:
 )
 @with_account(readonly=True)
 @validate_id("chat_id")
+@flood_category("admin_action")
 async def export_chat_invite(chat_id: Union[int, str], account: Optional[str] = None) -> str:
     """
     Export a chat invite link.
@@ -1527,6 +1752,7 @@ async def export_chat_invite(chat_id: Union[int, str], account: Optional[str] = 
     )
 )
 @with_account(readonly=False)
+@flood_category("channel_lifecycle")
 async def import_chat_invite(hash: str, account: Optional[str] = None) -> str:
     """
     Import a chat invite by hash.
@@ -1539,6 +1765,7 @@ async def import_chat_invite(hash: str, account: Optional[str] = None) -> str:
             hash = hash[1:]
 
         # Try checking the invite before joining
+        invite_info = None
         try:
             from telethon.errors import (
                 InviteHashExpiredError,
@@ -1550,18 +1777,22 @@ async def import_chat_invite(hash: str, account: Optional[str] = None) -> str:
 
             # Try to check invite info first (will often fail if not a member)
             invite_info = await cl(functions.messages.CheckChatInviteRequest(hash=hash))
-            if hasattr(invite_info, "chat") and invite_info.chat:
-                # If we got chat info, we're already a member
-                chat_title = sanitize_name(getattr(invite_info.chat, "title", "Unknown Chat"))
-                return f"You are already a member of this chat: {chat_title}"
         except Exception:
             # This often fails if not a member - just continue
             pass
+
+        if getattr(invite_info, "chat", None):
+            if is_chat_blocked(get_marked_id(invite_info.chat), invite_info.chat):
+                return "Already a member of this chat."
+            chat_title = sanitize_name(getattr(invite_info.chat, "title", "Unknown Chat"))
+            return f"You are already a member of this chat: {chat_title}"
 
         # Join the chat using the hash
         try:
             result = await cl(functions.messages.ImportChatInviteRequest(hash=hash))
             if result and hasattr(result, "chats") and result.chats:
+                if is_chat_blocked(get_marked_id(result.chats[0]), result.chats[0]):
+                    return "Joined chat via invite hash."
                 chat_title = sanitize_name(getattr(result.chats[0], "title", "Unknown Chat"))
                 return f"Successfully joined chat: {chat_title}"
             return "Joined chat via invite hash."
@@ -1599,6 +1830,8 @@ async def get_recent_actions(chat_id: Union[int, str], account: Optional[str] = 
     try:
         cl = get_client(account)
         await ensure_connected(cl)
+        if is_chat_blocklist_enabled():
+            chat_id = await resolve_entity(chat_id, cl)
         result = await cl(
             functions.channels.GetAdminLogRequest(
                 channel=chat_id,
@@ -1620,6 +1853,7 @@ async def get_recent_actions(chat_id: Union[int, str], account: Optional[str] = 
             sanitize_dict([e.to_dict() for e in result.events]),
             indent=2,
             default=json_serializer,
+            ensure_ascii=False,
         )
     except Exception as e:
         return log_and_format_error("get_recent_actions", e, chat_id=chat_id)

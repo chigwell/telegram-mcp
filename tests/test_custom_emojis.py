@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from html import escape
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from telethon.extensions import html
@@ -164,6 +164,8 @@ def test_rich_content_without_custom_emoji_has_no_metadata():
 @pytest.fixture
 def client(monkeypatch):
     cl = AsyncMock()
+    cl._mb_entity_cache = MagicMock()
+    cl._mb_entity_cache.get.return_value = None
     cl.get_messages.return_value = [_message()]
     monkeypatch.setattr(messages, "get_client", lambda account=None: cl)
     monkeypatch.setattr(messages, "resolve_entity", AsyncMock(return_value=types.User(id=42)))
@@ -188,6 +190,8 @@ def client(monkeypatch):
 async def test_json_readers_expose_optional_metadata(client, tool, arguments, custom):
     msg = _message(entities=None if custom else [])
     client.get_messages.return_value = [msg]
+    if tool is messages.search_global:
+        client.return_value = SimpleNamespace(messages=[msg], users=[types.User(id=42)], chats=[])
     if tool is messages.get_message_context:
         client.get_messages.side_effect = [[], msg, []]
     result = json.loads(await tool(**arguments, account="test"))
@@ -198,8 +202,18 @@ async def test_json_readers_expose_optional_metadata(client, tool, arguments, cu
         assert record["custom_emojis"] == [EMOJI]
     else:
         assert "custom_emojis" not in record
-    assert client.get_messages.await_count == (3 if tool is messages.get_message_context else 1)
-    client.assert_not_awaited()
+    if tool is messages.search_global:
+        assert client.get_messages.await_count == 0
+        assert client.await_args_list
+        assert all(
+            isinstance(call.args[0], messages.functions.messages.SearchGlobalRequest)
+            for call in client.await_args_list
+        )
+    else:
+        assert client.get_messages.await_count == (
+            3 if tool is messages.get_message_context else 1
+        )
+        client.assert_not_awaited()
 
 
 @pytest.mark.asyncio

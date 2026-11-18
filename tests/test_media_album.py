@@ -11,14 +11,18 @@ class _DummyClient:
         self.sent = None
         self.schedule = None
 
-    async def send_file(self, entity, file_paths, caption=None, reply_to=None, schedule=None):
+    async def send_file(
+        self, entity, file_paths, caption=None, reply_to=None, schedule=None, silent=False
+    ):
         self.sent = {
             "entity": entity,
             "file_paths": file_paths,
             "caption": caption,
             "reply_to": reply_to,
+            "silent": silent,
         }
         self.schedule = schedule
+        return []
 
 
 @pytest.mark.asyncio
@@ -58,6 +62,7 @@ async def test_album_mode_sends_multiple_files_as_one_media_group(
         "file_paths": [str(first), str(second)],
         "caption": "pick one",
         "reply_to": None,
+        "silent": False,
     }
 
 
@@ -91,6 +96,7 @@ async def test_album_mode_passes_topic_id_as_reply_to(tmp_path, monkeypatch, too
 
     assert result == "Album sent to chat ForumChat with 2 files."
     assert client.sent["reply_to"] == 777
+    assert client.sent["silent"] is False
 
 
 @pytest.mark.asyncio
@@ -118,6 +124,7 @@ async def test_send_file_passes_topic_id_as_reply_to(tmp_path, monkeypatch):
         "file_paths": str(path),
         "caption": "hello",
         "reply_to": 42,
+        "silent": False,
     }
 
 
@@ -180,6 +187,7 @@ async def test_send_file_schedules_when_schedule_date_given(tmp_path, monkeypatc
 
     assert result == f"File from {path} scheduled for {when.isoformat()} in chat Channel."
     assert client.schedule == when
+    assert client.sent["silent"] is False
 
 
 @pytest.mark.asyncio
@@ -206,6 +214,37 @@ async def test_send_album_schedules_when_schedule_date_given(tmp_path, monkeypat
 
     assert result.startswith("Album of 2 files scheduled for ")
     assert client.schedule == datetime.fromtimestamp(int(when.timestamp()), tz=timezone.utc)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "file_paths"),
+    [
+        ("send_file", "one.png"),
+        ("send_file", ["one.png", "two.png"]),
+        ("send_album", ["one.png", "two.png"]),
+    ],
+)
+async def test_send_tools_pass_silent_to_telethon(tmp_path, monkeypatch, tool_name, file_paths):
+    root = (tmp_path / "root").resolve()
+    root.mkdir()
+    (root / "one.png").write_bytes(b"png-one")
+    (root / "two.png").write_bytes(b"png-two")
+
+    client = _DummyClient()
+    monkeypatch.setattr(runtime, "SERVER_ALLOWED_ROOTS", [root])
+    monkeypatch.setattr(media, "clients", {"default": client})
+    monkeypatch.setattr(media, "get_client", lambda account=None: client)
+
+    async def _resolve_entity(chat_id, cl):
+        return "entity:chat"
+
+    monkeypatch.setattr(media, "resolve_entity", _resolve_entity)
+
+    result = await getattr(media, tool_name)("Chat", file_paths, silent=True)
+
+    assert "sent to chat Chat" in result
+    assert client.sent["silent"] is True
 
 
 @pytest.mark.asyncio

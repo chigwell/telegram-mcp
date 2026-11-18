@@ -70,3 +70,22 @@ def test_main_alias_syncs_env_roots(tmp_path, monkeypatch):
     main._configure_allowed_roots_from_cli([])
     assert main.SERVER_ALLOWED_ROOTS == [test_dir.resolve()]
     assert runtime.SERVER_ALLOWED_ROOTS == [test_dir.resolve()]
+
+
+def test_parse_allowed_roots_env_one_letter_folder_before_a_colon():
+    # "a:" at the end of a POSIX path is a folder name, not a Windows drive.
+    assert runtime._parse_allowed_roots_env("/data/photos:/data/a:/data/b") == [
+        "/data/photos",
+        "/data/a",
+        "/data/b",
+    ]
+    assert runtime._parse_allowed_roots_env("/data/a:/data/photos") == [
+        "/data/a",
+        "/data/photos",
+    ]
+
+
+def test_parse_allowed_roots_env_keeps_windows_drives_in_lists():
+    assert runtime._parse_allowed_roots_env("C:\\one;D:\\two") == ["C:\\one", "D:\\two"]
+    assert runtime._parse_allowed_roots_env("C:\\one, D:\\two") == ["C:\\one", "D:\\two"]
+    assert runtime._parse_allowed_roots_env("C:/one;D:/two") == ["C:/one", "D:/two"]

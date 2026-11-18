@@ -153,5 +153,37 @@ def install_protocol_compatibility() -> None:
     except Exception as exc:
         logger.debug("Could not patch FastMCP streamable_http: %s", exc)
 
+    try:
+        _install_silent_request_cancel()
+    except (ImportError, AttributeError) as exc:
+        logger.debug("Could not patch RequestResponder.cancel: %s", exc)
+
     _COMPATIBILITY_INSTALLED = True
     logger.info("MCP 2026-07-28 protocol compatibility installed successfully.")
+
+
+def _install_silent_request_cancel() -> None:
+    """Stop the SDK from answering requests the client cancelled.
+
+    mcp 1.x replies to a cancelled request with an error (code 0), but the spec
+    says the receiver should not respond (MUST NOT as of 2026-07-28). Strict
+    clients treat that reply as a protocol violation. mcp 2.x no longer sends
+    it, so this is only applied to 1.x.
+    """
+    from importlib.metadata import version
+
+    from mcp.shared.session import RequestResponder
+
+    if int(version("mcp").split(".")[0]) >= 2:
+        return
+
+    async def cancel(self) -> None:
+        if not self._entered:
+            raise RuntimeError("RequestResponder must be used as a context manager")
+        if not self._cancel_scope:
+            raise RuntimeError("No active cancel scope")
+
+        self._cancel_scope.cancel()
+        self._completed = True
+
+    RequestResponder.cancel = cancel

@@ -57,7 +57,9 @@ The server currently includes 80+ MCP tools grouped into these areas:
 
 - **Accounts:** list configured accounts and route tool calls by account label.
 - **Chats and groups:** list chats, inspect metadata, create groups/channels, upgrade basic groups to supergroups, join or leave chats, invite or remove users, manage admins, bans, default permissions, slow mode, topics and their allowed icons, invite links, common chats, read receipts, and message links.
-- **Messages:** send, schedule, edit, delete, forward, pin, unpin, mark read, reply, search, inspect context, create polls, read poll results, vote in polls, manage reactions, inspect inline buttons, and press inline callbacks. `send_message`, `reply_to_message`, and `edit_message` support classic formatting (`parse_mode='md'`/`'html'`) and server-side rich formatting (`parse_mode='rich'`/`'rich_markdown'`/`'rich_html'` — full Markdown/HTML with tables, headings, formulas, and collapsible sections). Rich modes require Telegram Premium on the account; Premium is re-checked on every call, and without it nothing is sent — the tool returns a structured `telegram_premium_required` result so the agent can reformat with classic modes and retry. `send_message`, `reply_to_message`, and `edit_message` also accept `format_date` to render a date as a tappable chip.
+- **Messages:** send, schedule, edit, delete, forward, pin, unpin, mark read, reply, search, inspect context, create polls, read poll results, vote in polls, manage reactions, inspect inline buttons, press inline callbacks, and export complete chat history or unread messages to structured JSON (export_chat_history, export_unread_messages). `send_message`, `reply_to_message`, and `edit_message` support classic formatting (`parse_mode='md'`/`'html'`) and server-side rich formatting (`parse_mode='rich'`/`'rich_markdown'`/`'rich_html'` — full Markdown/HTML with tables, headings, formulas, and collapsible sections). Rich modes require Telegram Premium on the account; Premium is re-checked on every call, and without it nothing is sent — the tool returns a structured `telegram_premium_required` result so the agent can reformat with classic modes and retry. `send_message`, `reply_to_message`, and `edit_message` also accept `format_date` to render a date as a tappable chip. `edit_message` reports an edit that changes nothing as `not modified` instead of an error. `edit_message_media` replaces the attachment for one message ID; for an album, it edits only that item and Telegram enforces media-type restrictions. Omitting `caption` preserves the existing caption and formatting; an empty caption clears it.
+
+`list_inline_buttons` describes each button by row, column and `kind` (what pressing it does), for inline buttons and reply keyboards. `press_inline_button` presses `callback` and `game` buttons, returns the bot's answer with `alert` and `url`, and refuses buttons that need the 2FA password.
 
 `get_message_reactions` returns an empty list for a message with no reactions. To reuse a custom reaction, pass the returned `custom:<document_id>` value to `send_reaction`.
 
@@ -76,7 +78,13 @@ refreshes those results from Telegram. With `include_voters=True` it also lists 
 picked each answer. This works only for polls with public voters; anonymous polls
 never reveal voters. All indices are the same zero-based indices `vote_poll` takes.
 
-- **Contacts:** list, search, add, delete, block, unblock, import, export, inspect direct chats, find recent contact interactions, and remember contacts by the names you actually use (see below).
+In supergroups where you can post as more than one identity (for example as a channel you
+own), `get_send_as(chat_id)` lists the allowed senders and `set_default_send_as(chat_id,
+send_as)` saves which one your later messages use: `"me"` for your own account, or the ID or
+username of an allowed sender. The saved sender applies in all your Telegram clients.
+Anonymous posting as an admin is an admin right and is not changed by it.
+
+- **Contacts:** list, search, add, delete, block, unblock, import, export, look up a phone number without adding a contact, inspect direct chats, find recent contact interactions, and remember contacts by the names you actually use (see below).
 
 ### Typing indicators
 
@@ -92,6 +100,28 @@ the typing phase has a 50-second timeout and cleanup a separate three-second tim
 A failed cleanup is reported explicitly. Successful RPC responses confirm Telegram accepted
 the requests, not that another client's UI displayed them. This is a write operation and
 respects the existing account routing and chat allowlist.
+
+### Phone lookups
+
+`resolve_phone(phone)` finds the Telegram user behind a phone number without adding them to your contacts, and returns the same raw result as `resolve_username`. Pass the number in E.164 form: a leading `+` and the country code, 7 to 15 digits in total. Spaces, dashes, dots and parentheses are ignored. Local forms such as `8 999 000-11-22` or `0044 ...` are rejected before Telegram is called, because the country would have to be guessed. Telegram only answers when the owner's privacy settings let you find them by number. With several accounts configured, `account` is required, since each lookup spends that account's quota.
+
+On a FloodWait the tool returns the wait and does not retry. Telethon ignores a per-request sleep threshold, so the tool sets the client's `flood_sleep_threshold` to 0 and restores it when the lookup returns. The 0 holds for as long as the lookup takes, including Telethon's own resends: any other request on that account that gets a FloodWait in that window raises it instead of sleeping.
+
+`resolve_phone` is read-only, so it is part of `TELEGRAM_EXPOSED_TOOLS=read-only`. To hide it, exclude it by name, e.g. `TELEGRAM_EXPOSED_TOOLS=read-only-resolve_phone`.
+
+Telegram publishes no quota for phone lookups and answers bulk lookups with long FloodWaits, so you can cap them locally. Both limits are off unless set. Every lookup admitted past local validation counts, whatever happens next: a Telegram answer or error, a FloodWait raised by Telethon's local pre-check without sending, or a call cancelled while it waits for another lookup on the same account. That errs on the side of refusing. Numbers rejected locally do not count. Telethon may resend a lookup itself after a server error, timeout or DC migration; that still counts once. A refused call sends nothing and says how many seconds to wait.
+
+```env
+TELEGRAM_RESOLVE_PHONE_MAX_PER_DAY=12              # lookups per rolling 24 hours (0 or unset = no cap)
+TELEGRAM_RESOLVE_PHONE_MIN_INTERVAL_SECONDS=5      # minimum gap between lookups (0 or unset = none)
+TELEGRAM_RESOLVE_PHONE_STATE_FILE=/path/to/resolve-phone.json  # keep the count across restarts
+```
+
+Without a state file the count lives in memory and restarts from zero with the server. The state file holds only lookup timestamps (owner-only, written atomically), is shared by every server process that points at it, and covers all accounts together. A `<state file>.lock` file next to it serialises those processes. If it exists but cannot be parsed, lookups are refused until you fix or delete it; deleting it resets the count. A malformed limit value also refuses lookups instead of running unlimited. The history keeps only the newest `max(MAX_PER_DAY, 1)` timestamps, so after raising the cap the first window counts only the lookups that were kept.
+
+### Call history
+
+`list_calls(chat_id=None, from_date=None, to_date=None, limit=50, account=None)` lists voice and video calls, newest first, from Telegram's phone-call search filter. Each record has `peer` (`id`, `name`, and `username`/`phone` when visible), `date`, `direction` (`outgoing` or `incoming`), `duration` in seconds (0 for a call that never connected), `end_reason` (`missed`, `busy`, `hangup`, `disconnect`, another Telegram reason in lower case, or `null` when Telegram gives none) and `video`. Pass `chat_id` for one user's calls, and `from_date`/`to_date` (`YYYY-MM-DD`, UTC, both inclusive) for a date range. `limit` is 1 to 500. It is read-only, so it is part of `TELEGRAM_EXPOSED_TOOLS=read-only`.
 
 ### Remembered contacts
 
@@ -111,7 +141,7 @@ Aliases live in `${XDG_STATE_HOME:-~/.local/state}/telegram-mcp/aliases.json` (o
 - `groq` (default): uploads the recording to Groq's hosted `whisper-large-v3-turbo`. Leaves the server and costs a download+upload per call, but doesn't drop the recording's last few words the way native transcription does. Requires `GROQ_API_KEY`. Groq caps the size of a single upload, so a recording above `TELEGRAM_TRANSCRIBE_GROQ_MAX_MB` (default 25, the free-tier limit) is refused locally with a `too_large` error naming its size instead of being downloaded and rejected by the API. Raise the limit if your Groq tier allows bigger files, or transcribe that message with `engine='telegram'`, which has no such cap.
 - `telegram`: native Telegram Premium transcription (`messages.TranscribeAudioRequest`). Free and never leaves Telegram, but empirically drops the last speech segment in roughly 2 of 3 recordings and requires Telegram Premium on the account. Long recordings come back `pending` and are polled automatically.
 - `openai`: any OpenAI-compatible `/audio/transcriptions` endpoint — OpenAI itself, a self-hosted [Parakeet](https://github.com/achetronic/parakeet) or [speaches](https://github.com/speaches-ai/speaches) server, LocalAI, a vLLM Whisper deployment, and so on. Set `TELEGRAM_TRANSCRIBE_OPENAI_URL` to the API base URL (e.g. `https://api.openai.com/v1`; a full `.../audio/transcriptions` URL also works), `TELEGRAM_TRANSCRIBE_OPENAI_API_KEY` for the bearer token (optional for keyless local servers), and `TELEGRAM_TRANSCRIBE_OPENAI_MODEL` (default `whisper-1`). Size cap: `TELEGRAM_TRANSCRIBE_OPENAI_MAX_MB` (default 25). For Parakeet use `TELEGRAM_TRANSCRIBE_OPENAI_URL=http://localhost:5092/v1`, the API key only if the server sets `PARAKEET_API_KEY`, and set `TELEGRAM_TRANSCRIBE_LANGUAGE` for anything that isn't English — Parakeet assumes `en` when no language is sent.
-- `whisper`: a local [faster-whisper](https://github.com/SYSTRAN/faster-whisper) model loaded inside the MCP server process. The audio never leaves the machine. Install the extra with `pip install 'telegram-mcp[whisper]'` (or `uv sync --extra whisper`). `TELEGRAM_TRANSCRIBE_WHISPER_MODEL` picks the model (default `small`; e.g. `large-v3-turbo` for better quality), `TELEGRAM_TRANSCRIBE_WHISPER_DEVICE` (`auto`/`cpu`/`cuda`), `TELEGRAM_TRANSCRIBE_WHISPER_COMPUTE_TYPE` (e.g. `int8` on CPU) and `TELEGRAM_TRANSCRIBE_WHISPER_MODEL_DIR` (where models are downloaded) tune it. The model is loaded once on first use and recordings are transcribed one at a time. Not available in the Alpine Docker image; use `openai` against a Parakeet or other OpenAI-compatible server next to the container instead.
+- `whisper`: a local [faster-whisper](https://github.com/SYSTRAN/faster-whisper) model loaded inside the MCP server process. The audio never leaves the machine. Install the extra with `pip install "telegram-mcp[whisper] @ git+https://github.com/chigwell/telegram-mcp.git@<tag-or-commit>"` (or `uv sync --extra whisper`). `TELEGRAM_TRANSCRIBE_WHISPER_MODEL` picks the model (default `small`; e.g. `large-v3-turbo` for better quality), `TELEGRAM_TRANSCRIBE_WHISPER_DEVICE` (`auto`/`cpu`/`cuda`), `TELEGRAM_TRANSCRIBE_WHISPER_COMPUTE_TYPE` (e.g. `int8` on CPU) and `TELEGRAM_TRANSCRIBE_WHISPER_MODEL_DIR` (where models are downloaded) tune it. The model is loaded once on first use and recordings are transcribed one at a time. Not available in the Alpine Docker image; use `openai` against a Parakeet or other OpenAI-compatible server next to the container instead.
 
 `TELEGRAM_TRANSCRIBE_LANGUAGE` (ISO-639-1, e.g. `nl`) is passed as a language hint to every engine except `telegram`; unset, the engines auto-detect. `TELEGRAM_TRANSCRIBE_TIMEOUT` (default 120 seconds) bounds a single request to the HTTP engines (`groq`, `openai`).
 
@@ -123,14 +153,14 @@ The engine is chosen per call via the `engine` argument, or otherwise defaults t
 - `on-demand` (default): listings show cached transcripts but never spend an API call fetching a new one.
 - `auto`: `get_history`, `get_messages`, `list_messages`, and `search_messages` also prefetch missing transcripts, bounded per call by `TELEGRAM_TRANSCRIBE_MAX_VOICES`/`TELEGRAM_TRANSCRIBE_MAX_SECONDS` (Groq isn't free, so this prefetch is budgeted rather than unbounded).
 
-The cache lives in `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default `data/transcripts`), written as a 700 directory / 600 file since it holds personal-chat text in plaintext — see [Docker](#docker) for why this needs its own volume mount in a container.
+The cache lives in `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default `data/transcripts` in the working directory, or `~/.cache/telegram-mcp/transcripts` when that is not writable), written as a 700 directory / 600 file since it holds personal-chat text in plaintext — see [Docker](#docker) for why this needs its own volume mount in a container.
 - **Profile and privacy:** get your own account info, update profile fields, set or delete profile photos, inspect privacy settings, get user info/photos/status, and manage bot commands.
-- **Folders and drafts:** list, create, update, reorder, and delete Telegram folders; save, list, and clear drafts.
+- **Folders and drafts:** list, create, update, reorder, and delete Telegram folders; preview a shared folder invite (`t.me/addlist/...`) without joining it; save, list, and clear drafts.
   - `get_folder_limits` reports current Premium-aware folder, explicit-chat and pin limits from Telegram app config; unavailable limits are `null`.
   - `get_folder_snapshot` captures folder definitions/order, including title entities, display fields, flags, stable peer IDs and ordered pins, without access hashes or chat contents. Its private-folder `definition` objects can be passed as restoration patches; shared invites and account/chat state are outside this snapshot's scope.
   - `update_folder(folder_id, patch, expected_revision?)` edits an existing private folder in place, preserving omitted fields. Peer lists replace only the specified list; `[]` clears it. For example, `{"title": "Projects", "exclude_archived": false}` renames the folder and allows archived chats through its rules without unarchiving anything. Save a snapshot before editing and use its `revision` to reject stale plans. Shared/system folders are refused; avoid concurrent folder editors because Telegram has no atomic compare-and-swap.
 
-- **Events:** wait for incoming messages with debounce (`wait_for_new_message`, `wait_for_settled_message`), optionally for one chat only via `chat_id` — without it any unrelated conversation wakes the wait — or enable the opt-in incoming event feed for callback-style delivery (see below).
+- **Events:** wait for incoming messages with debounce (`wait_for_new_message`, `wait_for_settled_message`), optionally for one chat only via `chat_id` — without it any unrelated conversation wakes the wait — or enable the opt-in incoming event feed for callback-style delivery (see below). Integrators that follow chats (such as chat bridges) use the per-message event log instead (see below).
 
 All tool results that include Telegram user-controlled content are sanitized and, where practical, returned as structured JSON.
 
@@ -172,6 +202,11 @@ does not look like an emoji (pure ASCII/Latin punctuation such as `#` is refused
 an `id` is not a positive 64-bit integer, two marked spans overlap, or `parse_mode`
 is set. It combines with `format_date`.
 
+`send_file` and `send_album` take the same `parse_mode` and `custom_emojis` for their
+caption, which for a media group sits on its first item. Without `parse_mode` a caption is
+still parsed as Markdown, as before; `parse_mode="plain"` sends it verbatim, the rich modes
+are not supported for captions, and `custom_emojis` needs a caption.
+
 ### Tappable dates and times
 
 Passing `format_date` to `send_message`, `reply_to_message`, or `edit_message`
@@ -192,6 +227,18 @@ Clients that can wake an agent on external output (Claude Code's persistent `Mon
 2. The agent arms a persistent Monitor with the `watch_command` returned by the tool. Every new line re-invokes the agent with the burst summary; no blocking tool call is held open, and the chat stays free.
 
 `disable_incoming_feed` switches back; `incoming_feed_status` reports the current mode. While the feed is enabled it consumes settled bursts, so don't combine it with `wait_for_settled_message`. Feed lines contain user-generated `name` fields — treat them as untrusted data.
+
+### Per-message events (chat bridges)
+
+Every new message of a private chat, basic group or supergroup gets one numbered event in a bounded in-memory log (`TELEGRAM_EVENT_LOG_SIZE`, default 2000; `0` turns it off). Incoming messages count, and so do the owner's own messages sent from another device; messages this server sent itself do not. Broadcast channels are left out, and so are chats outside `TELEGRAM_ALLOWED_CHAT_IDS` when it is set. Events carry no text and nothing is written to disk.
+
+- `wait_for_events(chat_id?, after_seq, boot?, timeout, limit, account?)` long-polls: it returns as soon as there are events after `after_seq` (at most 100 s, under typical proxy timeouts; keep `timeout` under your MCP client's request timeout). `after_seq=-1` starts from now without replaying the log. An event has `seq`, `chat_id`, `chat_type`, `message_id`, `sender_id`, `sender_name`, `sender_bot`, `out`, `addressed` (private chats always, groups when Telegram marks the message as mentioning the account or replying to it; never the owner's own), `topic` (the forum topic's id, 1 for General; absent outside forums), `reply_to`, `service` and `date`; with several accounts it also names its `account`. Always pass back `boot` and `last_seq`; `reset` (the server restarted) or `gap` (the log overflowed; global, not per chat) means: read every chat you follow from your last message id, then continue.
+- `get_messages_after(chat_id, after_id?, limit)` returns the messages after an id, oldest first, as the `list_messages` records plus `out`, `mentioned`, `addressed`, `date`, `topic` in forums and `action` for service messages. The result has `chat_id`, `chat_type`, `has_more` (newer messages remain with `after_id`, older ones exist without it), `messages` and, in a forum, one `topics` map of topic id to title. A negative `after_id` is rejected.
+- `send_message` takes `reply_to` (a topic id posts in that forum topic) and names the sent message: plain sends end with `message_id=<id>`, rich sends (`rich*` parse modes) return JSON with a `message_id` key (`null` when Telegram's answer does not name it), so a bridge can recognise its own message when it comes back in history.
+
+The debounce tools above keep their private-only behaviour.
+
+**Updates missed while offline.** After a reconnect the server asks Telegram for the updates it missed (`catch_up`), so messages received during a network outage still reach the incoming feed and the event log. Telethon's own automatic reconnect does not do this, and it fetches a difference by itself only after 15 minutes without updates. On a flaky network set `TELEGRAM_CATCH_UP_INTERVAL` (seconds, e.g. `120`, at least `30`; default `0`, off) to ask for missed updates periodically; when nothing was missed the request returns an empty difference.
 
 ## Requirements
 
@@ -392,6 +439,21 @@ Use `TELEGRAM_FLOOD_SLEEP_THRESHOLD` to configure Telethon's internal silent-sle
 TELEGRAM_FLOOD_SLEEP_THRESHOLD=60   # Max seconds Telethon sleeps silently on FloodWait (default 60)
 ```
 
+On top of that, a proactive flood-prevention layer gates every tool call that
+reaches Telegram (the long-poll `wait_for_events`/`wait_for_new_message`/
+`wait_for_settled_message` and incoming-feed tools manage their accounts
+internally and are not gated): a sliding-window bucket per (account, operation
+category) — sends 30/min, history reads 24/30s, admin actions 10/min, username
+resolution 20/min, channel create/join/leave 3/5min — plus a reactive circuit
+breaker that suspends a tool after repeated flood waits on the same account. A
+deferred call returns a rate-limit message with the retry delay instead of
+making the Telegram request, so the agent reschedules instead of accumulating
+hours-long flood bans. It is on by default; disable it with:
+
+```env
+TELEGRAM_FLOODGATE=0   # disable the local flood-prevention gate (default on)
+```
+
 Run the server locally:
 
 ```bash
@@ -504,12 +566,18 @@ For `http` and `sse`, the server binds `MCP_HOST`:`MCP_PORT` (default
 `127.0.0.1:8765`); the streamable HTTP endpoint is `/mcp`, the SSE endpoint is
 `/sse`.
 
+Host and Origin validation is always on for `http` and `sse`, so a web page
+open in your browser cannot send tool calls to the local server (cross-origin
+request forgery / DNS rebinding). By default only `127.0.0.1`, `localhost` and
+`[::1]` Host headers are accepted, and only browser pages served from those
+hosts; requests without an `Origin` header (regular MCP clients) are not
+affected. CORS preflights echo only an allowed origin, never `*`.
+
 If the server is reachable via a domain (e.g. behind a reverse proxy) rather
-than only `127.0.0.1`/`localhost`, set `MCP_ALLOWED_HOSTS` (and optionally
-`MCP_ALLOWED_ORIGINS`) to enable DNS-rebinding protection and allow that Host
-header, e.g. `MCP_ALLOWED_HOSTS=mcp.example.com`. Comma-separated; supports a
-`:*` suffix to allow any port. Left unset, DNS-rebinding protection stays off
-(the historical default).
+than only `127.0.0.1`/`localhost`, set `MCP_ALLOWED_HOSTS` to the Host headers
+to accept, e.g. `MCP_ALLOWED_HOSTS=mcp.example.com`, and `MCP_ALLOWED_ORIGINS`
+to any browser origins that may call the server. Each replaces the local
+default list. Comma-separated; supports a `:*` suffix to allow any port.
 
 Prefer `http` when more than one MCP client (or many coding-agent sessions)
 will use the server: a single long-lived process holds one Telegram
@@ -558,6 +626,10 @@ TELEGRAM_SESSION_STRING_PERSONAL=session_string_for_personal
 ```
 
 Labels are lowercased and become the `account` parameter value in tools.
+
+If `TELEGRAM_SESSION_NAME` is set as well (the Docker image and `.env.example` set it), that
+session becomes an extra `default` account when it is logged in; when it is not, the server
+skips it with a warning on stderr instead of refusing to start.
 
 - In single-account mode, `account` is optional.
 - In multi-account mode, write tools require `account`.
@@ -621,6 +693,8 @@ These optional variables control how the client appears in Telegram under
 TELEGRAM_DEVICE_MODEL=Telegram MCP
 TELEGRAM_SYSTEM_VERSION=1.0
 TELEGRAM_APP_VERSION=1.0
+TELEGRAM_LANG_CODE=en
+TELEGRAM_SYSTEM_LANG_CODE=en
 ```
 
 If left unset, Telethon falls back to the host platform (for example `arm64`).
@@ -688,7 +762,9 @@ bypassing the proxy.
 
 ## File Path Security
 
-File-path and media tools (`send_file`, `download_media`, `upload_file`, `send_voice`, `send_sticker`, `set_profile_photo`, `edit_chat_photo`, and `send_album`) are registered and supported, but remain strictly disabled by default until allowed roots are configured (safe-by-default to prevent unauthorized file access).
+File-path and media tools (`send_file`, `edit_message_media`, `download_media`, `upload_file`, `send_voice`, `send_sticker`, `set_profile_photo`, `edit_chat_photo`, and `send_album`) are registered and supported, but remain strictly disabled by default until allowed roots are configured (safe-by-default to prevent unauthorized file access).
+
+`send_file` and `send_album` keep their existing success line and append `MessageIDs: [...]` when Telethon returns the sent messages. Album IDs follow the same order as `file_paths`; a `null` entry means Telethon could not map that position to a message ID. Pass a known ID to `edit_message_media` to replace that item.
 
 Allowed roots can come from:
 
@@ -719,6 +795,26 @@ Security behavior:
 - Size and extension limits are enforced for sensitive media tools. `send_file`
   and `upload_file` have no extension limit by default; see
   `TELEGRAM_FILE_EXTENSIONS` above to add one.
+
+#### Clients on another machine
+
+File-path tools read and write the server's disk. When the server runs over
+HTTP for a client on another machine, set `TELEGRAM_MEDIA_BASE_URL` to the URL
+clients reach it at (for example `https://tg.example.com`, behind your reverse
+proxy) and configure a server allowed root:
+
+- `download_media` also returns a URL that serves the downloaded file
+  (`<base>/media/…`); fetch it with `curl` or similar.
+- `prepare_upload(filename)` returns a `url` and a `file_path`. PUT the file to
+  the url (`curl --fail -T ./report.pdf "<url>"`; streamed to disk, up to the
+  `send_file` size limit), then pass `file_path` to `send_file`, `send_album`,
+  `send_voice` or `send_sticker`.
+
+Both URLs carry an HMAC signature and stay inside the first server allowed root.
+Each expires after an hour or when the server restarts, and an upload URL takes
+one upload. Uploads land in `<first_root>/uploads/` and are deleted two hours
+later. Client MCP Roots name the client's own disk, so such a deployment
+usually also sets `TELEGRAM_SERVER_ROOTS_ONLY=1`.
 
 Run with allowed roots via environment variable:
 
@@ -763,20 +859,81 @@ From an MCP client configuration, you can pass roots via `env` or as arguments a
 To restrict AI agents or MCP clients to specific chats only (preventing access to all private or corporate conversations), configure `TELEGRAM_ALLOWED_CHAT_IDS`:
 
 ```env
-# Comma-separated list of allowed chat IDs, supergroup IDs, or usernames
-TELEGRAM_ALLOWED_CHAT_IDS=12345678,-100123456789,@allowed_channel
+# Comma-separated list of allowed chat IDs (marked form) or usernames
+TELEGRAM_ALLOWED_CHAT_IDS=12345678,-100123456789,-4567,@allowed_channel
 ```
+
+Numeric IDs are matched exactly in Telegram's marked form, the same `chat_id` the tools return: a user is `12345678`, a basic group `-4567`, a channel or supergroup `-100123456789`. Users, basic groups and channels have separate ID namespaces, so the same bare number can be three unrelated chats; an entry is never widened to another type (allowing channel `-100123456789` does not allow user `123456789`). Write groups and channels with their `-`/`-100` prefix: a bare positive number only ever means a user.
 
 When `TELEGRAM_ALLOWED_CHAT_IDS` is set:
 - **`list_chats` / `get_chats`:** Only chats matching the allowlist are returned; all other conversations remain completely invisible to the agent.
 - **Messaging & Chat Tools (`send_message`, `get_messages`, `get_chat`, `create_poll`, etc.):** Any attempt to interact with a chat outside the allowlist is rejected with a structured error message: `Access to chat '<chat_id>' is restricted by privacy policy (TELEGRAM_ALLOWED_CHAT_IDS)`.
-- **Search & Drafts (`search_global`, `get_drafts`):** Global searches and draft listings omit unallowed conversations.
+- **Search, Drafts & Calls (`search_global`, `get_drafts`, `list_calls`):** Global searches, draft listings and the call list omit unallowed conversations.
 - **Contact, folder & group-admin tools:** a chat named by `contact_id` or `group_id` (`get_last_interaction`, `get_contact_chats`, `invite_to_group`, `promote_admin`, `demote_admin`) is checked like `chat_id`; `get_common_chats`, `get_contact_chats`, `get_direct_chat_by_contact` and `get_folder` leave unallowed chats out of their results; `create_folder` refuses unallowed `chat_ids`.
 - **Incoming Events:** Notifications and debounce feeds only process events from allowed chats.
 
 If `TELEGRAM_ALLOWED_CHAT_IDS` is unset or empty, the server operates in unrestricted mode (default), preserving 100% backward compatibility.
 
+### Forum topics
+
+An entry written as `<chat>:<topic id>` allows the chat, but only that forum topic (`1` is General). Several entries allow several topics of one chat; a plain entry for the same chat allows it whole again. Topic ids come from `list_topics`.
+
+```env
+# Only the topic with id 163 of a forum supergroup, plus one whole private chat
+TELEGRAM_ALLOWED_CHAT_IDS=-100123456789:163,12345678
+```
+
+For a chat limited to topics:
+- **Reading tools that keep to the topics:** `get_history` (the allowed topic is the default when there is only one), `list_messages`, `get_messages`, `search_messages`, `get_message_context`, `get_messages_after`, `list_topics` (only the allowed topics), `get_chat` (`last_message` only from an allowed topic), `open_photo`, `inspect_document`, `get_media_info`, `transcribe_voice` and `wait_for_events`. Messages of other topics are left out, and a message id from another topic is refused. `get_messages_after` also returns `next_after_id`, the newest message it read, so a reader can continue past messages it left out.
+- **Every other tool that takes the chat** (sending, editing, pinned and scheduled messages, members, the admin log, exports, …) is refused with `Access to chat '<chat_id>' is restricted by privacy policy (TELEGRAM_ALLOWED_CHAT_IDS): only forum topic(s) <ids> are allowed, and <tool> cannot be limited to a topic.` A tool has to be taught about topics before it can be used, so a tool that does not know about them never reaches the rest of the chat.
+- **Tools that read many chats:** `search_global`, `get_drafts` and the incoming event log leave out the chat's other topics.
+- Chat-level metadata stays visible: the title, the member count and the chat's total unread count.
+
+`TELEGRAM_BLOCKED_CHAT_IDS` takes whole chats only; a `<chat>:<topic>` entry there blocks nothing.
+
+### Global chat blocklist
+
+Set `TELEGRAM_BLOCKED_CHAT_IDS` to a comma-separated list of marked chat IDs
+and/or usernames to exclude chats across all configured accounts:
+
+```env
+TELEGRAM_BLOCKED_CHAT_IDS=-100123456789,-4567,12345678,@unwanted_bot
+```
+
+The blocklist takes precedence over `TELEGRAM_ALLOWED_CHAT_IDS` for data returned
+to the agent. Messages from blocked chats are filtered from results and events;
+forwarding messages from those chats is also blocked. Other actions are not
+restricted by the blocklist. A bot's username blocks its own chat, not messages it
+posts elsewhere.
+IDs are exact, including the `-` or `-100` prefix; usernames are case-insensitive.
+Prefer numeric IDs for reliable blocking: usernames can change, and chats whose
+username cannot be checked may still appear in results. Existing export files are
+not filtered retroactively. Complete folder snapshots remain unavailable when a
+blocklist is active because they contain unfiltered chat identifiers.
+Global-search cursors keep Telegram's original Base64-encoded offsets and may
+contain a blocked chat's ID and access hash, but not message text.
+
+## Deletion Audit Log (Recent Actions for Private Chats)
+
+To maintain an immutable, local audit trail for destructive actions (e.g. tracking when and how messages were deleted without exposing message text), the server writes an append-only JSONL log (closes #321):
+
+```env
+# Optional custom path for the deletion audit log (defaults to telegram_audit.log next to the server)
+TELEGRAM_AUDIT_LOG=/path/to/telegram_audit.log
+```
+
+- **Operations logged:** `delete_message`, `delete_messages_bulk`, and `delete_chat_history`.
+- **Refusals and errors logged:** Refused cross-chat deletion attempts (attempting to delete IDs outside the target chat) and permission errors (`ChatAdminRequiredError`) are recorded with full diagnostic details.
+- **Privacy preservation:** Only operation metadata is persisted (`timestamp`, `account`, `tool`, `chat_id`, `message_ids`, `revoke`, `outcome`). Message content and bodies are **never** logged.
+- **Log entry format (JSONL):**
+  ```json
+  {"timestamp": "2026-11-07T18:25:00.123456+00:00", "account": "work", "tool": "delete_message", "chat_id": 12345678, "message_ids": [42], "revoke": null, "outcome": "deleted"}
+  {"timestamp": "2026-11-07T18:25:05.123456+00:00", "account": "work", "tool": "delete_messages_bulk", "chat_id": 12345678, "message_ids": [999], "revoke": true, "outcome": "refused: foreign message IDs [999]"}
+  ```
+
 ## Docker
+
+For complete compose templates and client configurations (Claude Desktop, Cursor, etc.), see the [**Docker Deployment Guide**](examples/docker/README.md).
 
 Build the image:
 
@@ -945,6 +1102,7 @@ This project is licensed under the [Apache 2.0 License](LICENSE).
 - [Model Context Protocol](https://modelcontextprotocol.io/)
 - [Claude](https://www.anthropic.com/) and [Cursor](https://cursor.so/)
 - [chigwell/telegram-mcp](https://github.com/chigwell/telegram-mcp) upstream project
+- [telethon-floodgate](https://github.com/axisrow/telethon-floodgate) by [@axisrow](https://github.com/axisrow) — flood-prevention engine, vendored under MIT (see file headers in `telegram_mcp/floodgate/`)
 
 Maintained by [@chigwell](https://github.com/chigwell) and [@l1v0n1](https://github.com/l1v0n1). PRs welcome.
 

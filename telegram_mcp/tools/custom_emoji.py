@@ -109,7 +109,7 @@ async def get_custom_emoji_packs(
             if len(packs) >= limit:
                 break
 
-        return json.dumps(packs, indent=2, default=json_serializer)
+        return json.dumps(packs, indent=2, default=json_serializer, ensure_ascii=False)
     except Exception as e:
         return log_and_format_error(
             "get_custom_emoji_packs", e, query=query, featured=featured, limit=limit
@@ -225,7 +225,12 @@ async def get_custom_emoji_pack(
                 }
             )
 
-        return json.dumps({"pack": pack_info, "emojis": emojis}, indent=2, default=json_serializer)
+        return json.dumps(
+            {"pack": pack_info, "emojis": emojis},
+            indent=2,
+            default=json_serializer,
+            ensure_ascii=False,
+        )
     except Exception as e:
         return log_and_format_error("get_custom_emoji_pack", e, pack=pack)
 
@@ -309,6 +314,7 @@ async def preview_custom_emoji(
             )
             if path_error:
                 return path_error
+            kept_path.parent.mkdir(parents=True, exist_ok=True)
             kept_path.write_bytes(data)
             saved_path_str = str(kept_path)
 

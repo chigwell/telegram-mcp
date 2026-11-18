@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 from types import SimpleNamespace
@@ -398,15 +399,44 @@ async def test_serve_http_uses_default_host_and_port(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_serve_http_leaves_transport_security_unset_by_default(monkeypatch):
+@pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0"])
+async def test_serve_http_enables_localhost_only_protection_by_default(monkeypatch, host):
+    """Host/Origin validation must be on even without MCP_ALLOWED_HOSTS.
+
+    Otherwise any web page in the user's browser could POST tool calls to the
+    local server (cross-origin request forgery / DNS rebinding).
+    """
     fake = _FakeMcp()
     monkeypatch.setattr(runner, "mcp", fake)
+    monkeypatch.setenv("MCP_HOST", host)
     monkeypatch.delenv("MCP_ALLOWED_HOSTS", raising=False)
     monkeypatch.delenv("MCP_ALLOWED_ORIGINS", raising=False)
 
     await runner._serve("http")
 
-    assert fake.settings.transport_security is None
+    security = fake.settings.transport_security
+    assert security.enable_dns_rebinding_protection is True
+    assert security.allowed_hosts == ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    assert security.allowed_origins == [
+        "http://127.0.0.1:*",
+        "http://localhost:*",
+        "http://[::1]:*",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_serve_http_allowed_origins_without_hosts_replace_local_origins(monkeypatch):
+    fake = _FakeMcp()
+    monkeypatch.setattr(runner, "mcp", fake)
+    monkeypatch.delenv("MCP_ALLOWED_HOSTS", raising=False)
+    monkeypatch.setenv("MCP_ALLOWED_ORIGINS", "http://localhost:3000")
+
+    await runner._serve("sse")
+
+    security = fake.settings.transport_security
+    assert security.enable_dns_rebinding_protection is True
+    assert security.allowed_hosts == ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    assert security.allowed_origins == ["http://localhost:3000"]
 
 
 @pytest.mark.asyncio
@@ -574,3 +604,174 @@ def test_main_reports_only_exclusions_for_all_base(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "after '+'" not in err
     assert "excludes 2 tool(s) listed after '-': delete_message, delete_messages_bulk" in err
+
+
+# --- an implicit default account that never logged in is skipped, not fatal -------
+
+
+def _only_session_env(monkeypatch, **env):
+    for key in list(os.environ):
+        if key.startswith(("TELEGRAM_SESSION_STRING", "TELEGRAM_SESSION_NAME")):
+            monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(runtime_module, "StringSession", lambda value=None: f"str::{value}")
+    monkeypatch.setattr(runtime_module, "_build_client", lambda session, label: object())
+    monkeypatch.setattr(runtime_module, "OPTIONAL_ACCOUNTS", set())
+
+
+def test_preset_session_name_next_to_labelled_accounts_is_optional(monkeypatch):
+    _only_session_env(
+        monkeypatch,
+        TELEGRAM_SESSION_STRING_WORK="work-string",
+        TELEGRAM_SESSION_NAME="telegram_session",
+    )
+
+    accounts = runtime_module._discover_accounts()
+
+    assert set(accounts) == {"work", "default"}
+    assert runtime_module.OPTIONAL_ACCOUNTS == {"default"}
+
+
+def test_lone_session_name_stays_required(monkeypatch):
+    _only_session_env(monkeypatch, TELEGRAM_SESSION_NAME="telegram_session")
+
+    accounts = runtime_module._discover_accounts()
+
+    assert set(accounts) == {"default"}
+    assert runtime_module.OPTIONAL_ACCOUNTS == set()
+
+
+class _DialogsClient(_FakeClient):
+    async def get_dialogs(self):
+        return []
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_optional_default_is_skipped(monkeypatch, capsys):
+    work = _DialogsClient(authorized=True, identity="work-session")
+    default = _DialogsClient(authorized=False, identity="default-session")
+    accounts = {"work": work, "default": default}
+    monkeypatch.setattr(runner, "clients", accounts)
+    monkeypatch.setattr(runtime_module, "OPTIONAL_ACCOUNTS", {"default"})
+
+    await asyncio.gather(
+        *(runner._connect_or_skip(label, client) for label, client in list(accounts.items()))
+    )
+
+    assert list(accounts) == ["work"]
+    assert default.disconnected is True
+    assert "default" not in runner._session_locks
+    assert "Skipping account 'default'" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_authorized_optional_default_is_kept(monkeypatch):
+    accounts = {
+        "work": _DialogsClient(authorized=True, identity="work-session"),
+        "default": _DialogsClient(authorized=True, identity="default-session"),
+    }
+    monkeypatch.setattr(runner, "clients", accounts)
+    monkeypatch.setattr(runtime_module, "OPTIONAL_ACCOUNTS", {"default"})
+
+    for label, client in list(accounts.items()):
+        await runner._connect_or_skip(label, client)
+
+    assert list(accounts) == ["work", "default"]
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_labelled_account_still_refuses_to_start(monkeypatch):
+    accounts = {"work": _DialogsClient(authorized=False, identity="work-session")}
+    monkeypatch.setattr(runner, "clients", accounts)
+    monkeypatch.setattr(runtime_module, "OPTIONAL_ACCOUNTS", {"default"})
+
+    with pytest.raises(RuntimeError, match="'work' is not authorized"):
+        await runner._connect_or_skip("work", accounts["work"])
+
+    assert list(accounts) == ["work"]
+
+
+@pytest.mark.asyncio
+async def test_main_serves_labelled_accounts_when_preset_default_is_not_logged_in(
+    monkeypatch, capsys
+):
+    accounts = {
+        "work": _DialogsClient(authorized=True, identity="work-session"),
+        "default": _DialogsClient(authorized=False, identity="default-session"),
+    }
+    served = []
+
+    async def fake_serve(transport):
+        await asyncio.sleep(0)  # let the background cache warm-up run
+        served.append(transport)
+
+    monkeypatch.setattr(runner, "clients", accounts)
+    monkeypatch.setattr(runtime_module, "OPTIONAL_ACCOUNTS", {"default"})
+    monkeypatch.setattr(runner, "_serve", fake_serve)
+    monkeypatch.setenv("MCP_TRANSPORT", "stdio")
+
+    await runner._main()
+
+    err = capsys.readouterr().err
+    assert served == ["stdio"]
+    assert list(accounts) == ["work"]
+    assert "Skipping account 'default'" in err
+    assert "Telegram client(s) started (work)." in err
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, 0.0),
+        ("", 0.0),
+        ("0", 0.0),
+        ("120", 120.0),
+        ("2.5", 30.0),
+        ("-5", 0.0),
+        ("soon", 0.0),
+    ],
+)
+def test_catch_up_interval(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv("TELEGRAM_CATCH_UP_INTERVAL", raising=False)
+    else:
+        monkeypatch.setenv("TELEGRAM_CATCH_UP_INTERVAL", raw)
+    assert runner._catch_up_interval() == expected
+
+
+class _CatchUpClient:
+    def __init__(self, connected=True, error=None):
+        self.connected = connected
+        self.error = error
+        self.catch_ups = 0
+
+    def is_connected(self):
+        return self.connected
+
+    async def catch_up(self):
+        self.catch_ups += 1
+        if self.error:
+            raise self.error
+
+
+@pytest.mark.asyncio
+async def test_periodic_catch_up_skips_disconnected_clients_and_survives_errors(monkeypatch):
+    up = _CatchUpClient()
+    down = _CatchUpClient(connected=False)
+    failing = _CatchUpClient(error=ConnectionError("gone"))
+    monkeypatch.setattr(runner, "clients", {"up": up, "down": down, "failing": failing})
+
+    task = asyncio.create_task(runner._periodic_catch_up(0.01))
+
+    async def _two_rounds():
+        while up.catch_ups < 2:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_two_rounds(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert down.catch_ups == 0
+    assert failing.catch_ups >= 2  # an error does not stop the loop

@@ -367,3 +367,57 @@ async def test_preview_custom_emoji_with_save_path(monkeypatch, tmp_path):
     assert f"Custom emoji 888 saved to {target_file}" in result[0]
     assert isinstance(result[1], Image)
     assert target_file.read_bytes() == png_bytes
+
+
+@pytest.mark.asyncio
+async def test_preview_custom_emoji_creates_parent_directories_if_missing(monkeypatch, tmp_path):
+    cl = AsyncMock()
+    doc = _mock_custom_emoji_doc(doc_id=999)
+    cl.return_value = [doc]
+
+    png_bytes = b"\x89PNG\r\n\x1a\nfakepng"
+    cl.download_media = AsyncMock(return_value=png_bytes)
+
+    # Nested destination where parent directory does not exist yet
+    target_file = tmp_path / "nested" / "subfolder" / "emoji_999.png"
+    assert not target_file.parent.exists()
+
+    monkeypatch.setattr(custom_emoji, "get_client", lambda account=None: cl)
+    monkeypatch.setattr(custom_emoji, "ensure_connected", AsyncMock())
+    monkeypatch.setattr(
+        custom_emoji,
+        "_resolve_writable_file_path",
+        AsyncMock(return_value=(target_file, None)),
+    )
+
+    result = await _preview_custom_emoji(999, save_path=str(target_file))
+    assert isinstance(result, list)
+    assert target_file.exists()
+    assert target_file.read_bytes() == png_bytes
+
+
+@pytest.mark.asyncio
+async def test_preview_custom_emoji_animated_tgs_guidance(monkeypatch):
+    cl = AsyncMock()
+    doc = _mock_custom_emoji_doc(doc_id=111)
+    doc.mime_type = "application/x-tgsticker"
+    cl.return_value = [doc]
+
+    tgs_bytes = b"\x1f\x8b\x08\x00fakelottiebytes"
+    cl.download_media = AsyncMock(return_value=tgs_bytes)
+
+    monkeypatch.setattr(custom_emoji, "get_client", lambda account=None: cl)
+    monkeypatch.setattr(custom_emoji, "ensure_connected", AsyncMock())
+
+    result = await _preview_custom_emoji(111, thumbnail=False)
+    assert isinstance(result, str)
+    assert "cannot be rendered as a static image without thumbnail" in result
+    assert "Please call with thumbnail=True or provide save_path" in result
+
+
+def test_extract_pack_short_name_query_and_edge_cases():
+    assert extract_pack_short_name("https://t.me/addemoji/DucksPack?source=share") == "DucksPack"
+    assert extract_pack_short_name("tg://addstickers?set=CuteCats&utm=promo") == "CuteCats"
+    assert extract_pack_short_name("https://t.me/addstickers/MyPack#anchor") == "MyPack"
+    assert extract_pack_short_name("AnimatedDogs") == "AnimatedDogs"
+    assert extract_pack_short_name("") == ""

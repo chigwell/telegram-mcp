@@ -53,7 +53,28 @@ class TestSanitizeUserContent:
     def test_emoji_mode_preserves_joiners_but_removes_other_controls(self):
         text = "\x00\u202e👩\u200d💻\u200b\ufeff"
         assert sanitize_user_content(text, preserve_emoji=True) == "👩\u200d💻"
-        assert sanitize_user_content(text) == "👩💻"
+        # A ZWJ inside an emoji sequence is kept in every mode: without it 👩‍💻 becomes 👩💻.
+        assert sanitize_user_content(text) == "👩\u200d💻"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Семья 👨\u200d👩\u200d👧\u200d👦",
+            "pride 🏳\ufe0f\u200d🌈 and ❤\ufe0f\u200d🔥",
+            "profession 👩🏻\u200d💻",
+            "فارسی: می\u200cخواهم",
+            "हिन्दी क्\u200dष",
+        ],
+    )
+    def test_joiners_that_hold_emoji_and_words_together_are_kept(self, text):
+        assert sanitize_user_content(text) == text
+        assert sanitize_name(text) == text
+
+    def test_joiners_that_could_hide_words_are_still_stripped(self):
+        # Between Latin letters or at the edges they only hide text.
+        assert sanitize_user_content("ig\u200dnore\u200c all") == "ignore all"
+        assert sanitize_user_content("\u200d👩\u200d") == "👩"
+        assert sanitize_user_content("x\u200d👩") == "x👩"
 
     def test_emoji_mode_preserves_subdivision_flag_tags(self):
         flag = "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f"

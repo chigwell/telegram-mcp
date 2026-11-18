@@ -194,12 +194,24 @@ def test_default_feed_path_creates_its_directory(monkeypatch, tmp_path):
     assert events.feed_file_path().exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions only")
 def test_feed_file_created_owner_only():
     events._touch_feed_file()
     mode = stat.S_IMODE(events.feed_file_path().stat().st_mode)
     assert mode == 0o600
 
 
+def test_feed_opens_on_windows_without_fchmod(monkeypatch):
+    # Before Python 3.13 Windows has no os.fchmod, and fstat reports 0666 for every file.
+    monkeypatch.setattr(events.os, "name", "nt")
+    monkeypatch.delattr(events.os, "fchmod", raising=False)
+
+    events._touch_feed_file()
+
+    assert events.feed_file_path().exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions only")
 def test_existing_world_readable_feed_file_is_tightened():
     path = events.feed_file_path()
     path.touch()
@@ -210,6 +222,7 @@ def test_existing_world_readable_feed_file_is_tightened():
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions only")
 @pytest.mark.asyncio
 async def test_rotated_world_readable_file_is_tightened_on_write():
     path = events.feed_file_path()
