@@ -1095,3 +1095,28 @@ def test_explicit_cache_dir_that_cannot_be_created_still_fails(tmp_path, monkeyp
 
     with pytest.raises(OSError):
         transcription.cache_dir()
+
+
+@pytest.mark.asyncio
+async def test_whisper_lock_is_held_until_the_worker_finishes(monkeypatch):
+    import threading
+
+    monkeypatch.setattr(transcription, "_WHISPER_SEMAPHORE", None)
+    release = threading.Event()
+
+    def _slow():
+        release.wait(5)
+        return "done"
+
+    task = asyncio.ensure_future(transcription._whisper_in_thread(_slow))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert transcription._WHISPER_SEMAPHORE.locked(), "lock freed while inference still runs"
+    release.set()
+    for _ in range(100):
+        if not transcription._WHISPER_SEMAPHORE.locked():
+            break
+        await asyncio.sleep(0.01)
+    assert not transcription._WHISPER_SEMAPHORE.locked()
