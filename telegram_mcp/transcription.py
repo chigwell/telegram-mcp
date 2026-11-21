@@ -594,9 +594,35 @@ def _run_whisper(data: bytes, settings: tuple, language: Optional[str]) -> tuple
     return text, getattr(info, "language", None)
 
 
+async def _whisper_in_thread(fn, *args):
+    """Run one inference in a worker thread, one at a time.
+
+    The lock is released when the thread finishes, not when the caller is cancelled:
+    cancelling the await does not stop the thread, and a second inference must not
+    start on the shared model while the first is still running.
+    """
+    global _WHISPER_SEMAPHORE
+    if _WHISPER_SEMAPHORE is None:
+        _WHISPER_SEMAPHORE = asyncio.Semaphore(1)
+    semaphore = _WHISPER_SEMAPHORE
+    await semaphore.acquire()
+    try:
+        future = asyncio.get_running_loop().run_in_executor(None, fn, *args)
+    except BaseException:
+        semaphore.release()
+        raise
+
+    def _finished(done):
+        semaphore.release()
+        if not done.cancelled():
+            done.exception()  # retrieved, so an abandoned failure is not logged as unhandled
+
+    future.add_done_callback(_finished)
+    return await asyncio.shield(future)
+
+
 async def _transcribe_via_whisper(cl, msg) -> dict:
     """Local faster-whisper. The audio never leaves this machine."""
-    global _WHISPER_SEMAPHORE
     error = engine_config_error("whisper")
     if error:
         return {"status": "error", "error": error}
@@ -605,14 +631,11 @@ async def _transcribe_via_whisper(cl, msg) -> dict:
     if error is not None:
         return error
 
-    if _WHISPER_SEMAPHORE is None:
-        _WHISPER_SEMAPHORE = asyncio.Semaphore(1)
     language = transcribe_language()
     try:
-        async with _WHISPER_SEMAPHORE:
-            text, lang = await asyncio.to_thread(
-                _run_whisper, bytes(data), _whisper_settings(), language
-            )
+        text, lang = await _whisper_in_thread(
+            _run_whisper, bytes(data), _whisper_settings(), language
+        )
     except Exception as e:
         return {"status": "error", "error": f"whisper failed: {e}"}
     finally:
