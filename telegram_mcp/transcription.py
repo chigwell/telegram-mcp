@@ -521,22 +521,9 @@ async def _transcribe_via_openai_compatible(cl, msg, cfg: HttpEngineConfig) -> d
         return error
 
     filename, mime = _upload_name(msg)
-    form = {"model": cfg.model, "response_format": cfg.response_format}
     language = transcribe_language()
-    if language:
-        form["language"] = language
-    headers = {"Authorization": f"Bearer {cfg.api_key}"} if cfg.api_key else {}
-
     try:
-        async with httpx.AsyncClient(timeout=cfg.timeout) as client:
-            resp = await client.post(
-                cfg.url,
-                headers=headers,
-                data=form,
-                files={"file": (filename, bytes(data), mime)},
-            )
-        resp.raise_for_status()
-        payload = resp.json()
+        payload = await _post_audio(cfg, data, filename, mime, cfg.response_format, language)
     except Exception as e:
         return {"status": "error", "error": f"{cfg.engine} request failed: {e}"}
     finally:
@@ -546,6 +533,32 @@ async def _transcribe_via_openai_compatible(cl, msg, cfg: HttpEngineConfig) -> d
     if not text:
         return {"status": "error", "error": f"empty transcript from {cfg.engine}"}
     return {"status": "ok", "text": text, "lang": payload.get("language") or language}
+
+
+async def _post_audio(
+    cfg: HttpEngineConfig,
+    data,
+    filename: str,
+    mime: str,
+    response_format: str,
+    language: Optional[str],
+    extra: Optional[dict] = None,
+) -> dict:
+    """One multipart POST to an OpenAI-style transcription endpoint; raises on failure."""
+    form = {"model": cfg.model, "response_format": response_format}
+    if language:
+        form["language"] = language
+    form.update(extra or {})
+    headers = {"Authorization": f"Bearer {cfg.api_key}"} if cfg.api_key else {}
+    async with httpx.AsyncClient(timeout=cfg.timeout) as client:
+        resp = await client.post(
+            cfg.url,
+            headers=headers,
+            data=form,
+            files={"file": (filename, bytes(data), mime)},
+        )
+    resp.raise_for_status()
+    return resp.json()
 
 
 async def _transcribe_via_groq(cl, msg) -> dict:
@@ -644,6 +657,97 @@ async def _transcribe_via_whisper(cl, msg) -> dict:
     if not text:
         return {"status": "error", "error": "empty transcript from whisper"}
     return {"status": "ok", "text": text, "lang": lang or language}
+
+
+def _segments(raw) -> list:
+    """[{start, end, text}] from an engine's segment list, empty texts dropped."""
+    out = []
+    for segment in raw or []:
+        get = segment.get if isinstance(segment, dict) else lambda k: getattr(segment, k, None)
+        text = (get("text") or "").strip()
+        start, end = get("start"), get("end")
+        if not text or start is None or end is None:
+            continue
+        out.append({"start": float(start), "end": float(end), "text": text})
+    return out
+
+
+def _run_whisper_segments(data: bytes, settings: tuple, language: Optional[str]) -> tuple:
+    model = _load_whisper_model(settings)
+    segments, info = model.transcribe(io.BytesIO(data), language=language, vad_filter=True)
+    return _segments(list(segments)), getattr(info, "language", None)
+
+
+# Engines that refuse verbose_json answer with one of these; the plain format still works.
+_FORMAT_REJECTED = {400, 404, 415, 422}
+
+
+async def transcribe_audio(
+    data: bytes, engine: str, filename: str = "audio.flac", mime: str = "audio/flac"
+) -> dict:
+    """Transcribe audio that is not a Telegram message (a video's sound track), with
+    per-segment timestamps when the engine gives them. Nothing is cached.
+
+    Returns {"status": "ok", "text", "lang", "segments": [{"start", "end", "text"}]}
+    (segments may be empty) or {"status": "error", "error"} / a too_large dict. The
+    telegram engine only transcribes messages, so it is refused here.
+    """
+    if engine == "telegram":
+        return {
+            "status": "error",
+            "error": "the telegram engine only transcribes voice messages and video notes",
+        }
+    error = engine_config_error(engine)
+    if error:
+        return {"status": "error", "error": error}
+    language = transcribe_language()
+
+    if engine == "whisper":
+        try:
+            segments, lang = await _whisper_in_thread(
+                _run_whisper_segments, bytes(data), _whisper_settings(), language
+            )
+        except Exception as e:
+            return {"status": "error", "error": f"whisper failed: {e}"}
+        text = " ".join(segment["text"] for segment in segments).strip()
+        if not text:
+            return {"status": "error", "error": "empty transcript from whisper"}
+        return {"status": "ok", "text": text, "lang": lang or language, "segments": segments}
+
+    cfg = http_engine_config(engine)
+    if cfg is None:
+        return {"status": "error", "error": f"Unknown engine '{engine}'"}
+    if cfg.max_bytes is not None and len(data) > cfg.max_bytes:
+        return _too_large(len(data), cfg.max_bytes, cfg)
+    try:
+        try:
+            payload = await _post_audio(
+                cfg,
+                data,
+                filename,
+                mime,
+                "verbose_json",
+                language,
+                {"timestamp_granularities[]": "segment"},
+            )
+        except httpx.HTTPStatusError as e:
+            if (
+                e.response.status_code not in _FORMAT_REJECTED
+                or cfg.response_format == "verbose_json"
+            ):
+                raise
+            payload = await _post_audio(cfg, data, filename, mime, cfg.response_format, language)
+    except Exception as e:
+        return {"status": "error", "error": f"{cfg.engine} request failed: {e}"}
+    text = (payload.get("text") or "").strip()
+    if not text:
+        return {"status": "error", "error": f"empty transcript from {cfg.engine}"}
+    return {
+        "status": "ok",
+        "text": text,
+        "lang": payload.get("language") or language,
+        "segments": _segments(payload.get("segments")),
+    }
 
 
 async def transcribe(cl, entity, msg, engine: str) -> dict:
