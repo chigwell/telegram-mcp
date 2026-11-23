@@ -157,11 +157,27 @@ def _qr_login(client: TelegramClient) -> None:
     sys.exit(1)
 
 
+_CODE_DELIVERY_HINTS = {
+    "SentCodeTypeApp": "inside the Telegram app (chat with 'Telegram')",
+    "SentCodeTypeSms": "by SMS",
+    "SentCodeTypeCall": "by phone call",
+    "SentCodeTypeFlashCall": "by flash call",
+    "SentCodeTypeMissedCall": "by missed call",
+    "SentCodeTypeEmailCode": "by email",
+    "SentCodeTypeFragmentSms": "by SMS (Fragment)",
+}
+
+
+def _code_delivery_hint(sent) -> str:
+    name = type(getattr(sent, "type", None)).__name__
+    return _CODE_DELIVERY_HINTS.get(name, "by Telegram")
+
+
 def _phone_login(client: TelegramClient) -> None:
     phone = input("Please enter your phone (or bot token): ")
 
     try:
-        client.send_code_request(phone)
+        sent = client.send_code_request(phone)
     except errors.FloodWaitError as e:
         print(f"\nFlood wait error; you must wait {e.seconds} seconds before trying again.")
         client.disconnect()
@@ -175,12 +191,56 @@ def _phone_login(client: TelegramClient) -> None:
         client.disconnect()
         sys.exit(1)
 
-    code = input("\nPlease enter the code you received: ")
-    try:
-        client.sign_in(phone, code)
-    except errors.SessionPasswordNeededError:
-        pw = getpass.getpass("Two-factor authentication enabled. Please enter your password: ")
-        client.sign_in(password=pw)
+    print(f"\nTelegram sent the login code {_code_delivery_hint(sent)}.")
+    print("Enter only the newest code; older codes stop working after a new request.")
+
+    for _ in range(3):
+        code = input("\nPlease enter the code you received: ").strip()
+        if not code:
+            print("No code entered, nothing was submitted. Try again.")
+            continue
+        try:
+            client.sign_in(phone=phone, code=code, phone_code_hash=sent.phone_code_hash)
+            break
+        except errors.SessionPasswordNeededError:
+            # Telegram accepted the code and is waiting for the cloud password.
+            break
+        except errors.PhoneCodeInvalidError:
+            print("Telegram rejected that code. Check the newest message and try again.")
+        except errors.PhoneCodeExpiredError:
+            print("\nThe code has expired. Run the generator again.")
+            client.disconnect()
+            sys.exit(1)
+    else:
+        print("\nToo many invalid codes. Run the generator again.")
+        client.disconnect()
+        sys.exit(1)
+
+    # get_me() performs a server round-trip, so a session that is still waiting
+    # for 2FA is not mistaken for a completed login.
+    if client.get_me() is not None:
+        return
+
+    print("\n" + "=" * 60)
+    print("2FA REQUIRED: Telegram accepted the code and now needs your")
+    print("cloud password (Settings -> Privacy and Security -> Two-Step Verification).")
+    print("Type it and press Enter. Input is hidden; this is normal.")
+    print("=" * 60)
+    while True:
+        pw = getpass.getpass("2FA password: ")
+        if not pw:
+            print("Password cannot be empty. Try again.")
+            continue
+        try:
+            client.sign_in(password=pw)
+        except errors.PasswordHashInvalidError:
+            print("Password not accepted. Try again.")
+            continue
+        except errors.SessionPasswordNeededError:
+            continue
+        if client.get_me() is not None:
+            return
+        print("Password not accepted. Try again.")
 
 
 def main() -> None:
@@ -242,6 +302,12 @@ def main() -> None:
                 _qr_login(client)
             else:
                 _phone_login(client)
+
+        if client.get_me() is None:
+            print("\nError: Telegram did not authorize the session.")
+            print("No session string was saved. Run the generator again.")
+            client.disconnect()
+            sys.exit(1)
 
         session_string = StringSession.save(client.session)
 
