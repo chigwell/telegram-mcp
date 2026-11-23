@@ -133,35 +133,180 @@ def test_qr_login_retries_2fa_on_invalid_password(monkeypatch):
     assert attempts == ["wrong", "right"]
 
 
-def test_phone_login_uses_hidden_password_prompt_for_2fa(monkeypatch):
-    class _Client:
-        def __init__(self):
-            self.sign_in_calls = []
+class _SentCode:
+    phone_code_hash = "sent-code-hash"
+    type = type("SentCodeTypeApp", (), {})()
 
-        def send_code_request(self, phone):
-            self.phone = phone
 
-        def disconnect(self):
+class _PhoneClient:
+    def __init__(self, *, authorized_after_code=False, code_errors=(), password_errors=()):
+        self.authorized_after_code = authorized_after_code
+        self.code_errors = list(code_errors)
+        self.password_errors = list(password_errors)
+        self.phone = None
+        self.code_calls = []
+        self.passwords = []
+        self.disconnected = False
+        self._authorized = False
+
+    def send_code_request(self, phone):
+        self.phone = phone
+        return _SentCode()
+
+    def sign_in(self, *args, **kwargs):
+        if "code" in kwargs:
+            self.code_calls.append(kwargs)
+            if self.code_errors:
+                raise self.code_errors.pop(0)
+            self._authorized = self.authorized_after_code
             return None
 
-        def sign_in(self, *args, **kwargs):
-            if kwargs.get("password") is not None:
-                self.sign_in_calls.append(kwargs["password"])
-                return None
-            raise session_string_generator.errors.SessionPasswordNeededError(request=None)
+        password = kwargs["password"]
+        self.passwords.append(password)
+        if self.password_errors:
+            raise self.password_errors.pop(0)
+        self._authorized = True
+        return None
 
-    client = _Client()
-    prompted = []
-    entered = iter(["+10000000000", "12345"])
+    def get_me(self):
+        return object() if self._authorized else None
 
+    def disconnect(self):
+        self.disconnected = True
+
+
+def _patch_phone_input(monkeypatch, code="12345"):
+    entered = iter(["+10000000000", code])
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(entered))
+
+
+def test_code_delivery_hint_tells_user_to_check_telegram_app():
+    assert "Telegram app" in session_string_generator._code_delivery_hint(_SentCode())
+
+
+def test_phone_login_uses_returned_code_hash_and_skips_2fa_when_authorized(monkeypatch):
+    client = _PhoneClient(authorized_after_code=True)
+    prompted = []
+
+    _patch_phone_input(monkeypatch)
     monkeypatch.setattr("getpass.getpass", lambda prompt: prompted.append(prompt) or "secret")
 
     session_string_generator._phone_login(client)
 
     assert client.phone == "+10000000000"
-    assert prompted == ["Two-factor authentication enabled. Please enter your password: "]
-    assert client.sign_in_calls == ["secret"]
+    assert client.code_calls == [
+        {
+            "phone": "+10000000000",
+            "code": "12345",
+            "phone_code_hash": "sent-code-hash",
+        }
+    ]
+    assert prompted == []
+    assert client.passwords == []
+
+
+def test_phone_login_prompts_2fa_when_code_did_not_authorize_session(monkeypatch):
+    # Telethon may return without raising even though Telegram is still
+    # waiting for the cloud password; the server round-trip must catch that.
+    client = _PhoneClient(authorized_after_code=False)
+    prompted = []
+
+    _patch_phone_input(monkeypatch)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: prompted.append(prompt) or "secret")
+
+    session_string_generator._phone_login(client)
+
+    assert prompted == ["2FA password: "]
+    assert client.passwords == ["secret"]
+
+
+def test_phone_login_prompts_2fa_when_sign_in_raises_password_needed(monkeypatch):
+    client = _PhoneClient(
+        code_errors=[session_string_generator.errors.SessionPasswordNeededError(request=None)]
+    )
+    prompted = []
+
+    _patch_phone_input(monkeypatch)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: prompted.append(prompt) or "secret")
+
+    session_string_generator._phone_login(client)
+
+    assert prompted == ["2FA password: "]
+    assert client.passwords == ["secret"]
+
+
+def test_phone_login_does_not_resubmit_an_empty_code(monkeypatch, capsys):
+    client = _PhoneClient(authorized_after_code=True)
+    entered = iter(["+10000000000", "", "12345"])
+
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(entered))
+
+    session_string_generator._phone_login(client)
+
+    assert [call["code"] for call in client.code_calls] == ["12345"]
+    assert "nothing was submitted" in capsys.readouterr().out
+
+
+def test_phone_login_retries_a_rejected_code(monkeypatch, capsys):
+    client = _PhoneClient(
+        authorized_after_code=True,
+        code_errors=[session_string_generator.errors.PhoneCodeInvalidError(request=None)],
+    )
+    entered = iter(["+10000000000", "00000", "12345"])
+
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(entered))
+
+    session_string_generator._phone_login(client)
+
+    assert [call["code"] for call in client.code_calls] == ["00000", "12345"]
+    assert "Telegram rejected that code" in capsys.readouterr().out
+
+
+def test_phone_login_retries_invalid_2fa_password(monkeypatch):
+    client = _PhoneClient(
+        password_errors=[session_string_generator.errors.PasswordHashInvalidError(request=None)]
+    )
+    entered = iter(["+10000000000", "12345"])
+    passwords = iter(["wrong", "right"])
+
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(entered))
+    monkeypatch.setattr("getpass.getpass", lambda prompt: next(passwords))
+
+    session_string_generator._phone_login(client)
+
+    assert client.passwords == ["wrong", "right"]
+
+
+def test_phone_login_exits_cleanly_when_code_expired(monkeypatch):
+    client = _PhoneClient(
+        code_errors=[session_string_generator.errors.PhoneCodeExpiredError(request=None)]
+    )
+
+    _patch_phone_input(monkeypatch)
+
+    with pytest.raises(SystemExit):
+        session_string_generator._phone_login(client)
+
+    assert client.disconnected is True
+
+
+def test_phone_login_gives_up_after_three_invalid_codes(monkeypatch):
+    client = _PhoneClient(
+        code_errors=[
+            session_string_generator.errors.PhoneCodeInvalidError(request=None),
+            session_string_generator.errors.PhoneCodeInvalidError(request=None),
+            session_string_generator.errors.PhoneCodeInvalidError(request=None),
+        ]
+    )
+    entered = iter(["+10000000000", "00000", "00001", "00002"])
+
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(entered))
+
+    with pytest.raises(SystemExit):
+        session_string_generator._phone_login(client)
+
+    assert client.disconnected is True
+    assert [call["code"] for call in client.code_calls] == ["00000", "00001", "00002"]
 
 
 def _bytes_stdout(encoding):
@@ -255,6 +400,9 @@ class _AuthorizedClient:
     def is_user_authorized(self):
         return True
 
+    def get_me(self):
+        return object()
+
     def disconnect(self):
         self.disconnected = True
 
@@ -266,6 +414,35 @@ class _FakeStringSession:
     @staticmethod
     def save(session):
         return "NEWSESSION"
+
+
+class _UnauthorizedClient(_AuthorizedClient):
+    def is_user_authorized(self):
+        return False
+
+    def get_me(self):
+        return None
+
+
+def test_main_refuses_to_save_session_when_login_did_not_authorize(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["session_string_generator.py", "--qr"])
+    monkeypatch.setenv("TELEGRAM_API_ID", "1")
+    monkeypatch.setenv("TELEGRAM_API_HASH", "hash")
+    monkeypatch.setattr(session_string_generator, "_harden_stdio", lambda: None)
+    monkeypatch.setattr(session_string_generator, "_check_installation", lambda: None)
+    monkeypatch.setattr(session_string_generator, "client_identity_kwargs", dict)
+    monkeypatch.setattr(session_string_generator, "TelegramClient", _UnauthorizedClient)
+    monkeypatch.setattr(session_string_generator, "StringSession", _FakeStringSession)
+    monkeypatch.setattr(session_string_generator, "_qr_login", lambda client: None)
+    answers = iter(["", "n"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    with pytest.raises(SystemExit):
+        session_string_generator.main()
+
+    out = capsys.readouterr().out
+    assert "Telegram did not authorize the session" in out
+    assert "NEWSESSION" not in out
 
 
 def test_env_update_keeps_utf8_file_under_windows_locale(monkeypatch, tmp_path):
