@@ -212,8 +212,10 @@ def patch_fastmcp_streamable_http() -> None:
         original_streamable_http_app = FastMCP.streamable_http_app
 
         def wrapped_streamable_http_app(self: Any, *args: Any, **kwargs: Any) -> Any:
+            from telegram_mcp.transport.event_http import with_events
+
             app = original_streamable_http_app(self, *args, **kwargs)
-            return ProtocolNegotiationMiddleware(app, self)
+            return ProtocolNegotiationMiddleware(with_events(app, self), self)
 
         FastMCP.streamable_http_app = wrapped_streamable_http_app  # type: ignore[assignment]
         FastMCP._protocol_negotiation_patched = True  # type: ignore[attr-defined]

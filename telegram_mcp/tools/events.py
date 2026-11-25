@@ -463,7 +463,12 @@ def _public_event(rec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _select_events(
-    after_seq: int, target: Optional[int], account: Optional[str], limit: int
+    after_seq: int,
+    target: Optional[int],
+    account: Optional[str],
+    limit: int,
+    *,
+    public: bool = True,
 ) -> Tuple[list, bool]:
     """Events after `after_seq` for the target chat; and whether some were lost
     to the ring's bound (the caller then has to reconcile from history)."""
@@ -482,7 +487,7 @@ def _select_events(
             rec["chat_id"], rec.get("_chat")
         ):
             continue
-        picked.append(_public_event(rec))
+        picked.append(_public_event(rec) if public else rec)
         if len(picked) >= limit:
             break
     return picked, gap
