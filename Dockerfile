@@ -49,6 +49,9 @@ COPY --from=builder /install /usr/local
 COPY main.py sanitize.py ./
 COPY telegram_mcp ./telegram_mcp
 
+# ffmpeg/ffprobe for view_video (frames and the sound track of videos)
+RUN apk add --no-cache ffmpeg
+
 # Create non-root user and setup directories
 RUN adduser --disabled-password --gecos "" appuser && \
     mkdir -p /app/data/transcripts && \

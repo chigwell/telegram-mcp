@@ -124,7 +124,7 @@ Without a state file the count lives in memory and restarts from zero with the s
 When a reference is unknown, resembles one contact, matches several, or points at a contact that no longer resolves, tools send nothing and return a structured instruction telling the agent exactly what to ask you, to save the answer with `set_contact_alias`, and to retry once. `list_contact_aliases` shows one row per person with all their aliases (use it to spot a wrong memory), `delete_contact_alias` forgets one, and repointing an alias at someone else requires `replace=True`. The save path itself refuses a target it would have to guess at: contacts are saved by @username, phone, numeric ID, or an alias already confirmed for them.
 
 Aliases live in `${XDG_STATE_HOME:-~/.local/state}/telegram-mcp/aliases.json` (owner-only, written atomically); `TELEGRAM_ALIASES_FILE` overrides the path, and a pre-existing `aliases.json` next to the code is still read as a fallback.
-- **Media:** send files, download media, upload files, send voice notes, stickers, GIFs, inspect message media, and transcribe voice messages/video notes (see below).
+- **Media:** send files, download media, upload files, send voice notes, stickers, GIFs, inspect message media, transcribe voice messages/video notes, and look at videos (see below).
 
 ### Voice transcription
 
@@ -146,6 +146,22 @@ The engine is chosen per call via the `engine` argument, or otherwise defaults t
 - `auto`: `get_history`, `get_messages`, `list_messages`, and `search_messages` also prefetch missing transcripts, bounded per call by `TELEGRAM_TRANSCRIBE_MAX_VOICES`/`TELEGRAM_TRANSCRIBE_MAX_SECONDS` (Groq isn't free, so this prefetch is budgeted rather than unbounded).
 
 The cache lives in `TELEGRAM_TRANSCRIPT_CACHE_DIR` (default `data/transcripts` in the working directory, or `~/.cache/telegram-mcp/transcripts` when that is not writable), written as a 700 directory / 600 file since it holds personal-chat text in plaintext — see [Docker](#docker) for why this needs its own volume mount in a container.
+
+### Looking at videos
+
+`view_video(chat_id, message_id, start=None, end=None, max_frames=8, transcribe=True)` lets a model that reads images but not video look at a video, video note or animation. It returns still frames as separate images, each labelled with its time, plus the sound transcribed and merged with the frames into one timeline:
+
+```text
+0:21-0:25 This one is the Lenovo board, see the PCIe slots.
+0:24 [frame 4]
+0:26-0:30 They sit next to each other, two cards won't fit here.
+```
+
+- **Frames** are taken where the picture changes (ffmpeg's scene score over a few small frames per second) and, between those, at even spacing, so a screencast or a slide deck shows every new screen and a talking head still gets evenly spread frames. Near-identical frames are dropped. `max_frames` is 1-16; frames are at most 768 px on their long side.
+- **Zoom:** call again with `start`/`end` (seconds) around a part to get denser frames and a transcript of only that part.
+- **Speech** goes to the transcription engine configured for `transcribe_voice` (`TELEGRAM_TRANSCRIBE_ENGINE`), sent as 16 kHz mono FLAC. `groq`, `openai` (when the endpoint answers `verbose_json` with `segments`; otherwise the plain text follows the timeline) and `whisper` give timestamps. `telegram` transcribes only whole video notes, without timestamps. `TELEGRAM_TRANSCRIBE=off` or `transcribe=false` skips speech. Video transcripts are not cached.
+- **Time limit:** the tool works within `TELEGRAM_TOOL_TIMEOUT_SECONDS`. Frames are taken while the speech is transcribed; if the transcript is not ready in time, the frames come back with a note to ask for a shorter part. Raise the timeout for long videos with a slow local engine.
+- **Requirements:** `ffmpeg` and `ffprobe` on the server's `PATH` (included in the Docker image). Videos above `TELEGRAM_VIDEO_MAX_MB` (default 200) are refused before download; the file is downloaded to a temporary directory and removed after the call. One video is processed at a time.
 - **Profile and privacy:** get your own account info, update profile fields, set or delete profile photos, inspect privacy settings, get user info/photos/status, and manage bot commands.
 - **Folders and drafts:** list, create, update, reorder, and delete Telegram folders; preview a shared folder invite (`t.me/addlist/...`) without joining it; save, list, and clear drafts.
   - `get_folder_limits` reports current Premium-aware folder, explicit-chat and pin limits from Telegram app config; unavailable limits are `null`.
