@@ -38,7 +38,8 @@ Issue: https://github.com/chigwell/telegram-mcp/issues/418
 ## Status
 
 - Branch created: `codex/mcp-events-webhooks`.
-- Implementation and automated validation complete; live incoming-message acceptance pending.
+- Implementation, automated validation and live incoming-message delivery check complete.
+- Draft PR: https://github.com/chigwell/telegram-mcp/pull/421
 
 ## Implementation and automated validation
 
@@ -62,7 +63,14 @@ Issue: https://github.com/chigwell/telegram-mcp/issues/418
   A test-only transport routes the validated test address to loopback; production code has
   no localhost bypass.
 - A second connection using the same Telegram login did not produce an event on the receiver.
-  A user-originated message is needed for the remaining real delivery check.
+  The first manual attempt also exposed a harness mistake: a one-minute subscription expired
+  during an eight-minute wait. The harness was corrected to grant ten minutes.
+- A user joined the replacement temporary group from a second account and sent a message.
+  The test confirmed a real non-service incoming event, signed HTTPS delivery, ordinary MCP
+  tools working during the subscription, and successful unsubscribe.
+- Both temporary groups were deleted after success. The normal service was restored and its
+  authenticated `get_me` call passed. The participant disappearing from the test group was
+  the expected consequence of this automatic cleanup.
 - Direct ChatGPT Work acceptance has not been tested. Its connection UI cannot supply a
   custom static bearer token. Deployment requires a single-owner OAuth gateway which
   authenticates the user and injects the backend token; this PR does not deploy that gateway.
