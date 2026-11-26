@@ -6,6 +6,7 @@ import os
 import stat
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -203,8 +204,10 @@ def test_feed_file_created_owner_only():
 
 def test_feed_opens_on_windows_without_fchmod(monkeypatch):
     # Before Python 3.13 Windows has no os.fchmod, and fstat reports 0666 for every file.
-    monkeypatch.setattr(events.os, "name", "nt")
-    monkeypatch.delattr(events.os, "fchmod", raising=False)
+    windows_os = SimpleNamespace(**vars(os))
+    windows_os.name = "nt"
+    del windows_os.fchmod
+    monkeypatch.setattr(events, "os", windows_os)
 
     events._touch_feed_file()
 

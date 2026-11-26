@@ -246,13 +246,14 @@ Every new message of a private chat, basic group or supergroup gets one numbered
 
 The debounce tools above keep their private-only behaviour.
 
-**MCP Events webhooks.** HTTP clients can subscribe to
-`telegram.message.created` with `events/subscribe`. Subscriptions select one chat,
-or explicitly opt into all allowed chats of one account. Outgoing messages are
-excluded by default. Subscriptions expire, can be refreshed or stopped, and
-survive restarts; message replay is not supported. Event support is available
-without an extra enable flag or client password. See [MCP Events setup and
-protocol details](docs/mcp-events.md).
+**MCP Events.** Clients can receive `telegram.message.created` through
+`events/stream` on stdio, Streamable HTTP and legacy SSE. Streamable HTTP also
+supports webhook subscriptions through `events/subscribe`. Subscriptions select
+one chat, or explicitly all allowed chats of an account. Outgoing messages are
+excluded by default. Events use existing configured access without another
+password or enable flag. Streams have independent lifetimes; webhook subscriptions
+expire, can be refreshed or stopped, and survive restarts. Neither mode supports
+protocol replay. See [delivery modes, setup and client limitations](docs/mcp-events.md).
 
 **Updates missed while offline.** After a reconnect the server asks Telegram for the updates it missed (`catch_up`), so messages received during a network outage still reach the incoming feed and the event log. Telethon's own automatic reconnect does not do this, and it fetches a difference by itself only after 15 minutes without updates. On a flaky network set `TELEGRAM_CATCH_UP_INTERVAL` (seconds, e.g. `120`, at least `30`; default `0`, off) to ask for missed updates periodically; when nothing was missed the request returns an empty difference.
 

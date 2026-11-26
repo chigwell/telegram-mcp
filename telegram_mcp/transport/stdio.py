@@ -13,4 +13,7 @@ logger = logging.getLogger(__name__)
 async def run_stdio_async(mcp_instance: Any) -> None:
     """Run FastMCP over standard I/O with MCP 2026-07-28 protocol compatibility."""
     install_protocol_compatibility()
+    from telegram_mcp.event_protocol import install_events
+
+    install_events(mcp_instance)
     await mcp_instance.run_stdio_async()

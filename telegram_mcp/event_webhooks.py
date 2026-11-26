@@ -129,14 +129,14 @@ async def post_webhook(url, subscription_id, event_id, body, signing_secrets):
                 await response.aclose()
 
 
-def event_definition():
+def event_definition(delivery=("push",)):
     return {
         "name": EVENT_NAME,
         "description": (
             "New message metadata in a selected Telegram chat, "
             "or explicitly all chats of one account."
         ),
-        "delivery": ["webhook"],
+        "delivery": list(delivery),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -208,6 +208,96 @@ class SubscriptionStore:
             temporary.unlink(missing_ok=True)
 
 
+async def normalize_arguments(arguments, *, resolve=True):
+    from telegram_mcp import runtime as rt
+    from telegram_mcp.account_labels import canonical_account_label
+
+    if not isinstance(arguments, dict) or set(arguments) - {
+        "account",
+        "chat_id",
+        "all_chats",
+        "include_outgoing",
+    }:
+        raise EventError("Invalid event arguments.")
+    args = dict(arguments)
+    if any(type(args.get(key, False)) is not bool for key in ("all_chats", "include_outgoing")):
+        raise EventError("all_chats and include_outgoing must be booleans.")
+    account = args.get("account")
+    if resolve and account is None and len(rt.clients) == 1:
+        account = next(iter(rt.clients))
+    if account is not None and not isinstance(account, str):
+        raise EventError("account must be a label.")
+    args["account"] = canonical_account_label(account) if account is not None else None
+    if resolve and args["account"] not in rt.clients:
+        raise EventError("Select a configured account label.")
+    args.setdefault("all_chats", False)
+    args.setdefault("include_outgoing", False)
+    if args["all_chats"]:
+        if "chat_id" in args:
+            raise EventError("Choose chat_id or all_chats, not both.")
+    else:
+        chat_id = args.get("chat_id")
+        if (
+            isinstance(chat_id, bool)
+            or not isinstance(chat_id, (int, str))
+            or not str(chat_id).strip()
+        ):
+            raise EventError("Select chat_id, or explicitly set all_chats=true.")
+        if not resolve:
+            return args
+        args["chat_id"] = await _resolve_chat(chat_id, args["account"])
+    return args
+
+
+async def _resolve_chat(chat_id, account):
+    from telegram_mcp import runtime as rt
+    from telegram_mcp.tools import events
+
+    entity = await rt.resolve_entity(rt.apply_alias(chat_id), rt.get_client(account))
+    if not rt.is_chat_allowed(chat_id, entity):
+        raise EventError("Chat access denied.", -32001)
+    if events._chat_kind(entity) is None:
+        raise EventError("Only private chats, groups and supergroups are supported.")
+    return rt.get_marked_id(entity)
+
+
+def event_allowed(args, record):
+    from telegram_mcp import runtime as rt
+
+    if args["account"] not in rt.clients:
+        return False
+    if record.get("account") != args["account"]:
+        return False
+    if not args["all_chats"] and record["chat_id"] != args["chat_id"]:
+        return False
+    if record.get("out") and not args["include_outgoing"]:
+        return False
+    chat = record.get("_chat")
+    if chat is None and any(isinstance(x, str) for x in rt.get_blocked_chat_ids()):
+        return False
+    if not rt.is_chat_allowed(record["chat_id"], chat):
+        return False
+    topics = rt.get_allowed_topics(record["chat_id"], chat)
+    return topics is None or record.get("topic") in topics
+
+
+def message_event(record):
+    stamp = record.get("date") or utc_timestamp(time.time())
+    identity = f"{record['account']}:{record['chat_id']}:{record['message_id']}"
+    return {
+        "eventId": "evt_" + hashlib.sha256(identity.encode()).hexdigest(),
+        "name": EVENT_NAME,
+        "timestamp": stamp,
+        "data": {
+            "account": record["account"],
+            "chat_id": record["chat_id"],
+            "message_id": record["message_id"],
+            "timestamp": stamp,
+        },
+        "cursor": None,
+    }
+
+
 class MessageSubscriptions:
     def __init__(self, path):
         self.store = SubscriptionStore(path)
@@ -253,59 +343,6 @@ class MessageSubscriptions:
             old.cancel()
         self.tasks[sub_id] = asyncio.create_task(self._worker(sub_id, events._event_seq))
 
-    async def arguments(self, arguments, *, resolve=True):
-        from telegram_mcp import runtime as rt
-        from telegram_mcp.account_labels import canonical_account_label
-
-        if not isinstance(arguments, dict) or set(arguments) - {
-            "account",
-            "chat_id",
-            "all_chats",
-            "include_outgoing",
-        }:
-            raise EventError("Invalid event arguments.")
-        args = dict(arguments)
-        if any(
-            type(args.get(key, False)) is not bool for key in ("all_chats", "include_outgoing")
-        ):
-            raise EventError("all_chats and include_outgoing must be booleans.")
-        account = args.get("account")
-        if resolve and account is None and len(rt.clients) == 1:
-            account = next(iter(rt.clients))
-        if account is not None and not isinstance(account, str):
-            raise EventError("account must be a label.")
-        args["account"] = canonical_account_label(account) if account is not None else None
-        if resolve and args["account"] not in rt.clients:
-            raise EventError("Select a configured account label.")
-        args.setdefault("all_chats", False)
-        args.setdefault("include_outgoing", False)
-        if args["all_chats"]:
-            if "chat_id" in args:
-                raise EventError("Choose chat_id or all_chats, not both.")
-        else:
-            chat_id = args.get("chat_id")
-            if (
-                isinstance(chat_id, bool)
-                or not isinstance(chat_id, (int, str))
-                or not str(chat_id).strip()
-            ):
-                raise EventError("Select chat_id, or explicitly set all_chats=true.")
-            if not resolve:
-                return args
-            args["chat_id"] = await self._resolve_chat(chat_id, args["account"])
-        return args
-
-    async def _resolve_chat(self, chat_id, account):
-        from telegram_mcp import runtime as rt
-        from telegram_mcp.tools import events
-
-        entity = await rt.resolve_entity(rt.apply_alias(chat_id), rt.get_client(account))
-        if not rt.is_chat_allowed(chat_id, entity):
-            raise EventError("Chat access denied.", -32001)
-        if events._chat_kind(entity) is None:
-            raise EventError("Only private chats, groups and supergroups are supported.")
-        return rt.get_marked_id(entity)
-
     async def identity(self, params, subscribe):
         if not isinstance(params, dict) or set(params) - {
             "name",
@@ -313,11 +350,12 @@ class MessageSubscriptions:
             "delivery",
             "cursor",
             "ttlMs",
+            "maxAgeMs",
         }:
             raise EventError("Invalid subscription parameters.")
         if params.get("name") != EVENT_NAME:
             raise EventError("Unknown event name.")
-        args = await self.arguments(params.get("arguments", {}), resolve=False)
+        args = await normalize_arguments(params.get("arguments", {}), resolve=False)
         delivery = params.get("delivery")
         allowed = {"mode", "url", "secret"} if subscribe else {"mode", "url"}
         if (
@@ -349,6 +387,9 @@ class MessageSubscriptions:
         secret_key(delivery.get("secret"))
         if params.get("cursor") is not None:
             raise EventError("This event does not support replay; cursor must be null.")
+        max_age = params.get("maxAgeMs")
+        if max_age is not None and (type(max_age) is not int or max_age < 0):
+            raise EventError("maxAgeMs must be a non-negative integer.")
         ttl = params.get("ttlMs", DEFAULT_TTL_MS)
         if ttl is None:
             ttl = MAX_TTL_MS  # Grant a finite lifetime; the client can refresh it.
@@ -358,7 +399,7 @@ class MessageSubscriptions:
         async with self.lock:
             self._prune_expired()
             old = self.store.rows.get(sub_id)
-            bound_args = await self.arguments(old["arguments"] if old else args)
+            bound_args = await normalize_arguments(old["arguments"] if old else args)
             if sub_id not in self.store.rows and len(self.store.rows) >= MAX_SUBSCRIPTIONS:
                 raise EventError("Subscription limit reached.", -32000)
             cache_key = (delivery["url"], delivery["secret"])
@@ -447,25 +488,9 @@ class MessageSubscriptions:
                 await asyncio.gather(task, return_exceptions=True)
         return {}
 
-    def allowed(self, row, record):
-        from telegram_mcp import runtime as rt
-
-        args = row["arguments"]
-        if row["expires"] <= time.time() or args["account"] not in rt.clients:
-            return False
-        if record.get("account") != args["account"]:
-            return False
-        if not args["all_chats"] and record["chat_id"] != args["chat_id"]:
-            return False
-        if record.get("out") and not args["include_outgoing"]:
-            return False
-        chat = record.get("_chat")
-        if chat is None and any(isinstance(x, str) for x in rt.get_blocked_chat_ids()):
-            return False
-        if not rt.is_chat_allowed(record["chat_id"], chat):
-            return False
-        topics = rt.get_allowed_topics(record["chat_id"], chat)
-        return topics is None or record.get("topic") in topics
+    @staticmethod
+    def allowed(row, record):
+        return row["expires"] > time.time() and event_allowed(row["arguments"], record)
 
     async def _worker(self, sub_id, after_seq):
         try:
@@ -511,30 +536,9 @@ class MessageSubscriptions:
         return signing_secrets
 
     async def _deliver(self, sub_id, record):
-        stamp = record.get("date") or utc_timestamp(time.time())
-        event_id = (
-            "evt_"
-            + hashlib.sha256(
-                f"{sub_id}:{record['account']}:{record['chat_id']}:{record['message_id']}".encode()
-            ).hexdigest()
-        )
-        data = {
-            "account": record["account"],
-            "chat_id": record["chat_id"],
-            "message_id": record["message_id"],
-            "timestamp": stamp,
-        }
-        body = json.dumps(
-            {
-                "eventId": event_id,
-                "name": EVENT_NAME,
-                "timestamp": stamp,
-                "data": data,
-                "cursor": None,
-            },
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode()
+        event = message_event(record)
+        event_id = event["eventId"]
+        body = json.dumps(event, separators=(",", ":"), ensure_ascii=False).encode()
         for attempt in range(4):
             row = self.store.rows.get(sub_id)
             if row is None or not self.allowed(row, record):

@@ -194,6 +194,10 @@ install_protocol_compatibility()
 # with "No valid session ID provided". Stdio transport remains unaffected.
 mcp = FastMCP("telegram", stateless_http=True)
 
+from telegram_mcp.event_protocol import install_events
+
+install_events(mcp)
+
 # Annotate all tool results with audience=["user"] so MCP clients know
 # the content is user-generated data, not instructions for the model.
 # We wrap the low-level request handler (after FastMCP registers it) to inject

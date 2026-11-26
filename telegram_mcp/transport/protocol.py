@@ -177,13 +177,22 @@ def _install_silent_request_cancel() -> None:
     if int(version("mcp").split(".")[0]) >= 2:
         return
 
+    from mcp.server.lowlevel.server import Server
+
+    original_handle_request = Server._handle_request
+
+    async def handle_request(self, message, *args, **kwargs):
+        # Queued cancellation completes the responder before dispatch enters its scope.
+        if message._completed:
+            return
+        await original_handle_request(self, message, *args, **kwargs)
+
     async def cancel(self) -> None:
-        if not self._entered:
-            raise RuntimeError("RequestResponder must be used as a context manager")
         if not self._cancel_scope:
             raise RuntimeError("No active cancel scope")
 
         self._cancel_scope.cancel()
         self._completed = True
 
+    Server._handle_request = handle_request
     RequestResponder.cancel = cancel
