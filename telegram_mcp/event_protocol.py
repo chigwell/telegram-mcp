@@ -119,7 +119,7 @@ class EventProtocol:
         if events._EVENT_LOG_SIZE == 0:
             return {"events": []}
         delivery = ["push"]
-        if self.webhooks is not None and self.webhooks.running:
+        if self.webhooks is not None:
             delivery.append("webhook")
         return {"events": [event_definition(delivery)]}
 
@@ -150,14 +150,18 @@ class EventProtocol:
                 if method == "events/stream":
                     result = await self.stream(params)
                 else:
-                    if self.webhooks is None or not self.webhooks.running:
+                    webhooks = self.webhooks
+                    if webhooks is None:
                         raise EventError(
                             "Webhook delivery is unavailable on this transport.", -32000
                         )
+                    async with webhooks.lock:
+                        if not webhooks.running:
+                            await webhooks.start()
                     operation = (
-                        self.webhooks.subscribe
+                        webhooks.subscribe
                         if method == "events/subscribe"
-                        else self.webhooks.unsubscribe
+                        else webhooks.unsubscribe
                     )
                     result = await operation(params)
             return EventResult(**result)

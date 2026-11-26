@@ -21,7 +21,8 @@ def with_events(app, server):
     @asynccontextmanager
     async def lifespan(app):
         try:
-            await subscriptions.start()
+            if subscriptions.store.path.exists():
+                await subscriptions.start()
             async with original_lifespan(app) as context:
                 yield context
         finally:

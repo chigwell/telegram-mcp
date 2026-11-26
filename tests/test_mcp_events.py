@@ -525,6 +525,7 @@ async def test_http_refuses_unstarted_subscription_service(monkeypatch, tmp_path
 @pytest.mark.asyncio
 async def test_lifespan_startup_failure_is_explicit(monkeypatch, tmp_path):
     app = enabled_app(monkeypatch, tmp_path)
+    (tmp_path / "subscriptions.json").write_text("{}")
     monkeypatch.setattr(
         app.app.state.telegram_webhooks, "start", AsyncMock(side_effect=OSError("locked"))
     )
@@ -575,7 +576,7 @@ async def test_max_age_does_not_change_non_replay_subscription(manager, receiver
         await manager.subscribe(p)
 
 
-def test_webhooks_belong_to_the_current_http_application(monkeypatch, tmp_path):
+def test_webhooks_belong_to_the_current_http_application(monkeypatch, tmp_path, receiver):
     from telegram_mcp.event_protocol import install_events
     from telegram_mcp.transport.stdio import run_stdio_async
 
@@ -593,6 +594,14 @@ def test_webhooks_belong_to_the_current_http_application(monkeypatch, tmp_path):
             json={"jsonrpc": "2.0", "id": 1, "method": "events/list"},
         )
         assert response_json(response)["result"]["events"][0]["delivery"] == ["push", "webhook"]
+        assert not first.app.state.telegram_webhooks.running
+        assert not (tmp_path / "one.json").exists()
+        subscribed = client.post(
+            "/mcp",
+            headers={"Accept": "application/json, text/event-stream"},
+            json={"jsonrpc": "2.0", "id": 2, "method": "events/subscribe", "params": params()},
+        )
+        assert "result" in response_json(subscribed)
         assert first.app.state.telegram_webhooks.running
         assert not second.app.state.telegram_webhooks.running
     assert install_events(server).catalog()["events"][0]["delivery"] == ["push"]
@@ -614,3 +623,27 @@ def test_disabled_log_keeps_http_tools_working(monkeypatch, tmp_path):
         )
         assert "pong" in tool.text
     assert not (tmp_path / "subscriptions.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_failed_start_releases_store_and_workers(manager, receiver, monkeypatch):
+    await manager.subscribe(params())
+    save = hooks.SubscriptionStore.save
+    failed = False
+
+    def fail_once(store):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("write failed")
+        save(store)
+
+    monkeypatch.setattr(hooks.SubscriptionStore, "save", fail_once)
+    with pytest.raises(OSError, match="write failed"):
+        await manager.start()
+    assert not manager.running
+    assert not manager.tasks
+    assert manager.store_lock is None
+    replacement = hooks.MessageSubscriptions(manager.store.path)
+    await replacement.start()
+    await replacement.close()

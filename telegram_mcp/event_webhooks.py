@@ -310,19 +310,23 @@ class MessageSubscriptions:
     async def start(self):
         from telegram_mcp.singleton import SessionLock
 
-        self.store_lock = SessionLock(
-            "MCP Events", str(self.store.path.resolve()), lock_dir=self.store.path.parent
-        )
-        self.store_lock.acquire(grace_seconds=0)
-        # Reload only after taking the lock; another process may have saved since construction.
-        self.store = SubscriptionStore(self.store.path)
-        self.running = True
-        for sub_id, row in list(self.store.rows.items()):
-            if row["expires"] > time.time():
-                self._start_worker(sub_id)
-            else:
-                del self.store.rows[sub_id]
-        self.store.save()
+        try:
+            self.store_lock = SessionLock(
+                "MCP Events", str(self.store.path.resolve()), lock_dir=self.store.path.parent
+            )
+            self.store_lock.acquire(grace_seconds=0)
+            # Reload only after taking the lock; another process may have saved since construction.
+            self.store = SubscriptionStore(self.store.path)
+            self.running = True
+            for sub_id, row in list(self.store.rows.items()):
+                if row["expires"] > time.time():
+                    self._start_worker(sub_id)
+                else:
+                    del self.store.rows[sub_id]
+            self.store.save()
+        except Exception:
+            await self.close()
+            raise
 
     async def close(self):
         self.running = False
