@@ -37,3 +37,9 @@ def _reset_floodgate():
         runtime._floodgate_gate.reset()
     if runtime._floodgate_breaker is not None:
         runtime._floodgate_breaker.reset()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_event_subscriptions(tmp_path, monkeypatch):
+    """Never load or write the developer's real webhook subscription state."""
+    monkeypatch.setenv("TELEGRAM_MCP_EVENTS_FILE", str(tmp_path / "subscriptions.json"))

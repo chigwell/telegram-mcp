@@ -5,39 +5,16 @@ endpoint. They reuse the bounded per-message event log behind `wait_for_events`.
 Existing polling tools, stdio clients and the settled-message JSONL feed keep
 their existing behavior.
 
-## Enable
+## Availability
 
-Set these variables in the server environment:
+Event support is available automatically on the HTTP transport. Clients must
+explicitly subscribe before receiving anything. Events use the same configured
+access as existing MCP tools. There is no extra client password or login flow.
+`TELEGRAM_EVENT_LOG_SIZE=0` disables the event source without disabling tools.
 
-```sh
-TELEGRAM_MCP_EVENTS=true
-TELEGRAM_MCP_HTTP_TOKEN=<a-random-token-with-at-least-32-characters>
-# Optional; defaults to $XDG_STATE_HOME/telegram-mcp/subscriptions.json,
-# or ~/.local/state/telegram-mcp/subscriptions.json.
-TELEGRAM_MCP_EVENTS_FILE=/private/server-state/subscriptions.json
-```
-
-Generate the HTTP token with `python -c 'import secrets; print(secrets.token_urlsafe(32))'`.
-Keep it outside Git. The feature refuses to start without a token or with
-`TELEGRAM_EVENT_LOG_SIZE=0`. Use an HTTP transport and HTTPS termination when
-connecting remotely. Enabling this feature requires `Authorization: Bearer <token>`
-on the MCP endpoint for **both tools and events**. Keep normal Host/Origin
-protection configured for the deployment.
-
-ChatGPT's plugin connection UI cannot supply a custom fixed bearer token. Direct
-connections therefore need an OAuth-authenticating gateway: it must verify the
-intended user's OAuth access token, allow only that owner, and inject the backend
-`Authorization: Bearer <token>` header. Restrict backend reachability to the
-gateway so clients cannot bypass it. Ordinary HTTPS termination alone does not
-provide this. Static-token-capable MCP clients can connect directly. This change
-does not implement an OAuth provider or deploy a gateway.
-
-This is a single trusted owner deployment. Possession of the bearer token grants
-the configured tool access to every configured Telegram account, subject to the
-existing tool exposure and chat restrictions. It is not an OAuth provider or a
-multi-user authorization service. Replacing the token invalidates subscriptions
-owned by the old token on restart. Replacing a Telegram session also prevents its
-old subscriptions from resuming.
+Subscriptions default to `$XDG_STATE_HOME/telegram-mcp/subscriptions.json`, or
+`~/.local/state/telegram-mcp/subscriptions.json`. The optional
+`TELEGRAM_MCP_EVENTS_FILE` changes that location for separate deployments.
 
 The subscription file contains callback signing secrets. It is written atomically
 with mode 0600 on POSIX and must reside in a trusted, private state directory.
@@ -131,7 +108,5 @@ Tests cover independent consumers, outgoing and account-wide opt-in, access
 restrictions, expiration, restart, refresh, signing, callback validation and HTTP
 integration. Real Telegram and ChatGPT callback verification require separate
 integration checks; unit tests do not claim either.
-
-Authentication: [OpenAI plugin authentication](https://developers.openai.com/plugins/build/auth).
 
 Reference: [OpenAI MCP Events guide](https://developers.openai.com/plugins/build/mcp-events).

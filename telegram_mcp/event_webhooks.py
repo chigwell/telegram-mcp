@@ -209,8 +209,7 @@ class SubscriptionStore:
 
 
 class MessageSubscriptions:
-    def __init__(self, path, owner=None):
-        self.owner = owner
+    def __init__(self, path):
         self.store = SubscriptionStore(path)
         self.store_lock = None
         self.tasks = {}
@@ -229,12 +228,7 @@ class MessageSubscriptions:
         self.store = SubscriptionStore(self.store.path)
         self.running = True
         for sub_id, row in list(self.store.rows.items()):
-            if (
-                row["expires"] > time.time()
-                and (self.owner is None or row["owner"] == self.owner)
-                and row.get("account_identity")
-                == self.account_identity(row["arguments"]["account"])
-            ):
+            if row["expires"] > time.time():
                 self._start_worker(sub_id)
             else:
                 del self.store.rows[sub_id]
@@ -312,7 +306,7 @@ class MessageSubscriptions:
             raise EventError("Only private chats, groups and supergroups are supported.")
         return rt.get_marked_id(entity)
 
-    async def identity(self, params, owner, subscribe):
+    async def identity(self, params, subscribe):
         if not isinstance(params, dict) or set(params) - {
             "name",
             "arguments",
@@ -334,7 +328,7 @@ class MessageSubscriptions:
             raise EventError("Expected webhook delivery.")
         callback_url(delivery.get("url"))
         identity = json.dumps(
-            [owner, EVENT_NAME, args, delivery["url"]],
+            [EVENT_NAME, args, delivery["url"]],
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -350,8 +344,8 @@ class MessageSubscriptions:
                 if task:
                     task.cancel()
 
-    async def subscribe(self, params, owner):
-        sub_id, args, delivery = await self.identity(params, owner, True)
+    async def subscribe(self, params):
+        sub_id, args, delivery = await self.identity(params, True)
         secret_key(delivery.get("secret"))
         if params.get("cursor") is not None:
             raise EventError("This event does not support replay; cursor must be null.")
@@ -367,15 +361,13 @@ class MessageSubscriptions:
             bound_args = await self.arguments(old["arguments"] if old else args)
             if sub_id not in self.store.rows and len(self.store.rows) >= MAX_SUBSCRIPTIONS:
                 raise EventError("Subscription limit reached.", -32000)
-            cache_key = (owner, delivery["url"], delivery["secret"])
+            cache_key = (delivery["url"], delivery["secret"])
             if cache_key not in self.verified:
                 await self._verify(sub_id, delivery)
                 self.verified[cache_key] = time.time() + 300
             expires = time.time() + min(ttl, MAX_TTL_MS) / 1000
             row = {
-                "owner": owner,
                 "arguments": bound_args,
-                "account_identity": self.account_identity(bound_args["account"]),
                 "url": delivery["url"],
                 "secret": delivery["secret"],
                 "expires": expires,
@@ -439,8 +431,8 @@ class MessageSubscriptions:
         except Exception:
             raise EventError("Callback verification failed.", -32015, "challenge_failed") from None
 
-    async def unsubscribe(self, params, owner):
-        sub_id, _, _ = await self.identity(params, owner, False)
+    async def unsubscribe(self, params):
+        sub_id, _, _ = await self.identity(params, False)
         async with self.lock:
             old = self.store.rows.pop(sub_id, None)
             try:
@@ -455,22 +447,11 @@ class MessageSubscriptions:
                 await asyncio.gather(task, return_exceptions=True)
         return {}
 
-    @staticmethod
-    def account_identity(account):
-        from telegram_mcp import runtime as rt
-
-        client = rt.clients.get(account)
-        session = getattr(client, "session", None)
-        key = getattr(getattr(session, "auth_key", None), "key", None)
-        return hashlib.sha256(key).hexdigest() if key else None
-
     def allowed(self, row, record):
         from telegram_mcp import runtime as rt
 
         args = row["arguments"]
         if row["expires"] <= time.time() or args["account"] not in rt.clients:
-            return False
-        if row.get("account_identity") != self.account_identity(args["account"]):
             return False
         if record.get("account") != args["account"]:
             return False

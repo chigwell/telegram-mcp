@@ -1,13 +1,7 @@
-"""HTTP-only MCP Events extension for the SDK's closed request union.
-
-The extension is disabled by default. Enabling it requires a bearer token and
-protects the same MCP endpoint for both event methods and ordinary tools.
-"""
+"""HTTP event methods using the existing MCP configured-access model."""
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import logging
 import os
@@ -24,13 +18,11 @@ logger = logging.getLogger(__name__)
 
 
 class EventsHTTPMiddleware:
-    def __init__(self, app, server, token, path):
+    def __init__(self, app, server, path):
         self.app = app
         self.server = server
-        self.token = token
-        self.owner = hashlib.sha256(token.encode()).hexdigest()
         self.endpoint = server.settings.streamable_http_path
-        self.subscriptions = MessageSubscriptions(path, owner=self.owner)
+        self.subscriptions = MessageSubscriptions(path)
         self._advertise()
 
     def _advertise(self):
@@ -59,12 +51,6 @@ class EventsHTTPMiddleware:
         rejected = await security.validate_request(request, is_post=request.method == "POST")
         if rejected is not None:
             await rejected(scope, receive, send)
-            return
-        supplied = request.headers.get("authorization", "")
-        if not hmac.compare_digest(supplied.encode(), ("Bearer " + self.token).encode()):
-            await Response(status_code=401, headers={"WWW-Authenticate": "Bearer"})(
-                scope, receive, send
-            )
             return
         if request.method != "POST":
             await self.app(scope, receive, send)
@@ -171,11 +157,11 @@ class EventsHTTPMiddleware:
         elif method == "events/subscribe":
             if not self.subscriptions.running:
                 raise EventError("Event service has not started.", -32000)
-            return await self.subscriptions.subscribe(params, self.owner)
+            return await self.subscriptions.subscribe(params)
         elif method == "events/unsubscribe":
             if not self.subscriptions.running:
                 raise EventError("Event service has not started.", -32000)
-            return await self.subscriptions.unsubscribe(params, self.owner)
+            return await self.subscriptions.unsubscribe(params)
         else:
             # Preserve ordinary SDK discovery when event support is disabled.
             return {
@@ -187,18 +173,10 @@ class EventsHTTPMiddleware:
 
 
 def with_events(app, server):
-    if os.getenv("TELEGRAM_MCP_EVENTS", "").strip().lower() not in ("true", "1", "yes", "on"):
-        return app
-    token = os.getenv("TELEGRAM_MCP_HTTP_TOKEN", "")
-    if len(token) < 32 or not token.isascii() or any(c.isspace() for c in token):
-        raise ValueError(
-            "MCP Events requires TELEGRAM_MCP_HTTP_TOKEN with at least 32 "
-            "non-whitespace ASCII characters."
-        )
     from telegram_mcp.tools import events
 
     if events._EVENT_LOG_SIZE == 0:
-        raise ValueError("MCP Events requires TELEGRAM_EVENT_LOG_SIZE greater than zero.")
+        return app
     state = Path(os.getenv("XDG_STATE_HOME") or Path.home() / ".local" / "state")
     path = os.getenv("TELEGRAM_MCP_EVENTS_FILE") or state / "telegram-mcp" / "subscriptions.json"
-    return EventsHTTPMiddleware(app, server, token, path)
+    return EventsHTTPMiddleware(app, server, path)

@@ -22,12 +22,11 @@ from telegram_mcp.tools import events
 from telegram_mcp.transport.http import create_streamable_http_app
 
 SECRET = "whsec_" + base64.b64encode(b"s" * 32).decode()
-TOKEN = "test-bearer-token-" + "t" * 32
 
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch):
-    for key in ("TELEGRAM_ALLOWED_CHAT_IDS", "TELEGRAM_BLOCKED_CHAT_IDS", "TELEGRAM_MCP_EVENTS"):
+    for key in ("TELEGRAM_ALLOWED_CHAT_IDS", "TELEGRAM_BLOCKED_CHAT_IDS"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(rt, "clients", {"default": object()})
     monkeypatch.setattr(events, "_event_log", deque(maxlen=2000))
@@ -91,8 +90,8 @@ async def eventually(predicate):
 @pytest.mark.asyncio
 async def test_defaults_identity_persistence_rotation_and_unsubscribe(manager, receiver):
     p = params()
-    first = await manager.subscribe(p, "owner")
-    second = await manager.subscribe(params(include_outgoing=False), "owner")
+    first = await manager.subscribe(p)
+    second = await manager.subscribe(params(include_outgoing=False))
     assert first["id"] == second["id"]
     row = manager.store.rows[first["id"]]
     assert not row["arguments"]["include_outgoing"]
@@ -102,13 +101,11 @@ async def test_defaults_identity_persistence_rotation_and_unsubscribe(manager, r
     if os.name != "nt":
         assert manager.store.path.stat().st_mode & 0o777 == 0o600
     p["delivery"]["secret"] = "whsec_" + base64.b64encode(b"n" * 32).decode()
-    assert (await manager.subscribe(p, "owner"))["id"] == first["id"]
+    assert (await manager.subscribe(p))["id"] == first["id"]
     assert manager.store.rows[first["id"]]["previous_secret"] == SECRET
     p["delivery"].pop("secret")
-    await manager.unsubscribe(p, "other-owner")
-    assert first["id"] in manager.store.rows
-    await manager.unsubscribe(p, "owner")
-    await manager.unsubscribe(p, "owner")
+    await manager.unsubscribe(p)
+    await manager.unsubscribe(p)
     assert not manager.store.rows
 
 
@@ -133,7 +130,7 @@ async def test_invalid_scope(manager, args):
 async def test_explicit_account_wide_and_multi_account(manager, receiver, monkeypatch):
     p = params()
     p["arguments"] = {"all_chats": True}
-    result = await manager.subscribe(p, "owner")
+    result = await manager.subscribe(p)
     row = manager.store.rows[result["id"]]
     assert manager.allowed(row, record(chat_id=999))
     assert not manager.allowed(row, record(out=True))
@@ -147,7 +144,7 @@ async def test_explicit_account_wide_and_multi_account(manager, receiver, monkey
 
 @pytest.mark.asyncio
 async def test_rechecks_chat_topic_and_expiration(manager, receiver, monkeypatch):
-    result = await manager.subscribe(params(), "owner")
+    result = await manager.subscribe(params())
     row = manager.store.rows[result["id"]]
     assert manager.allowed(row, record())
     assert not manager.allowed(row, record(chat_id=124))
@@ -165,7 +162,7 @@ async def test_rechecks_chat_topic_and_expiration(manager, receiver, monkeypatch
 async def test_blocked_subscribe_and_bad_callback(manager, receiver, monkeypatch):
     monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "123")
     with pytest.raises(hooks.EventError, match="access denied"):
-        await manager.subscribe(params(), "owner")
+        await manager.subscribe(params())
     monkeypatch.delenv("TELEGRAM_BLOCKED_CHAT_IDS")
 
     async def bad(*args):
@@ -173,7 +170,7 @@ async def test_blocked_subscribe_and_bad_callback(manager, receiver, monkeypatch
 
     monkeypatch.setattr(hooks, "post_webhook", bad)
     with pytest.raises(hooks.EventError) as error:
-        await manager.subscribe(params(), "owner")
+        await manager.subscribe(params())
     assert error.value.code == -32015
     assert not manager.store.rows
 
@@ -182,10 +179,10 @@ async def test_blocked_subscribe_and_bad_callback(manager, receiver, monkeypatch
 async def test_independent_subscribers_and_arrivals_during_delivery(
     manager, receiver, monkeypatch
 ):
-    first = await manager.subscribe(params(), "owner")
+    first = await manager.subscribe(params())
     second_params = params()
     second_params["delivery"]["url"] += "-second"
-    second = await manager.subscribe(second_params, "owner")
+    second = await manager.subscribe(second_params)
     original = hooks.post_webhook
     appended = False
 
@@ -216,7 +213,7 @@ async def test_independent_subscribers_and_arrivals_during_delivery(
 async def test_restart_expiration_and_refresh(manager, receiver):
     p = params()
     p["ttlMs"] = 30
-    result = await manager.subscribe(p, "owner")
+    result = await manager.subscribe(p)
     restored = hooks.MessageSubscriptions(manager.store.path)
     await restored.start()
     try:
@@ -225,7 +222,7 @@ async def test_restart_expiration_and_refresh(manager, receiver):
         await asyncio.sleep(0.02)
         assert not receiver
         p["ttlMs"] = 1000
-        assert (await restored.subscribe(p, "owner"))["id"] == result["id"]
+        assert (await restored.subscribe(p))["id"] == result["id"]
         events._append_event(record(2))
         await eventually(lambda: len(receiver) == 1)
         assert receiver[0][1]["data"]["message_id"] == 2
@@ -238,7 +235,7 @@ async def test_restart_expiration_and_refresh(manager, receiver):
     "status,attempts", [(500, 4), (429, 4), (410, 1), (413, 1), (302, 1), (400, 1)]
 )
 async def test_retry_policy(manager, receiver, monkeypatch, status, attempts):
-    result = await manager.subscribe(params(), "owner")
+    result = await manager.subscribe(params())
     calls = []
 
     async def post(*args):
@@ -318,8 +315,6 @@ async def test_pinned_tls_and_standard_webhooks_signature(monkeypatch):
 
 
 def enabled_app(monkeypatch, tmp_path):
-    monkeypatch.setenv("TELEGRAM_MCP_EVENTS", "true")
-    monkeypatch.setenv("TELEGRAM_MCP_HTTP_TOKEN", TOKEN)
     monkeypatch.setenv("TELEGRAM_MCP_EVENTS_FILE", str(tmp_path / "subscriptions.json"))
     server = FastMCP("events-test", stateless_http=True)
 
@@ -330,12 +325,11 @@ def enabled_app(monkeypatch, tmp_path):
     return create_streamable_http_app(server)
 
 
-def test_authenticated_http_discovery_initialize_and_tools(monkeypatch, tmp_path):
+def test_http_discovery_initialize_and_tools_without_extra_auth(monkeypatch, tmp_path):
     app = enabled_app(monkeypatch, tmp_path)
-    headers = {"Authorization": "Bearer " + TOKEN, "Accept": "application/json, text/event-stream"}
+    headers = {"Accept": "application/json, text/event-stream"}
     with TestClient(app, base_url="http://localhost:8765") as client:
         body = {"jsonrpc": "2.0", "id": 1, "method": "events/list"}
-        assert client.post("/mcp", json=body).status_code == 401
         response = client.post("/mcp", headers=headers, json=body)
         assert response.json()["result"]["events"][0] == hooks.event_definition()
         discovery = client.post(
@@ -362,26 +356,22 @@ def test_authenticated_http_discovery_initialize_and_tools(monkeypatch, tmp_path
             json={**body, "method": "tools/call", "params": {"name": "ping"}},
         )
         assert "pong" in tool.text
-        assert client.post("/mcp", json={**body, "method": "tools/list"}).status_code == 401
+        assert (
+            client.post("/mcp", headers=headers, json={**body, "method": "tools/list"}).status_code
+            == 200
+        )
         denied = client.post(
             "/mcp", headers={**headers, "Origin": "https://evil.example"}, json=body
         )
         assert denied.status_code == 403
 
 
-def test_enable_requires_token(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_MCP_EVENTS", "true")
-    monkeypatch.delenv("TELEGRAM_MCP_HTTP_TOKEN", raising=False)
-    with pytest.raises(ValueError, match="TOKEN"):
-        create_streamable_http_app(FastMCP("no-token"))
-
-
 @pytest.mark.asyncio
 async def test_unsubscribe_after_access_revoked_and_alias_changes(manager, receiver, monkeypatch):
     p = params(chat_id="@original")
-    result = await manager.subscribe(p, "owner")
+    result = await manager.subscribe(p)
     monkeypatch.setattr(rt, "resolve_entity", AsyncMock(return_value=User(id=999)))
-    renewed = await manager.subscribe(p, "owner")
+    renewed = await manager.subscribe(p)
     assert renewed["id"] == result["id"]
     # Refresh resolves the bound ID rather than the reassigned username.
     assert rt.resolve_entity.call_args.args[0] == 123
@@ -392,24 +382,12 @@ async def test_unsubscribe_after_access_revoked_and_alias_changes(manager, recei
         AsyncMock(side_effect=AssertionError("No Telegram lookup during unsubscribe")),
     )
     p["delivery"].pop("secret")
-    await manager.unsubscribe(p, "owner")
+    await manager.unsubscribe(p)
     assert not manager.store.rows
 
 
 @pytest.mark.asyncio
-async def test_rotated_token_drops_old_callbacks(manager, receiver):
-    await manager.subscribe(params(), "old-owner")
-    restored = hooks.MessageSubscriptions(manager.store.path, owner="new-owner")
-    await restored.start()
-    try:
-        assert not restored.store.rows
-        assert not restored.tasks
-    finally:
-        await restored.close()
-
-
-@pytest.mark.asyncio
-async def test_store_rejects_concurrent_owners(manager):
+async def test_store_rejects_concurrent_processes(manager):
     from telegram_mcp.singleton import SessionLockError
 
     await manager.start()
@@ -426,32 +404,32 @@ async def test_expired_rows_release_quota_and_rotation_survives_refresh(
     manager, receiver, monkeypatch
 ):
     monkeypatch.setattr(hooks, "MAX_SUBSCRIPTIONS", 1)
-    result = await manager.subscribe(params(), "owner")
+    result = await manager.subscribe(params())
     manager.store.rows[result["id"]]["expires"] = time.time() - 1
     p = params()
     p["delivery"]["url"] += "new"
-    result = await manager.subscribe(p, "owner")
+    result = await manager.subscribe(p)
     p["delivery"]["secret"] = "whsec_" + base64.b64encode(b"n" * 32).decode()
-    await manager.subscribe(p, "owner")
-    await manager.subscribe(p, "owner")
+    await manager.subscribe(p)
+    await manager.subscribe(p)
     assert manager.store.rows[result["id"]]["previous_secret"] == SECRET
     assert len(manager.store.rows) == 1
 
 
 @pytest.mark.asyncio
 async def test_unknown_entity_fails_closed_for_username_blocklist(manager, receiver, monkeypatch):
-    result = await manager.subscribe(params(), "owner")
+    result = await manager.subscribe(params())
     monkeypatch.setenv("TELEGRAM_BLOCKED_CHAT_IDS", "@blocked")
     assert not manager.allowed(manager.store.rows[result["id"]], record())
 
 
-def test_mounted_auth_host_checks_and_meta(monkeypatch, tmp_path):
+def test_mounted_host_checks_and_meta(monkeypatch, tmp_path):
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
     app = enabled_app(monkeypatch, tmp_path)
     mounted = Starlette(routes=[Mount("/telegram", app)])
-    headers = {"Authorization": "Bearer " + TOKEN, "Accept": "application/json, text/event-stream"}
+    headers = {"Accept": "application/json, text/event-stream"}
     with (
         TestClient(app, base_url="http://localhost:8765"),
         TestClient(mounted, base_url="http://localhost:8765") as client,
@@ -462,7 +440,6 @@ def test_mounted_auth_host_checks_and_meta(monkeypatch, tmp_path):
             "method": "events/list",
             "params": {"_meta": {"progressToken": "test"}},
         }
-        assert client.post("/telegram/mcp", json=body).status_code == 401
         assert client.post("/telegram/mcp", headers=headers, json=body).json()["result"]["events"]
         assert (
             client.post(
@@ -477,7 +454,10 @@ def test_mounted_auth_host_checks_and_meta(monkeypatch, tmp_path):
             == 200
         )
         assert (
-            client.post("/telegram/mcp", json={**body, "method": "tools/list"}).status_code == 401
+            client.post(
+                "/telegram/mcp", headers=headers, json={**body, "method": "tools/list"}
+            ).status_code
+            == 200
         )
 
 
@@ -501,7 +481,6 @@ async def test_subscription_does_not_block_normal_tool_request(monkeypatch, tmp_
         transport=httpx.ASGITransport(app=app), base_url="http://localhost:8765"
     ) as client:
         headers = {
-            "Authorization": "Bearer " + TOKEN,
             "Accept": "application/json, text/event-stream",
         }
         subscribe = asyncio.create_task(
@@ -532,7 +511,6 @@ async def test_http_refuses_unstarted_subscription_service(monkeypatch, tmp_path
     ) as client:
         response = await client.post(
             "/mcp",
-            headers={"Authorization": "Bearer " + TOKEN},
             json={"jsonrpc": "2.0", "id": 1, "method": "events/subscribe", "params": params()},
         )
         assert response.json()["error"]["message"] == "Event service has not started."
@@ -555,7 +533,7 @@ async def test_lifespan_startup_failure_is_explicit(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_expiration_during_refresh_replaces_pending_worker(manager, receiver, monkeypatch):
     p = params()
-    result = await manager.subscribe(p, "owner")
+    result = await manager.subscribe(p)
     await manager.start()
     try:
         original_worker = manager.tasks[result["id"]]
@@ -570,7 +548,7 @@ async def test_expiration_during_refresh_replaces_pending_worker(manager, receiv
             await asyncio.sleep(0.02)
 
         monkeypatch.setattr(manager, "_verify", verify)
-        await manager.subscribe(p, "owner")
+        await manager.subscribe(p)
         assert manager.tasks[result["id"]] is not pending
         await asyncio.sleep(0)
         assert pending.cancelled()
