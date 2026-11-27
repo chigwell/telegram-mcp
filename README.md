@@ -800,6 +800,18 @@ missing MTProxy secret, or a missing `python-socks` package) cause the server
 to fail fast at startup with a clear error message instead of silently
 bypassing the proxy.
 
+## Marking Processed Messages as Read
+
+Use `mark_messages_read(chat_id, message_ids)` with a numeric chat ID and the
+IDs of processed incoming messages. The tool checks the unread history and
+refuses to advance the read marker past any earlier unread message omitted
+from the list. It preserves newer messages and manual unread marks. Forum
+topics use their own read state.
+
+Pass `dry_run=true` to verify which messages the acknowledgement would cover.
+A successful write returns the verified read marker and the unread counts
+before and after. `mark_as_read` remains available for marking an entire chat.
+
 ## File Path Security
 
 File-path and media tools (`send_file`, `edit_message_media`, `download_media`, `upload_file`, `send_voice`, `send_sticker`, `set_profile_photo`, `edit_chat_photo`, and `send_album`) are registered and supported, but remain strictly disabled by default until allowed roots are configured (safe-by-default to prevent unauthorized file access).
