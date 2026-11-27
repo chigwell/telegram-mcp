@@ -2792,6 +2792,129 @@ async def mark_as_read(chat_id: Union[int, str], account: Optional[str] = None) 
         return log_and_format_error("mark_as_read", e, chat_id=chat_id)
 
 
+async def _get_read_dialog(client, peer, chat_id):
+    result = await client(
+        functions.messages.GetPeerDialogsRequest(peers=[types.InputDialogPeer(peer=peer)])
+    )
+    for dialog in result.dialogs:
+        if isinstance(dialog, types.Dialog) and utils.get_peer_id(dialog.peer) == chat_id:
+            return dialog
+    raise ToolError("Could not verify the read status of the requested chat.")
+
+
+def _read_status_result(status, chat_id, message_ids, before, after):
+    return format_tool_result(
+        [
+            {
+                "status": status,
+                "chat_id": chat_id,
+                "message_ids": sorted(message_ids),
+                "read_through": after.read_inbox_max_id,
+                "unread_before": before.unread_count,
+                "unread_after": after.unread_count,
+            }
+        ]
+    )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Mark Processed Messages As Read",
+        openWorldHint=True,
+        destructiveHint=True,
+        idempotentHint=True,
+    )
+)
+@with_account(returns_chat_data=True)
+@validate_id("chat_id", raise_errors=True)
+@flood_category("send")
+async def mark_messages_read(
+    chat_id: int,
+    message_ids: List[StrictInt],
+    dry_run: bool = False,
+    account: Optional[str] = None,
+) -> str:
+    """Mark processed incoming messages as read in one chat.
+
+    Pass the numeric chat ID and unique message IDs from history. Telegram marks
+    history up to the highest supplied ID. The tool verifies that every unread
+    incoming message in that range was supplied. More recent messages and manual
+    unread marks are preserved. Use dry_run to check the range without writing.
+    Forum chats use topic-specific read status and are unsupported by this tool.
+    """
+    max_message_id = 2**31 - 1
+    approved = set(message_ids)
+    if not approved or len(approved) != len(message_ids):
+        raise ToolError("Provide at least one message ID with no duplicates.")
+    if any(not 0 < mid <= max_message_id for mid in approved):
+        raise ToolError("Message IDs must be positive Telegram message IDs.")
+    boundary = max(approved)
+    write_requested = False
+
+    try:
+        client = get_client(account)
+        entity = await resolve_entity(chat_id, client)
+        if get_marked_id(entity) != chat_id:
+            raise ToolError("Resolved Telegram chat does not match the requested ID.")
+        if getattr(entity, "forum", False) or getattr(entity, "monoforum", False):
+            raise ToolError("This tool does not change read status in forum chats.")
+
+        peer = await client.get_input_entity(entity)
+        before = await _get_read_dialog(client, peer, chat_id)
+        pending = {mid for mid in approved if mid > before.read_inbox_max_id}
+        if not pending:
+            return _read_status_result("already_read", chat_id, approved, before, before)
+        if before.unread_mark:
+            raise ToolError("The chat was manually marked unread. Its status was preserved.")
+        if before.unread_count < len(pending):
+            raise ToolError("Some supplied IDs are not unread incoming messages.")
+
+        # Freeze the history at the dialog snapshot, and verify its unread count.
+        # Telethon excludes max_id from history, but includes it when acknowledging reads.
+        upper_limit = before.top_message + 1 if before.top_message < max_message_id else 0
+        unread_seen = 0
+        seen = set()
+        async for message in client.iter_messages(
+            peer, min_id=before.read_inbox_max_id, max_id=upper_limit
+        ):
+            if message.out:
+                continue
+            unread_seen += 1
+            if message.id > boundary:
+                continue
+            if message.id not in pending:
+                raise ToolError(
+                    f"Unread message {message.id} would also be marked read. No status changed."
+                )
+            seen.add(message.id)
+        if seen != pending or unread_seen != before.unread_count:
+            raise ToolError(
+                "Could not match the supplied IDs to the unread history. No status changed."
+            )
+        if dry_run:
+            return _read_status_result("ready", chat_id, approved, before, before)
+
+        current = await _get_read_dialog(client, peer, chat_id)
+        if current.unread_mark or current.read_inbox_max_id != before.read_inbox_max_id:
+            raise ToolError(
+                "The read status changed during verification. Check it before retrying."
+            )
+
+        write_requested = True
+        await client.send_read_acknowledge(peer, max_id=boundary)
+        after = await _get_read_dialog(client, peer, chat_id)
+        if after.read_inbox_max_id < boundary:
+            raise ToolError("Telegram did not confirm that the supplied messages are read.")
+        return _read_status_result("marked_read", chat_id, approved, before, after)
+    except ToolError:
+        raise
+    except Exception as error:
+        detail = log_and_format_error("mark_messages_read", error)
+        if write_requested:
+            detail = f"Read status could not be confirmed. Check it before retrying. {detail}"
+        raise ToolError(detail) from error
+
+
 @mcp.tool(
     annotations=ToolAnnotations(title="Reply To Message", openWorldHint=True, destructiveHint=True)
 )
