@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional
 
 from starlette.responses import JSONResponse, Response
@@ -70,6 +71,9 @@ class ProtocolNegotiationMiddleware:
     def __init__(self, app: ASGIApp, mcp_instance: Any = None):
         self.app = app
         self.mcp_instance = mcp_instance
+        self.authenticated = os.getenv("TELEGRAM_MCP_HTTP_TOKEN") is not None or bool(
+            getattr(mcp_instance, "_token_verifier", None)
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -111,7 +115,8 @@ class ProtocolNegotiationMiddleware:
         # 1. Handle OPTIONS discovery / CORS preflight
         if scope.get("method") == "OPTIONS":
             cors_headers = (
-                "Content-Type, Accept, MCP-Protocol-Version, MCP-Session-Id, Authorization"
+                "Content-Type, Accept, MCP-Protocol-Version, MCP-Session-Id, "
+                "Authorization, Mcp-Method, Mcp-Name"
             )
             response = Response(
                 status_code=204,
@@ -157,7 +162,16 @@ class ProtocolNegotiationMiddleware:
 
         # 3. Handle plain GET discovery probe (clients querying without text/event-stream)
         accept_header = headers.get(b"accept", b"").decode("latin-1").lower()
-        if scope.get("method") == "GET" and "text/event-stream" not in accept_header:
+        endpoint = getattr(
+            getattr(self.mcp_instance, "settings", None), "streamable_http_path", "/mcp"
+        )
+        path = scope.get("path", "").removeprefix(scope.get("root_path", ""))
+        if (
+            scope.get("method") == "GET"
+            and "text/event-stream" not in accept_header
+            and path.rstrip("/") == endpoint.rstrip("/")
+            and not self.authenticated
+        ):
             discovery_data = {
                 "name": "telegram",
                 "version": "2.0.1",
@@ -220,10 +234,15 @@ def patch_fastmcp_streamable_http() -> None:
         original_sse_app = FastMCP.sse_app
 
         def wrapped_sse_app(self: Any, *args: Any, **kwargs: Any) -> Any:
-            from telegram_mcp.event_protocol import install_events
+            from telegram_mcp.event_protocol import EventTransport, install_events
+            from telegram_mcp.transport.auth import with_http_auth
 
             install_events(self)
-            return original_sse_app(self, *args, **kwargs)
+            app = original_sse_app(self, *args, **kwargs)
+            with_http_auth(
+                app, self, [self.settings.sse_path, self.settings.message_path.rstrip("/")]
+            )
+            return EventTransport(app, "sse")
 
         FastMCP.sse_app = wrapped_sse_app
         FastMCP.streamable_http_app = wrapped_streamable_http_app  # type: ignore[assignment]

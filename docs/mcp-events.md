@@ -1,45 +1,105 @@
 # MCP Events
 
 `telegram.message.created` exposes new-message metadata through the existing
-per-message event log. Event support is available automatically; clients must
-explicitly subscribe. Events use the same configured access as ordinary tools.
-There is no extra client password, login flow or enable flag.
+bounded message log. Events are available automatically; clients choose what to
+monitor. They obey the same configured Telegram/chat/topic access as tools.
+Existing `wait_for_events`, debounce tools and the optional JSONL feed keep their
+behavior. This implements the official **Events beta**, which may still change.
 
-| Connection | Delivery modes |
-| --- | --- |
-| stdio | `push` (`events/stream`) |
-| Streamable HTTP | `push` and `webhook` |
-| Legacy HTTP+SSE | `push` over the existing SSE session |
+| MCP connection | Poll | Push | Webhook |
+| --- | --- | --- | --- |
+| stdio | Yes | Yes | No |
+| Anonymous Streamable HTTP | Yes | Yes | No |
+| Streamable HTTP with configured bearer auth | Yes | Yes | Yes |
+| Legacy SSE | No | No | No; ordinary tools remain available |
 
-`events/list` describes the event, filters and supported delivery modes.
-Initialization advertises the Events capability. Modern HTTP/stdin clients can
-use `server/discover`. These are protocol methods, not ordinary tools. The SDK
-1.x compatibility extension adds these methods without replacing its dispatcher.
+`events/list` describes supported modes. `server/discover` advertises
+`capabilities.extensions["io.modelcontextprotocol/events"]`. Anonymous webhook
+requests return Forbidden (`-32024`) with a configuration explanation; they do
+not disable the server or its other modes. A client supporting only webhooks
+needs authenticated HTTP. Client application wake-up support is also required.
 
-## Choose what to monitor
+## Configuration
 
-Use `arguments: {"chat_id": 123, "account": "default"}` for one chat. Chat IDs,
+Normal local stdio installation needs no new setting. Existing client wiring
+continues to launch the command with Telegram environment variables, for example:
+
+```json
+{
+  "mcpServers": {
+    "telegram": {
+      "command": "uv",
+      "args": ["--directory", "/absolute/path/telegram-mcp", "run", "main.py"],
+      "env": {
+        "TELEGRAM_API_ID": "your_api_id",
+        "TELEGRAM_API_HASH": "your_api_hash",
+        "TELEGRAM_SESSION_STRING": "your_session"
+      }
+    }
+  }
+}
+```
+
+For a shared HTTP process, retain the normal Telegram environment and set
+`MCP_TRANSPORT=http`. Clients connect to `http://127.0.0.1:8765/mcp`. Authentication
+is optional for tools, poll and push. To enable webhooks, generate a random token:
+
+```bash
+python -c 'import secrets; print(secrets.token_urlsafe(32))'
+```
+
+Set that value as `TELEGRAM_MCP_HTTP_TOKEN` in the **server** environment. It must
+contain at least 32 printable ASCII characters. The SDK's bearer middleware then
+requires `Authorization: Bearer <same token>` on MCP HTTP requests. Configure the
+same token in each client. For Codex's ordinary HTTP tool connection:
+
+```toml
+[mcp_servers.telegram]
+url = "http://127.0.0.1:8765/mcp"
+bearer_token_env_var = "TELEGRAM_MCP_HTTP_TOKEN"
+```
+
+This config supplies a credential; it does not establish native Codex event
+wake-up. For clients with generic HTTP headers, set `Authorization` to
+`Bearer <token>` in their MCP server entry. Avoid committing credential values.
+The server provides no OAuth authorization server, browser login or fake OAuth
+metadata. Clients requiring an OAuth flow need a separate deployment integration;
+that is outside this feature. Host/Origin validation remains enabled independently.
+
+Static authentication represents **one deployment owner**. Every client with that
+token shares that owner's webhook registrations and configured tool access. Token
+rotation preserves ownership; update the server and clients together. This is not
+multi-user authorization. Webhook persistence is supported for this configured
+static owner, not arbitrary embedding applications' custom SDK identity providers.
+No additional authentication is introduced on stdio.
+
+## What to monitor
+
+Use `arguments: {"chat_id": 123, "account": "default"}` for one chat. IDs,
 usernames and aliases follow existing resolution rules. An explicit account is
-required with multiple configured accounts. For account-wide monitoring, omit
-`chat_id` and explicitly set `all_chats: true`. Outgoing messages are excluded
-unless `include_outgoing: true` is explicit. Chat, blocklist and topic restrictions
-apply to both delivery modes. Monitoring does not grant additional read access.
+required with multiple accounts. For account-wide monitoring, omit `chat_id` and
+explicitly set `all_chats: true`. Outgoing messages are excluded unless
+`include_outgoing: true` is explicit. These defaults prevent accidental broad
+monitoring and reply loops. Subscriptions do not grant additional read access.
 
-Supported sources are private chats, basic groups and supergroups. Broadcast
-channels, edits, deletions, reactions and settled bursts are not included.
+Sources are private chats, basic groups and supergroups. Broadcast channels,
+edits, deletions, reactions and settled bursts are not included. Each occurrence
+contains `eventId`, `name`, `timestamp`, `data` and `cursor`. Data contains only
+`account`, `chat_id`, `message_id` and `timestamp`; read content with existing tools.
+Occurrence IDs are stable across delivery modes and retries. Consumers should
+deduplicate within each subscription.
 
-Every occurrence has `eventId`, `name`, `timestamp`, `data` and `cursor`. Its `data`
-contains only `account`, `chat_id`, `message_id` and `timestamp`. Read content with
-existing tools. Event IDs are stable for the account/chat/message across retries
-and delivery modes. Consumers should deduplicate within their subscription.
+`TELEGRAM_EVENT_LOG_SIZE=0` disables collection and removes the event from the
+catalog, without disabling ordinary tools.
 
-`TELEGRAM_EVENT_LOG_SIZE=0` disables event collection and removes the event from
-the catalog without disabling ordinary tools. Existing polling tools and the
-settled-message JSONL feed keep their behavior.
+## Poll and push
 
-## Streams
+Poll with `events/poll` using `name`, `arguments`, optional `cursor`, `maxEvents`
+(up to 100) and `maxAgeMs`. The result contains `events`, `cursor`, `truncated`,
+`hasMore` and suggested `nextPollMs`. No registration or unsubscribe is required.
+A null/omitted cursor bootstraps at the current position, returning no history.
 
-Send a long-lived `events/stream` request:
+Push opens a long-lived request:
 
 ```json
 {
@@ -49,85 +109,91 @@ Send a long-lived `events/stream` request:
   "params": {
     "name": "telegram.message.created",
     "arguments": {"chat_id": 123, "account": "default"},
-    "cursor": null
+    "cursor": null,
+    "heartbeatMs": 30000
   }
 }
 ```
 
-The server sends `notifications/events/active`, followed by matching
-`notifications/events/event` frames. During quiet periods it sends
-`notifications/events/heartbeat` at least every 30 seconds. Each notification
-includes the original request ID at
+Examples omit the core protocol's per-request `_meta` fields for readability;
+modern clients provide their version, client information and capabilities.
+Modern HTTP requests also need `Mcp-Method` matching the method and `Mcp-Name`
+matching the event name, where applicable. A mismatch returns HTTP 400 /
+HeaderMismatch (`-32020`). Standard Base64-encoded header values are accepted.
+
+The server sends `notifications/events/active` with authoritative `heartbeatMs`,
+then matching `notifications/events/event` frames. Quiet streams receive
+`notifications/events/heartbeat`. Suggested intervals are clamped to 1–30 seconds;
+the default is 30 seconds. Each notification carries the request ID at
 `params._meta["io.modelcontextprotocol/subscriptionId"]`.
 
-On Streamable HTTP, the original POST returns an SSE response. Abort that
-response to cancel its subscription. On stdio, send `notifications/cancelled`
-with `params.requestId` set to the stream request ID. Legacy SSE also uses request
-cancellation; closing its shared session stops every stream belonging to that
-session. Cancelling one subscription otherwise leaves the others running.
-
-Streams are independent, even with identical filters. They require no persistent
-subscription file, callback URL or signing secret. Ordinary tools remain callable
-and keep their normal timeouts while streams run.
+On HTTP the POST returns SSE frames; abort that response to cancel. On stdio send
+`notifications/cancelled` with `params.requestId`. Independent streams may have
+identical filters; cancelling one leaves others running. Ordinary tools remain
+callable with their existing timeouts. Streams need no registration file or secret.
 
 ## Webhooks
 
-On Streamable HTTP, call `events/subscribe` with `name`, `arguments` and:
+On authenticated HTTP, call `events/subscribe` with `name`, `arguments` and:
 
 ```json
 {
   "delivery": {
     "mode": "webhook",
     "url": "https://receiver.example/callback",
-    "secret": "whsec_<base64-encoded-24-to-64-byte-key>"
+    "secret": "whsec_<base64-encoded-24-to-64-random-bytes>"
   },
   "ttlMs": 3600000,
   "cursor": null
 }
 ```
 
-The subscribing client supplies the signing secret. The server verifies the
-callback with a signed challenge, then signs deliveries using Standard Webhooks.
-Callbacks require public HTTPS destinations on port 443. Destination addresses
-are validated at connection time, TLS checks the original hostname, redirects
-are rejected, and response size and request duration are bounded.
+The client supplies the signing secret. The server verifies a signed challenge,
+then uses Standard Webhooks signatures. This signing secret is separate from the
+HTTP bearer token: bearer identifies the client to Telegram MCP; the webhook
+secret lets the callback verify deliveries from Telegram MCP. Callback URLs require
+public HTTPS on port 443. Address validation, pinned connections, normal TLS,
+no redirects, bounded verification bodies and request timeouts remain enforced.
 
-Identity is event name, normalized arguments and callback URL. Repeating the same
-identity refreshes it rather than creating a duplicate. Different callbacks or
-arguments create independent subscriptions. Aliases bind to their resolved chat
-at creation; refresh does not silently move them. Prefer explicit accounts and
-numeric chat IDs. Supplying an account differs from omitting it in identity.
+Registration identity is owner + event name + canonical **original** arguments +
+callback URL. Repeating that identity refreshes it. Different arguments or URLs
+create independent subscriptions. Omitted defaults and explicitly supplied defaults
+remain distinct. Aliases bind to their resolved chat; refresh does not move them.
 
-Responses contain `id`, `refreshBefore`, `cursor: null` and `truncated: false`.
-The default lifetime is one hour, capped at 24 hours. `ttlMs: null` receives a
+Results contain `id`, `refreshBefore`, a replay cursor and `truncated`. Default TTL
+is one hour; grants range from one second to 24 hours. `ttlMs: null` receives a
 finite 24-hour grant. Refresh before expiration. Signing-key replacement retains
-the old signature for five minutes. Up to 100 active webhook subscriptions are
-supported. Unsubscribe with the original name, arguments and delivery URL, without
-the secret. A delivery already in flight may arrive after cancellation.
+the old signature for five minutes. Up to 100 active registrations are supported.
+Unsubscribe using the original name, arguments and delivery URL, without a secret.
+A delivery already in flight may arrive after cancellation.
 
-Webhook registrations survive restart in
-`${XDG_STATE_HOME:-~/.local/state}/telegram-mcp/subscriptions.json`.
-`TELEGRAM_MCP_EVENTS_FILE` optionally selects another file. Writes are atomic and
-use mode 0600 on POSIX. Only one HTTP app may own a file at a time. Separate
-instances must use separate state files. Stream-only transports do not open it.
+Registrations survive restart in
+`${XDG_STATE_HOME:-~/.local/state}/telegram-mcp/subscriptions.json`;
+`TELEGRAM_MCP_EVENTS_FILE` overrides the path. Writes are atomic and private
+(mode 0600 on POSIX). Only one HTTP app may own a state file. Separate instances
+need separate files. Stdio and anonymous HTTP do not open the webhook store.
 
-Transient webhook failures get four total attempts with exponential backoff.
-Retries preserve event ID and body and use a fresh signature timestamp. HTTP 410
-ends the subscription; HTTP 413 and other permanent client errors are not retried.
+Each delivery has a random `webhook-id`, distinct from its occurrence `eventId`.
+Four concurrent deliveries retry independently, with four total attempts and
+1/2/4-second backoff. Retries preserve ID/body and regenerate signatures. HTTP
+408/425/429 and server errors are retried. HTTP 410/413 abandon that delivery,
+not the registration. Gap and termination control messages are signed and retried.
 
-## Replay and client support
+## Replay and limits
 
-Both modes return `cursor: null`: no protocol replay or message archive is added.
-Stream reconnection starts from the current position. Downtime, log overrun or
-exhausted webhook retries can lose events. A stream reports an in-process log
-overrun through `notifications/events/active` with `truncated: true`.
+All modes share opaque cursors over the **bounded in-memory** log. Pass the last
+cursor back to resume; never parse or edit it. `maxAgeMs` limits initial replay,
+not later live events with old Telegram timestamps. Cursor checkpoints and message
+history are not persisted. Restart, overrun or age clipping reports `truncated`
+(or a webhook gap). Resume covers only retained events; it is not an archive.
+Webhook cursor watermarks never pass an outstanding earlier delivery.
 
-Supporting the protocol does not make every client application subscribe or wake
-an agent. Codex CLI 0.167.0's public source selects its hosted Apps connection for
-native event subscriptions; adding an arbitrary MCP configuration does not prove
-native chat wake-up. See its [connection selection](https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/codex-mcp/src/connection_manager.rs).
-ChatGPT Work/dots document webhook delivery. Actual application acceptance needs
-a separate check; wire-level tests do not claim it.
+Downtime or exhausted retries can lose events. Clients can reconcile through
+existing message-reading tools. A client must implement both Events delivery and
+agent scheduling to wake an agent. OpenCode 2.4.2 offers native push event
+automations. Support in one client does not establish Codex, ChatGPT or dot
+compatibility. Hosted authentication/tunnels and OAuth login are outside this PR.
 
-References: [MCP Events draft](https://github.com/modelcontextprotocol/experimental-ext-triggers-events/blob/main/docs/design-sketch-proposal.md),
-[ChatGPT webhook integration](https://developers.openai.com/plugins/build/mcp-events).
+References: [official Events beta](https://github.com/modelcontextprotocol/ext-events/blob/main/specification/beta/events/events.mdx),
+[core MCP protocol](https://modelcontextprotocol.io/specification/2026-07-28),
+[Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md).

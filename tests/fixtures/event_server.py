@@ -37,6 +37,8 @@ async def fake_webhook(url, subscription_id, event_id, body, signing_secrets):
     payload = json.loads(body)
     if payload.get("type") == "verification":
         return 200, json.dumps({"challenge": payload["challenge"]}).encode()
+    if payload.get("type") in ("gap", "terminated"):
+        return 200, b"{}"
     webhook_events.append(payload)
     return 200, b"{}"
 

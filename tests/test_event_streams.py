@@ -17,7 +17,7 @@ from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.shared.message import SessionMessage
 
-from telegram_mcp.event_protocol import CORRELATION_KEY
+from telegram_mcp.event_protocol import CORRELATION_KEY, EVENTS_EXTENSION
 
 SERVER = Path(__file__).parent / "fixtures" / "event_server.py"
 EVENT = "telegram.message.created"
@@ -36,6 +36,11 @@ class WireClient:
                 headers={
                     "Accept": "application/json, text/event-stream",
                     "MCP-Protocol-Version": "2026-07-28",
+                    **(
+                        {"Authorization": "Bearer " + os.environ["TELEGRAM_MCP_HTTP_TOKEN"]}
+                        if os.environ.get("TELEGRAM_MCP_HTTP_TOKEN")
+                        else {}
+                    ),
                 },
             )
             if url
@@ -56,7 +61,10 @@ class WireClient:
             self.route(message.message.model_dump(by_alias=True, exclude_none=False))
 
     async def _post(self, payload):
-        async with self.client.stream("POST", self.url, json=payload) as response:
+        headers = {"Mcp-Method": payload["method"]}
+        if "name" in payload.get("params", {}):
+            headers["Mcp-Name"] = str(payload["params"]["name"])
+        async with self.client.stream("POST", self.url, json=payload, headers=headers) as response:
             response.raise_for_status()
             if "text/event-stream" not in response.headers.get("content-type", ""):
                 if response.status_code != 202:
@@ -108,7 +116,8 @@ class WireClient:
         message = await self.next(request_id)
         assert message["method"] == "notifications/events/active", message
         assert message["params"]["_meta"][CORRELATION_KEY] == request_id
-        assert message["params"]["cursor"] is None
+        assert isinstance(message["params"]["cursor"], str)
+        assert message["params"]["heartbeatMs"] > 0
 
     async def cancel(self, request_id):
         if self.mode == "http":
@@ -142,6 +151,11 @@ class WireClient:
 def server_env(tmp_path):
     env = {k: v for k, v in os.environ.items() if not k.startswith("TELEGRAM_")}
     env.update(
+        **(
+            {"TELEGRAM_MCP_HTTP_TOKEN": os.environ["TELEGRAM_MCP_HTTP_TOKEN"]}
+            if os.environ.get("TELEGRAM_MCP_HTTP_TOKEN")
+            else {}
+        ),
         PYTHONPATH=str(SERVER.parents[2]),
         PYTHON_DOTENV_DISABLED="1",
         TELEGRAM_MCP_EVENTS_FILE=str(tmp_path / "subscriptions.json"),
@@ -206,7 +220,14 @@ async def connect(mode, tmp_path):
                 client = WireClient(mode, url=f"http://127.0.0.1:{port}/mcp")
             else:
                 read, write = await stack.enter_async_context(
-                    sse_client(f"http://127.0.0.1:{port}/sse")
+                    sse_client(
+                        f"http://127.0.0.1:{port}/sse",
+                        headers=(
+                            {"Authorization": "Bearer " + os.environ["TELEGRAM_MCP_HTTP_TOKEN"]}
+                            if os.environ.get("TELEGRAM_MCP_HTTP_TOKEN")
+                            else None
+                        ),
+                    )
                 )
                 client = WireClient(mode, read, write)
                 client.url = f"http://127.0.0.1:{port}/sse"
@@ -225,18 +246,18 @@ async def initialized(mode, tmp_path):
                 "clientInfo": {"name": "event-test", "version": "1"},
             },
         )
-        assert initialized["result"]["capabilities"]["events"] == {}
+        assert initialized["result"]["capabilities"]["extensions"][EVENTS_EXTENSION] == {}
         await client.send(None, "notifications/initialized")
         yield client
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["stdio", "http", "sse"])
+@pytest.mark.parametrize("mode", ["stdio", "http"])
 async def test_independent_streams_filter_cancel_and_tools(mode, tmp_path):
     async with initialized(mode, tmp_path) as wire:
         catalog = await wire.request("events/list")
         modes = catalog["result"]["events"][0]["delivery"]
-        assert modes == (["push", "webhook"] if wire.mode == "http" else ["push"])
+        assert modes == ["poll", "push"]
         await wire.stream(0)
         await wire.stream("second")
         await wire.wait_count(2)
@@ -249,7 +270,7 @@ async def test_independent_streams_filter_cancel_and_tools(mode, tmp_path):
                 "message_id": 1,
                 "timestamp": "2026-11-26T10:00:00Z",
             }
-            assert frame["params"]["cursor"] is None
+            assert isinstance(frame["params"]["cursor"], str)
             assert frame["params"]["_meta"][CORRELATION_KEY] == request_id
         await wire.tool("emit", {"message_id": 2, "out": True})
         await wire.tool("emit", {"message_id": 3, "chat_id": 999})
@@ -269,13 +290,13 @@ async def test_independent_streams_filter_cancel_and_tools(mode, tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["stdio", "http", "sse"])
+@pytest.mark.parametrize("mode", ["stdio", "http"])
 async def test_heartbeat_outlives_tool_timeout_and_no_replay(mode, tmp_path):
     async with initialized(mode, tmp_path) as wire:
         await wire.tool("emit", {"message_id": 9})
         await wire.stream("live")
         frame = await wire.next("live", "notifications/events/heartbeat")
-        assert frame["params"]["cursor"] is None
+        assert isinstance(frame["params"]["cursor"], str)
         assert frame["params"]["_meta"][CORRELATION_KEY] == "live"
         result = await wire.tool("slow_tool")
         assert result["isError"] is True
@@ -296,7 +317,7 @@ async def test_heartbeat_outlives_tool_timeout_and_no_replay(mode, tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["stdio", "http", "sse"])
+@pytest.mark.parametrize("mode", ["stdio", "http"])
 async def test_stream_errors_and_server_close(mode, tmp_path):
     async with initialized(mode, tmp_path) as wire:
         invalid = await wire.request("events/stream", {"name": EVENT, "arguments": {}})
@@ -312,13 +333,19 @@ async def test_stream_errors_and_server_close(mode, tmp_path):
         closed = await wire.next("closing")
         while "method" in closed:
             closed = await wire.next("closing")
-        assert closed["result"] == {"_meta": {}}
-        assert (await wire.request("events/list"))["result"] == {"events": []}
+        assert closed["result"] == {
+            "resultType": "complete",
+            "_meta": {CORRELATION_KEY: "closing"},
+        }
+        assert (await wire.request("events/list"))["result"] == {
+            "resultType": "complete",
+            "events": [],
+        }
         assert not (await wire.tool("stream_count")).get("isError")
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["stdio", "http", "sse"])
+@pytest.mark.parametrize("mode", ["stdio", "http"])
 async def test_empty_request_id_and_immediate_cancellation(mode, tmp_path):
     async with initialized(mode, tmp_path) as wire:
         await wire.stream("")
@@ -337,7 +364,7 @@ async def test_empty_request_id_and_immediate_cancellation(mode, tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["http", "sse"])
+@pytest.mark.parametrize("mode", ["http"])
 async def test_same_id_on_different_connections(mode, tmp_path):
     async with initialized(mode, tmp_path) as first:
         async with AsyncExitStack() as stack:
@@ -379,7 +406,8 @@ async def test_same_id_on_different_connections(mode, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_webhook_and_stream_receive_independently(tmp_path):
+async def test_webhook_and_stream_receive_independently(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_MCP_HTTP_TOKEN", "t" * 32)
     import base64
 
     async with initialized("http", tmp_path) as wire:
@@ -395,7 +423,7 @@ async def test_webhook_and_stream_receive_independently(tmp_path):
             },
         }
         subscribed = await wire.request("events/subscribe", params)
-        assert subscribed["result"]["cursor"] is None
+        assert isinstance(subscribed["result"]["cursor"], str)
         await wire.stream("stream")
         await wire.tool("emit")
         assert (await wire.next("stream", "notifications/events/event"))["params"]["data"][
@@ -409,7 +437,9 @@ async def test_webhook_and_stream_receive_independently(tmp_path):
             await asyncio.sleep(0.01)
         assert count == 1
         params["delivery"].pop("secret")
-        assert (await wire.request("events/unsubscribe", params))["result"] == {}
+        assert (await wire.request("events/unsubscribe", params))["result"] == {
+            "resultType": "complete"
+        }
         await wire.tool("emit", {"message_id": 2})
         assert (await wire.next("stream", "notifications/events/event"))["params"]["data"][
             "message_id"
@@ -418,3 +448,70 @@ async def test_webhook_and_stream_receive_independently(tmp_path):
             json.loads((await wire.tool("webhook_count"))["content"][0]["text"])["delivered"] == 1
         )
         await wire.cancel("stream")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authenticated", [False, True])
+async def test_legacy_sse_keeps_tools_without_events(tmp_path, monkeypatch, authenticated):
+    if authenticated:
+        monkeypatch.setenv("TELEGRAM_MCP_HTTP_TOKEN", "s" * 32)
+    async with connect("sse", tmp_path) as wire:
+        initialized = await wire.request(
+            "initialize",
+            {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "legacy", "version": "1"},
+            },
+        )
+        assert EVENTS_EXTENSION not in initialized["result"]["capabilities"].get("extensions", {})
+        await wire.send(None, "notifications/initialized")
+        assert not (await wire.tool("stream_count")).get("isError")
+        assert (await wire.request("events/list"))["error"]["code"] == -32601
+        discovered = await wire.request("server/discover")
+        assert EVENTS_EXTENSION not in discovered["result"]["capabilities"].get("extensions", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["stdio", "http"])
+async def test_poll_replay_and_push_share_cursor(mode, tmp_path):
+    async with initialized(mode, tmp_path) as wire:
+        p = {"name": EVENT, "arguments": {"chat_id": 123}, "maxEvents": 1}
+        baseline = (await wire.request("events/poll", p))["result"]
+        await wire.tool("emit", {"message_id": 20})
+        await wire.tool("emit", {"message_id": 21, "out": True})
+        await wire.tool("emit", {"message_id": 22})
+        first = (await wire.request("events/poll", {**p, "cursor": baseline["cursor"]}))["result"]
+        assert first["resultType"] == "complete" and first["hasMore"]
+        assert first["events"][0]["data"]["message_id"] == 20
+        await wire.send(
+            "resumed",
+            "events/stream",
+            {
+                "name": EVENT,
+                "arguments": {"chat_id": 123},
+                "cursor": first["cursor"],
+                "heartbeatMs": 15000,
+            },
+        )
+        active = await wire.next("resumed", "notifications/events/active")
+        assert active["params"]["heartbeatMs"] > 0
+        assert (await wire.next("resumed", "notifications/events/event"))["params"]["data"][
+            "message_id"
+        ] == 22
+        await wire.cancel("resumed")
+
+
+@pytest.mark.asyncio
+async def test_modern_stdio_first_request_needs_no_initialize(tmp_path):
+    async with connect("stdio", tmp_path) as wire:
+        meta = {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": {"name": "modern-test", "version": "1"},
+            "io.modelcontextprotocol/clientCapabilities": {},
+        }
+        listed = await wire.request("tools/list", {"_meta": meta})
+        assert listed["result"]["resultType"] == "complete"
+        assert listed["result"]["ttlMs"] == 0
+        assert listed["result"]["cacheScope"] == "private"
+        assert (await wire.request("events/list", {"_meta": meta}))["result"]["events"]

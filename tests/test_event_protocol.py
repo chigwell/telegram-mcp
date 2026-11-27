@@ -77,7 +77,8 @@ async def test_gap_heartbeat_null_cursor_and_routing(request_id, monkeypatch):
         assert message.metadata.related_request_id == request_id
         frame = message.message.model_dump(by_alias=True, exclude_none=True)
         assert frame["params"]["_meta"][CORRELATION_KEY] == request_id
-        assert frame["params"]["cursor"] is None
+        if frame["method"] != "notifications/events/terminated":
+            assert isinstance(frame["params"]["cursor"], str)
         frames.append(frame)
         if (
             frame["method"] == "notifications/events/event"
@@ -113,7 +114,7 @@ async def test_gap_heartbeat_null_cursor_and_routing(request_id, monkeypatch):
         ]
         assert delivered == [1, 6, 7, 8, 9]
         monkeypatch.setattr(events, "_EVENT_LOG_SIZE", 0)
-        assert await asyncio.wait_for(stream, 1) == {"_meta": {}}
+        assert await asyncio.wait_for(stream, 1) == {"_meta": {CORRELATION_KEY: request_id}}
     finally:
         stream.cancel()
         await asyncio.gather(stream, return_exceptions=True)
@@ -170,4 +171,4 @@ async def test_invalid_stream_parameters_are_protocol_errors(params):
     protocol = install_events(FastMCP("invalid"))
     with pytest.raises(McpError) as error:
         await protocol.handle(EventRequest(method="events/stream", params=EventParams(**params)))
-    assert error.value.error.code == -32602
+    assert error.value.error.code == (-32023 if params["name"] == "unknown" else -32602)

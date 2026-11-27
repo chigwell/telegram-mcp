@@ -246,14 +246,14 @@ Every new message of a private chat, basic group or supergroup gets one numbered
 
 The debounce tools above keep their private-only behaviour.
 
-**MCP Events.** Clients can receive `telegram.message.created` through
-`events/stream` on stdio, Streamable HTTP and legacy SSE. Streamable HTTP also
-supports webhook subscriptions through `events/subscribe`. Subscriptions select
-one chat, or explicitly all allowed chats of an account. Outgoing messages are
-excluded by default. Events use existing configured access without another
-password or enable flag. Streams have independent lifetimes; webhook subscriptions
-expire, can be refreshed or stopped, and survive restarts. Neither mode supports
-protocol replay. See [delivery modes, setup and client limitations](docs/mcp-events.md).
+**MCP Events.** Clients can receive `telegram.message.created` through standard
+poll and push delivery on stdio and Streamable HTTP. Authenticated Streamable
+HTTP also supports webhooks. Legacy SSE retains tools but does not offer Events.
+Subscriptions select one chat, or explicitly all allowed chats of an account;
+outgoing messages are excluded by default. No Events enable flag is required.
+All modes share bounded replay from the existing in-memory log. Webhook
+registrations expire, can be refreshed or stopped, and survive restarts.
+See [delivery modes, configuration and client limitations](docs/mcp-events.md).
 
 **Updates missed while offline.** After a reconnect the server asks Telegram for the updates it missed (`catch_up`), so messages received during a network outage still reach the incoming feed and the event log. Telethon's own automatic reconnect does not do this, and it fetches a difference by itself only after 15 minutes without updates. On a flaky network set `TELEGRAM_CATCH_UP_INTERVAL` (seconds, e.g. `120`, at least `30`; default `0`, off) to ask for missed updates periodically; when nothing was missed the request returns an empty difference.
 
@@ -600,6 +600,14 @@ Prefer `http` when more than one MCP client (or many coding-agent sessions)
 will use the server: a single long-lived process holds one Telegram
 connection, instead of every client spawning its own Telethon session —
 Telegram throttles and may flag accounts that open many parallel sessions.
+
+HTTP authentication is optional. Set `TELEGRAM_MCP_HTTP_TOKEN` to a random secret
+of at least 32 printable ASCII characters to require `Authorization: Bearer <token>`
+on MCP HTTP requests. Configure the matching credential in your client. Webhook
+Events require authentication; ordinary tools, poll and push do not require it
+unless you configure it. There is no built-in OAuth login or authorization server.
+Host/Origin validation remains separate from authentication. See the
+[authenticated HTTP examples](docs/mcp-events.md#configuration).
 
 Every tool call also has a server-side ceiling of 55 seconds, configured with
 `TELEGRAM_TOOL_TIMEOUT_SECONDS`. A timed-out Telegram request returns an explicit
