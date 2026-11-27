@@ -825,6 +825,10 @@ the saved bytes and checks document downloads against Telegram's reported size.
 The result also includes `download_url` when remote downloads are configured.
 Without this option, the tool returns its usual text response.
 
+`download_media` respects Telegram's content protection. It refuses to save
+media from protected chats or messages, including embedded media in formatted
+posts, and refuses self-destructing attachments.
+
 Allowed roots can come from:
 
 - **Environment Variable (`TELEGRAM_ALLOWED_ROOTS`):** Semicolon- (`;`) or comma- (`,`) separated paths (also supports colon `:` on POSIX systems). Ideal for Docker, headless daemon setups, and MCP clients that pass settings via environment.

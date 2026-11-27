@@ -628,6 +628,10 @@ async def download_media(
 ) -> str:
     """
     Download media from a message in a chat.
+
+    Telegram-protected chats and messages, and self-destructing attachments,
+    cannot be saved with this tool.
+
     Args:
         chat_id: The chat ID or username.
         message_id: The message ID containing the media.
@@ -652,14 +656,22 @@ async def download_media(
         entity = await resolve_entity(chat_id, cl)
         if is_chat_blocked(chat_id, entity):
             return "Message data is restricted by TELEGRAM_BLOCKED_CHAT_IDS."
+        if getattr(entity, "noforwards", False):
+            return "Saving media from this Telegram chat is restricted."
         msg = await cl.get_messages(entity, ids=message_id)
         if not msg:
             return "No media found in the specified message."
+        attachment = msg.media
+        if (
+            getattr(msg, "noforwards", False)
+            or (getattr(attachment, "ttl_seconds", None) or 0) > 0
+        ):
+            return "Saving this Telegram attachment is restricted."
 
         # Block-format posts keep their embedded photos/videos as ids resolved
         # from rich_message.photos/documents — nothing sits in msg.media.
         target = msg
-        if not msg.media:
+        if not attachment:
             pool = [m for m in rich_message_media(msg) if m["media"] is not None]
             if media_id is not None:
                 pool = [m for m in pool if str(m["id"]) == str(media_id).strip()]
