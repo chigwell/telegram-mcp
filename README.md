@@ -260,7 +260,7 @@ The debounce tools above keep their private-only behaviour.
 The MCP Events standard requires authentication for webhook subscriptions.
 Set `TELEGRAM_MCP_HTTP_TOKEN` in the Telegram MCP server's environment; generate one with `python -c 'import secrets; print(secrets.token_urlsafe(32))'`.
 Configure the client to send the same value as `Authorization: Bearer <token>`.
-For [Claude Code HTTP authentication](https://code.claude.com/docs/en/mcp#environment-variable-expansion-in-mcpjson), add this to your project's `.mcp.json` and make the same environment variable available to the Claude Code process:
+Example for Claude Code with env substitution:
 
 ```json
 {
