@@ -1,5 +1,7 @@
 """Media MCP tools."""
 
+import asyncio
+import hashlib
 import io
 import json
 import mimetypes
@@ -50,6 +52,14 @@ def _known_media_size(message) -> Optional[int]:
         return size
     size = getattr(message, "size", None)  # a bare Document resolved from rich_message
     return size if isinstance(size, int) and size >= 0 else None
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _force_document_kwargs(force_document: bool) -> Dict[str, bool]:
@@ -614,6 +624,7 @@ async def download_media(
     media_id: Optional[Union[int, str]] = None,
     ctx: Optional[Context] = None,
     account: Optional[str] = None,
+    include_metadata: bool = False,
 ) -> str:
     """
     Download media from a message in a chat.
@@ -630,6 +641,9 @@ async def download_media(
             clients). Without it, the first
             embedded media is downloaded. Passing it for a message with
             regular media is an error — pick the media by message instead.
+        include_metadata: Return a JSON object with the saved path, original
+            filename when supplied by Telegram, byte count, and SHA-256. It
+            also includes the signed download URL when configured.
     """
     try:
         cl = get_client(account)
@@ -701,7 +715,8 @@ async def download_media(
             temp_final_path = Path(downloaded).resolve(strict=True)
             if temp_final_path.parent != temp_dir.resolve():
                 return "Download failed: resulting temporary path is invalid."
-            if temp_final_path.stat().st_size > limit:
+            size_bytes = temp_final_path.stat().st_size
+            if size_bytes > limit:
                 return f"Media is too large for download_media (limit: {limit} bytes)."
 
             final_path = out_path
@@ -715,8 +730,38 @@ async def download_media(
                 if path_error:
                     return path_error
 
+            metadata = None
+            if include_metadata:
+                document = target
+                if not isinstance(document, types.Document):
+                    document = getattr(getattr(target, "media", None), "document", None)
+                original_filename = None
+                if isinstance(document, types.Document):
+                    if size_bytes != document.size:
+                        return (
+                            "Download failed: file size differs from Telegram document metadata."
+                        )
+                    original_filename = next(
+                        (
+                            attr.file_name
+                            for attr in document.attributes
+                            if isinstance(attr, types.DocumentAttributeFilename)
+                        ),
+                        None,
+                    )
+                metadata = {
+                    "path": str(final_path),
+                    "original_filename": original_filename,
+                    "size_bytes": size_bytes,
+                    "sha256": await asyncio.to_thread(_sha256_file, temp_final_path),
+                }
+
             os.replace(temp_final_path, final_path)
             url = media_links.download_url(final_path, _first_server_root())
+            if metadata is not None:
+                if url:
+                    metadata["download_url"] = url
+                return json.dumps(metadata, ensure_ascii=False)
             if url:
                 return (
                     f"Media downloaded to {final_path}. "
