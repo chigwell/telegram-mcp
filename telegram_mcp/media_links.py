@@ -15,6 +15,7 @@ import logging
 import os
 import secrets
 import shutil
+import stat
 import time
 from pathlib import Path
 from typing import Optional
@@ -51,14 +52,34 @@ def _signed(kind: str, prefix: str, rel: str, now: Optional[float]) -> str:
     return f"{base_url()}{prefix}{quote(rel)}?{query}"
 
 
+def _is_link(path: Path) -> bool:
+    """Return True if *path* is a symlink or a Windows directory junction."""
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    if is_junction is not None:
+        return bool(is_junction())
+    mount_point_tag = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)
+    if mount_point_tag is None:
+        return False
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return getattr(st, "st_reparse_tag", 0) == mount_point_tag
+
+
 def _verified(kind: str, rel_path: str, expires: str, sig: str, now: Optional[float]) -> bool:
+    if not isinstance(sig, str):
+        return False
     try:
         expires_at = int(expires)
-    except ValueError:
+    except (TypeError, ValueError):
         return False
     if expires_at < _now(now):
         return False
-    return hmac.compare_digest(sig, _signature(kind, rel_path, expires_at))
+    expected = _signature(kind, rel_path, expires_at).encode("ascii")
+    return hmac.compare_digest(sig.encode("utf-8", "surrogatepass"), expected)
 
 
 def download_url(
@@ -78,18 +99,26 @@ def resolve_download(
     rel_path: str, expires: str, sig: str, root: Optional[Path], now: Optional[float] = None
 ) -> Optional[Path]:
     """The file a download URL names, or None if it is invalid, expired or gone."""
-    if root is None or not _verified("media", rel_path, expires, sig, now):
+    if root is None or "\x00" in rel_path or not _verified("media", rel_path, expires, sig, now):
         return None
-    root = root.resolve()
-    target = (root / rel_path).resolve()
-    if not target.is_relative_to(root) or not target.is_file():
+    try:
+        root = root.resolve()
+        target = (root / rel_path).resolve()
+        if not target.is_relative_to(root) or not target.is_file():
+            return None
+    except (OSError, RuntimeError, ValueError):
         return None
     return target
 
 
 def _clean_slot_entry(entry: Path) -> None:
     try:
-        if entry.is_dir():
+        if _is_link(entry):
+            if entry.is_symlink():
+                entry.unlink(missing_ok=True)
+            else:
+                entry.rmdir()
+        elif entry.is_dir():
             shutil.rmtree(entry)
         else:
             entry.unlink(missing_ok=True)
@@ -117,7 +146,7 @@ def _clean_slot(slot: Path) -> None:
 def sweep_expired_uploads(root: Path, now: Optional[float] = None) -> None:
     """Delete upload directories modified more than two URL lifetimes ago."""
     uploads = root / UPLOAD_SUBDIR
-    if not uploads.is_dir():
+    if _is_link(uploads) or not uploads.is_dir():
         return
     cutoff = _now(now) - 2 * URL_TTL_SECONDS
     try:
@@ -128,7 +157,7 @@ def sweep_expired_uploads(root: Path, now: Optional[float] = None) -> None:
 
     for slot in slots:
         try:
-            if not slot.is_dir() or slot.stat().st_mtime >= cutoff:
+            if _is_link(slot) or not slot.is_dir() or slot.stat().st_mtime >= cutoff:
                 continue
         except FileNotFoundError:
             continue
@@ -143,8 +172,15 @@ def upload_slot(
     filename: str, root: Optional[Path], now: Optional[float] = None
 ) -> Optional[dict]:
     """{url, file_path} for one upload under root, or None without a base URL, root or name."""
+    if not isinstance(filename, str):
+        return None
     name = Path(filename.replace("\\", "/")).name.strip()
-    if base_url() is None or root is None or name in ("", ".", ".."):
+    if (
+        base_url() is None
+        or root is None
+        or name in ("", ".", "..")
+        or any(ord(c) < 32 or ord(c) == 127 for c in name)
+    ):
         return None
     sweep_expired_uploads(root, now)
     rel = f"{secrets.token_hex(16)}/{name}"
@@ -158,10 +194,13 @@ def resolve_upload(
     rel_path: str, expires: str, sig: str, root: Optional[Path], now: Optional[float] = None
 ) -> Optional[Path]:
     """Where an upload URL writes, or None if it is invalid, expired or already used."""
-    if root is None or not _verified("upload", rel_path, expires, sig, now):
+    if root is None or "\x00" in rel_path or not _verified("upload", rel_path, expires, sig, now):
         return None
-    uploads = (root / UPLOAD_SUBDIR).resolve()
-    target = (uploads / rel_path).resolve()
-    if not target.is_relative_to(uploads) or target.exists():
+    try:
+        uploads = (root / UPLOAD_SUBDIR).resolve()
+        target = (uploads / rel_path).resolve()
+        if not target.is_relative_to(uploads) or target.exists():
+            return None
+    except (OSError, RuntimeError, ValueError):
         return None
     return target
