@@ -20,6 +20,7 @@ extend-ignore =
     F405
 per-file-ignores =
     telegram_mcp/runtime.py: E402
+    tests/fixtures/event_server.py: E402
 exclude =
     .git,
     __pycache__,

@@ -248,6 +248,34 @@ The debounce tools above keep their private-only behaviour.
 
 **Updates missed while offline.** After a reconnect the server asks Telegram for the updates it missed (`catch_up`), so messages received during a network outage still reach the incoming feed and the event log. Telethon's own automatic reconnect does not do this, and it fetches a difference by itself only after 15 minutes without updates. On a flaky network set `TELEGRAM_CATCH_UP_INTERVAL` (seconds, e.g. `120`, at least `30`; default `0`, off) to ask for missed updates periodically; when nothing was missed the request returns an empty difference.
 
+**MCP Events.** Supports the official MCP Events beta with `telegram.message.created` and all three delivery methods: poll, push and webhooks. Compatibility matrix for event delivery methods and MCP connection types:
+
+| Connection configuration | Poll | Push | Webhooks |
+|---|---|---|---|
+| **stdio** | Yes | Yes | Not offered |
+| **Anonymous Streamable HTTP** | Yes | Yes | Not offered |
+| **Authenticated Streamable HTTP** | Yes | Yes | Yes |
+| **Legacy SSE** | Not offered | Not offered | Not offered |
+
+The MCP Events standard requires authentication for webhook subscriptions.
+Set `TELEGRAM_MCP_HTTP_TOKEN` in the Telegram MCP server's environment; generate one with `python -c 'import secrets; print(secrets.token_urlsafe(32))'`.
+Configure the client to send the same value as `Authorization: Bearer <token>`.
+Example for Claude Code with env substitution:
+
+```json
+{
+  "mcpServers": {
+    "telegram": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer ${TELEGRAM_MCP_HTTP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
 ## Requirements
 
 - Python 3.10+
@@ -591,6 +619,10 @@ Prefer `http` when more than one MCP client (or many coding-agent sessions)
 will use the server: a single long-lived process holds one Telegram
 connection, instead of every client spawning its own Telethon session —
 Telegram throttles and may flag accounts that open many parallel sessions.
+
+HTTP authentication is optional. Set `TELEGRAM_MCP_HTTP_TOKEN` in the server's
+environment and configure the client to send the same value in its
+`Authorization: Bearer <token>` header.
 
 Every tool call also has a server-side ceiling of 55 seconds, configured with
 `TELEGRAM_TOOL_TIMEOUT_SECONDS`. A timed-out Telegram request returns an explicit

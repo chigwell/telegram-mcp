@@ -155,6 +155,7 @@ def install_protocol_compatibility() -> None:
 
     try:
         _install_silent_request_cancel()
+        _install_modern_results()
     except (ImportError, AttributeError) as exc:
         logger.debug("Could not patch RequestResponder.cancel: %s", exc)
 
@@ -177,13 +178,77 @@ def _install_silent_request_cancel() -> None:
     if int(version("mcp").split(".")[0]) >= 2:
         return
 
+    from mcp.server.lowlevel.server import Server
+
+    original_handle_request = Server._handle_request
+
+    async def handle_request(self, message, *args, **kwargs):
+        # Queued cancellation completes the responder before dispatch enters its scope.
+        if message._completed:
+            return
+        await original_handle_request(self, message, *args, **kwargs)
+
     async def cancel(self) -> None:
-        if not self._entered:
-            raise RuntimeError("RequestResponder must be used as a context manager")
         if not self._cancel_scope:
             raise RuntimeError("No active cancel scope")
 
         self._cancel_scope.cancel()
         self._completed = True
 
+    Server._handle_request = handle_request
     RequestResponder.cancel = cancel
+
+
+def _install_modern_results() -> None:
+    """Add MCP 2026-07-28 response fields missing from our current SDK 1.x.
+
+    Modern clients such as OpenCode reject replies without resultType and the
+    required cache hints (ttlMs and cacheScope). Add them for modern requests
+    while leaving older clients' replies unchanged.
+
+    Remove this patch after migrating to MCP SDK 2.0+, which adds these fields itself.
+    """
+    from importlib.metadata import version
+
+    if int(version("mcp").split(".")[0]) >= 2:
+        return
+
+    from mcp.shared.session import RequestResponder
+    from mcp.server.session import ServerSession
+    from mcp.types import ErrorData
+
+    original_respond = RequestResponder.respond
+
+    async def respond(self, response):
+        if isinstance(self._session, ServerSession) and not isinstance(response, ErrorData):
+            from telegram_mcp.event_protocol import EVENT_TRANSPORT
+
+            request = getattr(self.message_metadata, "request_context", None)
+            if request is not None:
+                modern = request.headers.get("mcp-protocol-version") == LATEST_PROTOCOL_VERSION
+            else:
+                params = self._session.client_params
+                modern = getattr(params, "protocolVersion", None) == LATEST_PROTOCOL_VERSION
+                modern = modern or getattr(self._session, "_telegram_modern", False)
+            if modern and EVENT_TRANSPORT.get() != "sse":
+                # SDK 1.x result models predate the required modern response discriminator.
+                result = getattr(response, "root", response)
+                fields = {"resultType": getattr(result, "resultType", "complete")}
+                if self.request.root.method in {
+                    "server/discover",
+                    "tools/list",
+                    "prompts/list",
+                    "resources/list",
+                    "resources/templates/list",
+                    "resources/read",
+                }:
+                    fields.update(ttlMs=0, cacheScope="private")
+                if hasattr(response, "root"):
+                    response = response.model_copy(
+                        update={"root": response.root.model_copy(update=fields)}
+                    )
+                else:
+                    response = response.model_copy(update=fields)
+        await original_respond(self, response)
+
+    RequestResponder.respond = respond

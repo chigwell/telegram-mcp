@@ -22,6 +22,7 @@ import stat
 import time
 import logging
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 
@@ -324,6 +325,8 @@ def _append_event(record: Dict[str, Any]) -> Dict[str, Any]:
     global _event_seq, _event_signal
     _event_seq += 1
     record = dict(record, seq=_event_seq)
+    if not record.get("date"):
+        record["date"] = datetime.now(timezone.utc).isoformat()
     _event_log.append(record)
     signal, _event_signal = _event_signal, None
     if signal is not None:
@@ -463,7 +466,12 @@ def _public_event(rec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _select_events(
-    after_seq: int, target: Optional[int], account: Optional[str], limit: int
+    after_seq: int,
+    target: Optional[int],
+    account: Optional[str],
+    limit: int,
+    *,
+    public: bool = True,
 ) -> Tuple[list, bool]:
     """Events after `after_seq` for the target chat; and whether some were lost
     to the ring's bound (the caller then has to reconcile from history)."""
@@ -482,7 +490,7 @@ def _select_events(
             rec["chat_id"], rec.get("_chat")
         ):
             continue
-        picked.append(_public_event(rec))
+        picked.append(_public_event(rec) if public else rec)
         if len(picked) >= limit:
             break
     return picked, gap
