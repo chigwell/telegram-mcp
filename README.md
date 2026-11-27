@@ -246,15 +246,27 @@ Every new message of a private chat, basic group or supergroup gets one numbered
 
 The debounce tools above keep their private-only behaviour.
 
-**MCP Events.** Clients can receive `telegram.message.created` through standard
-poll and push delivery on stdio and Streamable HTTP. Authenticated Streamable
-HTTP also supports webhooks. Legacy SSE retains tools but does not offer Events.
-Subscriptions select one chat, or explicitly all allowed chats of an account;
-outgoing messages are excluded by default. No Events enable flag is required.
-All modes share bounded replay from the existing in-memory log. Webhook
-registrations expire, can be refreshed or stopped, and survive restarts.
-
 **Updates missed while offline.** After a reconnect the server asks Telegram for the updates it missed (`catch_up`), so messages received during a network outage still reach the incoming feed and the event log. Telethon's own automatic reconnect does not do this, and it fetches a difference by itself only after 15 minutes without updates. On a flaky network set `TELEGRAM_CATCH_UP_INTERVAL` (seconds, e.g. `120`, at least `30`; default `0`, off) to ask for missed updates periodically; when nothing was missed the request returns an empty difference.
+
+**MCP Events.** Supports the official MCP Events beta with `telegram.message.created` and all three delivery methods: poll, push and webhooks. Compatibility matrix for event delivery methods and MCP connection types:
+
+| Connection configuration | Poll | Push | Webhooks |
+|---|---|---|---|
+| **stdio** | Yes | Yes | Not offered |
+| **Anonymous Streamable HTTP** | Yes | Yes | Not offered |
+| **Authenticated Streamable HTTP** | Yes | Yes | Yes |
+| **Legacy SSE** | Not offered | Not offered | Not offered |
+
+The MCP Events standard requires authentication for webhook subscriptions.
+Set `TELEGRAM_MCP_HTTP_TOKEN` in the Telegram MCP server's environment; generate one with `python -c 'import secrets; print(secrets.token_urlsafe(32))'`.
+Configure the client to send the same value as `Authorization: Bearer <token>`.
+For [Codex HTTP authentication](https://developers.openai.com/codex/mcp/), add this to `~/.codex/config.toml` and make the same environment variable available to the Codex process:
+
+```toml
+[mcp_servers.telegram]
+url = "http://127.0.0.1:8765/mcp"
+bearer_token_env_var = "TELEGRAM_MCP_HTTP_TOKEN"
+```
 
 ## Requirements
 
@@ -600,12 +612,9 @@ will use the server: a single long-lived process holds one Telegram
 connection, instead of every client spawning its own Telethon session —
 Telegram throttles and may flag accounts that open many parallel sessions.
 
-HTTP authentication is optional. Set `TELEGRAM_MCP_HTTP_TOKEN` to a random secret
-of at least 32 printable ASCII characters to require `Authorization: Bearer <token>`
-on MCP HTTP requests. Configure the matching credential in your client. Webhook
-Events require authentication; ordinary tools, poll and push do not require it
-unless you configure it. There is no built-in OAuth login or authorization server.
-Host/Origin validation remains separate from authentication.
+HTTP authentication is optional. Set `TELEGRAM_MCP_HTTP_TOKEN` in the server's
+environment and configure the client to send the same value in its
+`Authorization: Bearer <token>` header.
 
 Every tool call also has a server-side ceiling of 55 seconds, configured with
 `TELEGRAM_TOOL_TIMEOUT_SECONDS`. A timed-out Telegram request returns an explicit
