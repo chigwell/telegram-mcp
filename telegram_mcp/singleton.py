@@ -104,7 +104,10 @@ try_lock_exclusive = _try_lock
 release_lock = _unlock
 
 
-DEFAULT_LOCK_DIR = Path(tempfile.gettempdir()) / "telegram-mcp-locks"
+# Fixed per-user dir (not TMPDIR): consumers spawned by opencode vs launchd
+# may see different TMPDIR values; the pool/label locks must be shared across
+# all of them (audit 15.11.2026).
+DEFAULT_LOCK_DIR = Path.home() / ".local" / "state" / "telegram-mcp" / "locks"
 DEFAULT_GRACE_SECONDS = 20.0
 DEFAULT_POLL_INTERVAL = 0.5
 

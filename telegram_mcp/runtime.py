@@ -777,11 +777,19 @@ def _parse_session_pool() -> List[str]:
 
 def _acquire_session(pool: List[str]) -> str:
     """Claim the first free session in the pool via an advisory file lock."""
-    lock_dir = os.path.join(tempfile.gettempdir(), "telegram-mcp-session-locks")
+    # Fixed per-user dir (not TMPDIR): opencode-spawned and launchd-spawned
+    # consumers may get different TMPDIR values, which would let two processes
+    # claim the same pool slot via different lock dirs (audit 15.11.2026).
+    lock_root = Path.home() / ".local" / "state" / "telegram-mcp"
+    lock_dir = lock_root / "session-locks"
     try:
         os.makedirs(lock_dir, exist_ok=True)
     except OSError:
-        lock_dir = tempfile.gettempdir()
+        lock_dir = os.path.join(tempfile.gettempdir(), "telegram-mcp-session-locks")
+        try:
+            os.makedirs(lock_dir, exist_ok=True)
+        except OSError:
+            lock_dir = tempfile.gettempdir()
     for idx, session in enumerate(pool):
         digest = hashlib.sha1(session.encode("utf-8")).hexdigest()[:16]
         lock_path = os.path.join(lock_dir, f"session-{digest}.lock")

@@ -270,14 +270,18 @@ def main() -> None:
         "used for local authentication.\n"
     )
 
-    try:
-        label = (
-            input("Account label (optional, e.g. 'work', 'personal'; leave empty for default): ")
-            .strip()
-            .lower()
-        )
-    except EOFError:
-        # Non-interactive stdin (piped/scripted runs): fall back to the default label.
+    if sys.stdin is not None and sys.stdin.isatty():
+        try:
+            label = (
+                input("Account label (optional, e.g. 'work', 'personal'; leave empty for default): ")
+                .strip()
+                .lower()
+            )
+        except EOFError:
+            # Non-interactive stdin (piped/scripted runs): fall back to the default label.
+            label = ""
+    else:
+        # Scripted runs (stdin closed/redirected): default label, no prompt shown.
         label = ""
     # The suggested env var must match what the migrator and the server read:
     # `export TELEGRAM_SESSION_STRING_MY-WORK=...` is not valid shell syntax.
