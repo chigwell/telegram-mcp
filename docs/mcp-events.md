@@ -168,10 +168,10 @@ Unsubscribe using the original name, arguments and delivery URL, without a secre
 A delivery already in flight may arrive after cancellation.
 
 Registrations survive restart in
-`${XDG_STATE_HOME:-~/.local/state}/telegram-mcp/subscriptions.json`;
-`TELEGRAM_MCP_EVENTS_FILE` overrides the path. Writes are atomic and private
-(mode 0600 on POSIX). Only one HTTP app may own a state file. Separate instances
-need separate files. Stdio and anonymous HTTP do not open the webhook store.
+`${XDG_STATE_HOME:-~/.local/state}/telegram-mcp/subscriptions.json`.
+Writes are atomic and private (mode 0600 on POSIX). Only one HTTP app may own a
+state file. Separate instances need separate state directories. Stdio and anonymous
+HTTP do not open the webhook store.
 
 Each delivery has a random `webhook-id`, distinct from its occurrence `eventId`.
 Four concurrent deliveries retry independently, with four total attempts and

@@ -42,5 +42,5 @@ def _reset_floodgate():
 @pytest.fixture(autouse=True)
 def _isolated_event_subscriptions(tmp_path, monkeypatch):
     """Never load or write the developer's real webhook subscription state."""
-    monkeypatch.setenv("TELEGRAM_MCP_EVENTS_FILE", str(tmp_path / "subscriptions.json"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.delenv("TELEGRAM_MCP_HTTP_TOKEN", raising=False)

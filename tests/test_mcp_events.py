@@ -340,10 +340,9 @@ def http_headers():
     }
 
 
-def enabled_app(monkeypatch, tmp_path, authenticated=True):
+def enabled_app(monkeypatch, authenticated=True):
     if authenticated:
         monkeypatch.setenv("TELEGRAM_MCP_HTTP_TOKEN", "t" * 32)
-    monkeypatch.setenv("TELEGRAM_MCP_EVENTS_FILE", str(tmp_path / "subscriptions.json"))
     server = FastMCP("events-test", stateless_http=True)
 
     @server.tool()
@@ -354,7 +353,7 @@ def enabled_app(monkeypatch, tmp_path, authenticated=True):
 
 
 def test_http_discovery_initialize_and_tools_with_configured_auth(monkeypatch, tmp_path):
-    app = enabled_app(monkeypatch, tmp_path)
+    app = enabled_app(monkeypatch)
     headers = http_headers()
     with TestClient(app, base_url="http://localhost:8765") as client:
         body = {"jsonrpc": "2.0", "id": 1, "method": "events/list"}
@@ -468,7 +467,7 @@ def test_mounted_host_checks_and_meta(monkeypatch, tmp_path):
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
-    app = enabled_app(monkeypatch, tmp_path)
+    app = enabled_app(monkeypatch)
     mounted = Starlette(routes=[Mount("/telegram", app)])
     headers = http_headers()
     with (
@@ -500,7 +499,7 @@ def test_mounted_host_checks_and_meta(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_subscription_does_not_block_normal_tool_request(monkeypatch, tmp_path):
-    app = enabled_app(monkeypatch, tmp_path)
+    app = enabled_app(monkeypatch)
     service = app.app.state.telegram_webhooks
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -539,7 +538,7 @@ async def test_subscription_does_not_block_normal_tool_request(monkeypatch, tmp_
 
 @pytest.mark.asyncio
 async def test_http_refuses_unstarted_subscription_service(monkeypatch, tmp_path):
-    app = enabled_app(monkeypatch, tmp_path)
+    app = enabled_app(monkeypatch)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://localhost:8765"
     ) as client:
@@ -549,13 +548,15 @@ async def test_http_refuses_unstarted_subscription_service(monkeypatch, tmp_path
                 headers=http_headers(),
                 json={"jsonrpc": "2.0", "id": 1, "method": "events/subscribe", "params": params()},
             )
-    assert not (tmp_path / "subscriptions.json").exists()
+    assert not (tmp_path / "state" / "telegram-mcp" / "subscriptions.json").exists()
 
 
 @pytest.mark.asyncio
 async def test_lifespan_startup_failure_is_explicit(monkeypatch, tmp_path):
-    app = enabled_app(monkeypatch, tmp_path)
-    (tmp_path / "subscriptions.json").write_text("{}")
+    app = enabled_app(monkeypatch)
+    path = app.app.state.telegram_webhooks.store.path
+    path.parent.mkdir(parents=True)
+    path.write_text("{}")
     monkeypatch.setattr(
         app.app.state.telegram_webhooks, "start", AsyncMock(side_effect=OSError("locked"))
     )
@@ -613,9 +614,9 @@ def test_webhooks_belong_to_the_current_http_application(monkeypatch, tmp_path, 
 
     monkeypatch.setenv("TELEGRAM_MCP_HTTP_TOKEN", "t" * 32)
     server = FastMCP("separate-apps", stateless_http=True)
-    monkeypatch.setenv("TELEGRAM_MCP_EVENTS_FILE", str(tmp_path / "one.json"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "one"))
     first = create_streamable_http_app(server)
-    monkeypatch.setenv("TELEGRAM_MCP_EVENTS_FILE", str(tmp_path / "two.json"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "two"))
     second = create_streamable_http_app(server)
     assert first.app.state.telegram_webhooks is not second.app.state.telegram_webhooks
     assert install_events(server).catalog()["events"][0]["delivery"] == ["poll", "push"]
@@ -631,7 +632,7 @@ def test_webhooks_belong_to_the_current_http_application(monkeypatch, tmp_path, 
             "webhook",
         ]
         assert not first.app.state.telegram_webhooks.running
-        assert not (tmp_path / "one.json").exists()
+        assert not (tmp_path / "one" / "telegram-mcp" / "subscriptions.json").exists()
         subscribed = client.post(
             "/mcp",
             headers=http_headers(),
@@ -645,7 +646,7 @@ def test_webhooks_belong_to_the_current_http_application(monkeypatch, tmp_path, 
 
 def test_disabled_log_keeps_http_tools_working(monkeypatch, tmp_path):
     monkeypatch.setattr(events, "_EVENT_LOG_SIZE", 0)
-    app = enabled_app(monkeypatch, tmp_path)
+    app = enabled_app(monkeypatch)
     headers = http_headers()
     with TestClient(app, base_url="http://localhost:8765") as client:
         response = client.post(
@@ -658,7 +659,7 @@ def test_disabled_log_keeps_http_tools_working(monkeypatch, tmp_path):
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "ping"}},
         )
         assert "pong" in tool.text
-    assert not (tmp_path / "subscriptions.json").exists()
+    assert not (tmp_path / "state" / "telegram-mcp" / "subscriptions.json").exists()
 
 
 @pytest.mark.asyncio

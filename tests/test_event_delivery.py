@@ -188,7 +188,7 @@ def test_anonymous_catalog_and_webhook_failure_are_actionable(tmp_path):
         assert "authenticated" in catalog["events"][0]["description"]
         denied = response_json(rpc(client, "events/subscribe", params()))["error"]
         assert denied["code"] == -32024 and "Configure" in denied["message"]
-        assert not (tmp_path / "subscriptions.json").exists()
+        assert not (tmp_path / "state" / "telegram-mcp" / "subscriptions.json").exists()
         assert response_json(rpc(client, "tools/list"))["result"]["tools"]
 
 
@@ -383,8 +383,8 @@ def test_static_token_rotation_preserves_webhook_owner(monkeypatch, tmp_path):
         data = json.loads(body)
         return 200, json.dumps({"challenge": data.get("challenge")}, ensure_ascii=False).encode()
 
-    path = tmp_path / "subscriptions.json"
-    monkeypatch.setenv("TELEGRAM_MCP_EVENTS_FILE", str(path))
+    path = tmp_path / "telegram-mcp" / "subscriptions.json"
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setattr(hooks, "post_webhook", callback)
     ids = []
     for token in ("a" * 32, "b" * 32):

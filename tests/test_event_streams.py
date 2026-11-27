@@ -158,7 +158,7 @@ def server_env(tmp_path):
         ),
         PYTHONPATH=str(SERVER.parents[2]),
         PYTHON_DOTENV_DISABLED="1",
-        TELEGRAM_MCP_EVENTS_FILE=str(tmp_path / "subscriptions.json"),
+        XDG_STATE_HOME=str(tmp_path / "state"),
     )
     return env
 

@@ -129,7 +129,7 @@ def with_events(app, server):
     if not configured:
         return app
     state = Path(os.getenv("XDG_STATE_HOME") or Path.home() / ".local" / "state")
-    path = os.getenv("TELEGRAM_MCP_EVENTS_FILE") or state / "telegram-mcp" / "subscriptions.json"
+    path = state / "telegram-mcp" / "subscriptions.json"
     subscriptions = MessageSubscriptions(path, {STATIC_PRINCIPAL})
     app.state.telegram_webhooks = subscriptions
     original_lifespan = app.router.lifespan_context
