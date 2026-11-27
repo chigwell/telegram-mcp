@@ -127,7 +127,11 @@ async def test_telethon_sends_offset_date_as_search_max_date_on_first_request_on
     client = _CapturingTelethonClient()
     entity = types.InputPeerChannel(channel_id=1001, access_hash=1)
 
-    async for _ in client.iter_messages(entity, search="前端", offset_date=NEXT_MIDNIGHT):
+    # limit=None makes Telethon default wait_time to 1s between pages; the
+    # request sequence under test does not need that pause.
+    async for _ in client.iter_messages(
+        entity, search="前端", offset_date=NEXT_MIDNIGHT, wait_time=0
+    ):
         pass
 
     first, second = client.requests
