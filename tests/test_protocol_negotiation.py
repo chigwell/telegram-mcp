@@ -231,6 +231,80 @@ def test_http_transport_rejects_lookalike_origins(origin):
         assert response.status_code == 403
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_headers",
+    [
+        [(b"origin", b"https://evil.example"), (b"origin", b"http://localhost:3000")],
+        [(b"origin", b"https://evil.example"), (b"origin", b"")],
+        [(b"origin", b"")],
+        [(b"Origin", b"https://evil.example")],
+        [(b"origin", b"http://localhost:0")],
+        [(b"origin", b"http://localhost:65536")],
+        [(b"origin", b"http://localhost:\xb2")],
+    ],
+)
+async def test_http_transport_rejects_duplicate_empty_or_invalid_origin_headers(raw_headers):
+    app = create_streamable_http_app(mcp)
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "OPTIONS",
+        "scheme": "http",
+        "path": "/mcp",
+        "raw_path": b"/mcp",
+        "query_string": b"",
+        "headers": [(b"host", b"localhost:8765"), *raw_headers],
+    }
+    await app(scope, receive, send)
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert start["status"] == 403
+    resp_header_names = {k.lower() for k, _ in start.get("headers", [])}
+    assert b"access-control-allow-origin" not in resp_header_names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["OPTIONS", "GET"])
+async def test_http_transport_rejects_duplicate_protocol_version_headers(method):
+    app = create_streamable_http_app(mcp)
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "http",
+        "path": "/mcp",
+        "raw_path": b"/mcp",
+        "query_string": b"",
+        "headers": [
+            (b"host", b"localhost:8765"),
+            (b"accept", b"application/json"),
+            (b"mcp-protocol-version", b"1999-01-01"),
+            (b"mcp-protocol-version", b"2026-07-28"),
+        ],
+    }
+    await app(scope, receive, send)
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert start["status"] == 400
+
+
 def test_http_transport_preflight_echoes_only_allowed_origin():
     app = create_streamable_http_app(mcp)
     with TestClient(app, base_url="http://localhost:8765") as client:
