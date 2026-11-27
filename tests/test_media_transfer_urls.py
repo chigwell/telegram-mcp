@@ -212,3 +212,60 @@ def test_sweep_cleans_subdirectories_inside_expired_slot(root):
 
     media_links.sweep_expired_uploads(root)
     assert not slot.exists()
+
+
+@pytest.mark.asyncio
+async def test_non_ascii_signature_returns_404_not_500(root, client):
+    """Non-ASCII ?sig= values return 404 instead of crashing hmac.compare_digest."""
+    future = int(time.time()) + 60
+    get_resp = client.get(f"/media/any.txt?expires={future}&sig=%C3%A9")
+    assert get_resp.status_code == 404
+    put_resp = client.put(f"/upload/slot/any.txt?expires={future}&sig=%C3%A9", content=b"x")
+    assert put_resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_upload_slot_rejects_control_characters_and_nul(root):
+    assert media_links.upload_slot("bad\x00name.pdf", root) is None
+    assert media_links.upload_slot("bad\nname.pdf", root) is None
+    assert not (await _prepare_upload("bad\x00name.pdf")).startswith("{")
+
+    future = int(time.time()) + 60
+    bad_rel = "slot/bad\x00name.pdf"
+    sig = media_links._signature("upload", bad_rel, future)
+    assert media_links.resolve_upload(bad_rel, str(future), sig, root) is None
+    dl_sig = media_links._signature("media", bad_rel, future)
+    assert media_links.resolve_download(bad_rel, str(future), dl_sig, root) is None
+
+
+def test_sweep_does_not_follow_linked_slot_outside_uploads(root, tmp_path):
+    """A symlinked or junctioned slot under uploads/ must never delete external targets."""
+    import subprocess
+
+    outside = tmp_path / "outside-target"
+    outside.mkdir()
+    victim = outside / "keep.txt"
+    victim.write_text("important", encoding="utf-8")
+    old_stamp = time.time() - 3 * media_links.URL_TTL_SECONDS
+    os.utime(outside, (old_stamp, old_stamp))
+
+    uploads = root / "uploads"
+    uploads.mkdir(parents=True)
+    linked_slot = uploads / "linked-slot"
+    try:
+        linked_slot.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        if os.name != "nt":
+            pytest.skip("directory symlinks are not available")
+        proc = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(linked_slot), str(outside)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            pytest.skip("junctions are not available")
+
+    media_links.sweep_expired_uploads(root)
+    assert victim.exists()
+    assert victim.read_text(encoding="utf-8") == "important"
