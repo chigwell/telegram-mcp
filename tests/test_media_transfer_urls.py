@@ -128,7 +128,8 @@ def test_download_url_serves_file_and_refuses_bad_links(root, client, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_download_media_reports_the_url(root, monkeypatch):
+@pytest.mark.parametrize("include_metadata", [False, True])
+async def test_download_media_reports_the_url(root, monkeypatch, include_metadata):
     target = root / "downloads" / "doc.pdf"
     target.parent.mkdir()
     message = SimpleNamespace(id=7, media=object(), file=SimpleNamespace(size=3))
@@ -152,10 +153,21 @@ async def test_download_media_reports_the_url(root, monkeypatch):
     monkeypatch.setattr(media, "resolve_entity", resolve_entity)
     monkeypatch.setattr(media, "_resolve_writable_file_path", resolve_path)
 
-    result = await _download_media(123, 7, file_path=str(target))
+    result = await _download_media(
+        123, 7, file_path=str(target), include_metadata=include_metadata
+    )
 
-    assert result.startswith(f"Media downloaded to {target}. From another machine, fetch it from ")
-    assert f"{BASE}/media/downloads/doc.pdf?" in result
+    if include_metadata:
+        metadata = json.loads(result)
+        assert metadata["path"] == str(target)
+        assert metadata["original_filename"] is None
+        assert metadata["size_bytes"] == 3
+        assert metadata["download_url"].startswith(f"{BASE}/media/downloads/doc.pdf?")
+    else:
+        assert result.startswith(
+            f"Media downloaded to {target}. From another machine, fetch it from "
+        )
+        assert f"{BASE}/media/downloads/doc.pdf?" in result
 
 
 def test_sweep_removes_only_stale_upload_slots(root):

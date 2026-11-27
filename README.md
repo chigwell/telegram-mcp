@@ -806,6 +806,13 @@ File-path and media tools (`send_file`, `edit_message_media`, `download_media`, 
 
 `send_file` and `send_album` keep their existing success line and append `MessageIDs: [...]` when Telethon returns the sent messages. Album IDs follow the same order as `file_paths`; a `null` entry means Telethon could not map that position to a message ID. Pass a known ID to `edit_message_media` to replace that item.
 
+Pass `include_metadata=true` to `download_media` for a JSON result with
+`path`, `original_filename`, `size_bytes`, and `sha256`. The original filename
+comes from Telegram and is `null` for media without one. The server hashes
+the saved bytes and checks document downloads against Telegram's reported size.
+The result also includes `download_url` when remote downloads are configured.
+Without this option, the tool returns its usual text response.
+
 Allowed roots can come from:
 
 - **Environment Variable (`TELEGRAM_ALLOWED_ROOTS`):** Semicolon- (`;`) or comma- (`,`) separated paths (also supports colon `:` on POSIX systems). Ideal for Docker, headless daemon setups, and MCP clients that pass settings via environment.
