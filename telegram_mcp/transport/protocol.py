@@ -200,7 +200,14 @@ def _install_silent_request_cancel() -> None:
 
 
 def _install_modern_results() -> None:
-    """Bridge SDK 1.x results to the modern discriminator and caching contract."""
+    """Add MCP 2026-07-28 response fields missing from our current SDK 1.x.
+
+    Modern clients such as OpenCode reject replies without resultType and the
+    required cache hints (ttlMs and cacheScope). Add them for modern requests
+    while leaving older clients' replies unchanged.
+
+    Remove this patch after migrating to MCP SDK 2.0+, which adds these fields itself.
+    """
     from importlib.metadata import version
 
     if int(version("mcp").split(".")[0]) >= 2:
