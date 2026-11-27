@@ -3819,6 +3819,18 @@ async def get_message_reactions(
         )
 
 
+async def _draft_reply_topic(cl, peer, reply_to_msg_id: int) -> Optional[int]:
+    """Forum topic of the message a draft replies to; None when it has none.
+
+    Only channels can be forums, so private chats and basic groups cost no
+    request. Outside forums a message carries no topic header and reads as General.
+    """
+    if not isinstance(peer, types.InputPeerChannel):
+        return None
+    msg = await cl.get_messages(peer, ids=reply_to_msg_id)
+    return message_topic_id(msg, True) if msg else None
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Save Draft", openWorldHint=True, destructiveHint=False, idempotentHint=True
@@ -3834,6 +3846,7 @@ async def save_draft(
     no_webpage: bool = False,
     parse_mode: Optional[str] = None,
     account: Optional[str] = None,
+    topic_id: Union[int, str, None] = None,
 ) -> str:
     """
     Save a draft message to a chat or channel. The draft will appear in the Telegram
@@ -3842,12 +3855,17 @@ async def save_draft(
     Args:
         chat_id: The chat ID or username/channel to save the draft to
         message: The draft message text
-        reply_to_msg_id: Optional message ID to reply to
+        reply_to_msg_id: Optional message ID to reply to. In a forum the draft is
+            saved in that message's topic.
         no_webpage: If True, disable link preview in the draft
         parse_mode: Optional formatting, kept in the draft as real entities. Use 'html'
             for <b>, <i>, <u>, <s>, <code>, <pre>, <a href="...">, <blockquote>
             (the only way to get underline), or 'md'/'markdown' for **bold**,
             __italic__, `code`. Omit (or 'plain') to save the text exactly as given.
+        topic_id: Optional forum topic ID (from list_topics) to save the draft in,
+            with or without reply_to_msg_id; 1 is General. In a forum a draft
+            without a topic shows in no topic, so pass it for a draft that replies
+            to nothing and for a reply to a General message.
     """
     try:
         mode = (parse_mode or "plain").lower()
@@ -3864,15 +3882,32 @@ async def save_draft(
         else:
             return f"parse_mode='{parse_mode}' is not supported for drafts. Use 'html', 'md' or 'plain'."
 
+        topic = None
+        if topic_id is not None:
+            try:
+                topic = int(topic_id)
+            except (ValueError, TypeError):
+                topic = 0
+            if topic <= 0:
+                return "Error: topic_id must be a positive integer."
+
         cl = get_client(account)
         peer = await resolve_input_entity(chat_id, cl)
 
-        # Build reply_to parameter if provided
-        reply_to = None
-        if reply_to_msg_id:
-            from telethon.tl.types import InputReplyToMessage
+        if topic is None and reply_to_msg_id:
+            topic = await _draft_reply_topic(cl, peer, reply_to_msg_id)
+            if topic == GENERAL_TOPIC_ID:
+                # General, or a group without topics: they look the same here.
+                topic = None
 
-            reply_to = InputReplyToMessage(reply_to_msg_id=reply_to_msg_id)
+        # In a forum a draft shows in a topic (General included) only with
+        # reply_to.top_msg_id. Same shape Telegram Web builds for a draft in a
+        # thread: reply_to_msg_id is the reply or else the topic id.
+        reply_to = None
+        if reply_to_msg_id or topic:
+            reply_to = types.InputReplyToMessage(
+                reply_to_msg_id=reply_to_msg_id or topic, top_msg_id=topic
+            )
 
         await cl(
             functions.messages.SaveDraftRequest(
