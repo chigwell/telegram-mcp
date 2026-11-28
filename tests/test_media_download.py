@@ -3,6 +3,7 @@ import inspect
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from telethon import types
@@ -12,12 +13,12 @@ from telegram_mcp.tools import media
 _download_media = inspect.unwrap(media.download_media)
 
 
-async def _call_download(monkeypatch, target, client, message, **options):
+async def _call_download(monkeypatch, target, client, message, *, entity="entity", **options):
     monkeypatch.setattr(media, "get_client", lambda account=None: client)
 
     async def _resolve_entity(chat_id, cl):
         assert cl is client
-        return "entity"
+        return entity
 
     async def _resolve_path(**kwargs):
         raw_path = kwargs["raw_path"]
@@ -295,3 +296,94 @@ async def test_metadata_download_rejects_incomplete_document_without_replacing_t
     assert "size differs" in result
     assert target.read_bytes() == b"existing file"
     assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.asyncio
+async def test_download_media_refuses_protected_chat_before_requesting_message(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "saved.pdf"
+    message = _message(size=3)
+    client = SimpleNamespace(get_messages=AsyncMock(), download_media=AsyncMock())
+    chat = SimpleNamespace(noforwards=True)
+
+    result = await _call_download(monkeypatch, target, client, message, entity=chat)
+
+    assert result == "Saving media from this Telegram chat is restricted."
+    client.get_messages.assert_not_awaited()
+    client.download_media.assert_not_awaited()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param(
+            SimpleNamespace(id=7, media=object(), noforwards=True), id="protected-message"
+        ),
+        pytest.param(
+            SimpleNamespace(
+                id=7,
+                media=None,
+                noforwards=True,
+                rich_message=SimpleNamespace(
+                    blocks=[SimpleNamespace(video_id=1234)],
+                    documents=[_document(3, "example.pdf")],
+                ),
+            ),
+            id="protected-formatted-post",
+        ),
+        pytest.param(
+            SimpleNamespace(id=7, media=types.MessageMediaPhoto(ttl_seconds=10)),
+            id="expiring-photo",
+        ),
+        pytest.param(
+            SimpleNamespace(
+                id=7,
+                media=types.MessageMediaDocument(
+                    document=_document(3, "example.pdf"), ttl_seconds=2**31 - 1
+                ),
+            ),
+            id="view-once-document",
+        ),
+    ],
+)
+async def test_download_media_refuses_protected_and_ephemeral_attachments(
+    tmp_path, monkeypatch, message
+):
+    target = tmp_path / "saved.pdf"
+    target.write_bytes(b"existing")
+    client = SimpleNamespace(
+        get_messages=AsyncMock(return_value=message), download_media=AsyncMock()
+    )
+
+    result = await _call_download(monkeypatch, target, client, message, include_metadata=True)
+
+    assert result == "Saving this Telegram attachment is restricted."
+    client.download_media.assert_not_awaited()
+    assert target.read_bytes() == b"existing"
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.asyncio
+async def test_download_media_allows_document_with_self_destruction_disabled(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "saved.pdf"
+    message = SimpleNamespace(
+        id=7,
+        media=types.MessageMediaDocument(document=_document(3, "example.pdf"), ttl_seconds=0),
+    )
+
+    async def download(file, kwargs):
+        path = file.with_suffix(".pdf")
+        path.write_bytes(b"pdf")
+        return str(path)
+
+    client = _Client(message, download)
+    monkeypatch.delenv("TELEGRAM_MEDIA_BASE_URL", raising=False)
+    result = await _call_download(monkeypatch, target, client, message)
+
+    assert result == f"Media downloaded to {target.resolve()}."
+    assert target.read_bytes() == b"pdf"
