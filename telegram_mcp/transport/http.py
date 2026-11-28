@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 _DEFAULT_ALLOWED_ORIGINS = ("http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*")
 
 
+def _header_values(scope: Scope, name: bytes) -> list[bytes]:
+    """Return all raw ASGI header values matching ``name`` (lowercase bytes)."""
+    return [v for k, v in scope.get("headers", []) if k.lower() == name]
+
+
 def _origin_matches(origin: str, allowed_origins: Any) -> bool:
     """Match an Origin header like FastMCP does: exact, or ``scheme://host:*``."""
     for allowed in allowed_origins or ():
@@ -32,7 +37,7 @@ def _origin_matches(origin: str, allowed_origins: Any) -> bool:
             return True
         if allowed.endswith(":*") and origin.startswith(allowed[:-2] + ":"):
             port = origin[len(allowed) - 1 :]
-            if port.isdigit():
+            if port.isascii() and port.isdigit() and 1 <= int(port) <= 65535:
                 return True
     return False
 
@@ -80,14 +85,21 @@ class ProtocolNegotiationMiddleware:
             await self.app(scope, receive, send)
             return
 
-        headers = dict(scope.get("headers", []))
-        raw_origin = headers.get(b"origin")
-        origin = raw_origin.decode("latin-1").strip() if raw_origin else None
-        if not is_origin_allowed(origin, self.mcp_instance):
-            logger.warning("Rejected request from disallowed Origin: %s", origin)
+        origin_values = _header_values(scope, b"origin")
+        if len(origin_values) > 1:
+            logger.warning("Rejected request with duplicate Origin headers")
             response = Response("Invalid Origin header", status_code=403)
             await response(scope, receive, send)
             return
+        if origin_values:
+            origin: Optional[str] = origin_values[0].decode("latin-1").strip()
+            if not origin or not is_origin_allowed(origin, self.mcp_instance):
+                logger.warning("Rejected request from disallowed Origin: %s", origin)
+                response = Response("Invalid Origin header", status_code=403)
+                await response(scope, receive, send)
+                return
+        else:
+            origin = None
         cors_origin_headers = (
             {"Access-Control-Allow-Origin": origin, "Vary": "Origin"} if origin else {}
         )
@@ -97,17 +109,36 @@ class ProtocolNegotiationMiddleware:
             await self.app(scope, receive, send)
             return
 
-        await self._negotiate(scope, receive, send, headers, cors_origin_headers)
+        await self._negotiate(scope, receive, send, cors_origin_headers)
 
     async def _negotiate(
         self,
         scope: Scope,
         receive: Receive,
         send: Send,
-        headers: dict,
         cors_origin_headers: dict,
     ) -> None:
-        raw_version_bytes = headers.get(MCP_PROTOCOL_VERSION_HEADER.encode("latin-1"))
+        version_values = _header_values(
+            scope, MCP_PROTOCOL_VERSION_HEADER.encode("latin-1").lower()
+        )
+        if len(version_values) > 1:
+            response = JSONResponse(
+                status_code=400,
+                content={
+                    "jsonrpc": "2.0",
+                    "id": "server-error",
+                    "error": {
+                        "code": -32600,
+                        "message": "Bad Request: Duplicate MCP-Protocol-Version header",
+                    },
+                },
+                headers={
+                    MCP_PROTOCOL_VERSION_HEADER: DEFAULT_PROTOCOL_VERSION,
+                },
+            )
+            await response(scope, receive, send)
+            return
+        raw_version_bytes = version_values[0] if version_values else None
         requested_version = (
             raw_version_bytes.decode("latin-1").strip() if raw_version_bytes else None
         )
@@ -161,7 +192,7 @@ class ProtocolNegotiationMiddleware:
             negotiated_version = DEFAULT_PROTOCOL_VERSION
 
         # 3. Handle plain GET discovery probe (clients querying without text/event-stream)
-        accept_header = headers.get(b"accept", b"").decode("latin-1").lower()
+        accept_header = b", ".join(_header_values(scope, b"accept")).decode("latin-1").lower()
         endpoint = getattr(
             getattr(self.mcp_instance, "settings", None), "streamable_http_path", "/mcp"
         )
