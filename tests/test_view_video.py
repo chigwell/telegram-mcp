@@ -498,3 +498,83 @@ async def test_view_video_scene_overflow_still_gives_even_frames(tool, monkeypat
     monkeypatch.setattr(video_tools, "scene_times", _flood)
     text, _, images = _split(await media.view_video(-100123, 77, transcribe=False))
     assert len(images) >= 2 and "frames are evenly spaced" in text
+
+
+# --- input limits: a chat's file is read only as a video container -----------------------
+
+
+@pytest.mark.asyncio
+async def test_every_ffmpeg_call_limits_its_input(monkeypatch):
+    seen = []
+
+    async def _run(args, timeout, **kwargs):
+        seen.append(list(args))
+        if args[0] == "ffprobe" and "json" in args:  # no duration: the packet scan runs too
+            return 0, b'{"format": {}, "streams": [{"codec_type": "video"}]}', b""
+        return 0, b"0.0,0.1\n" if args[0] == "ffprobe" else b"x", b""
+
+    monkeypatch.setattr(video_tools, "binaries", lambda: ("ffmpeg", "ffprobe"))
+    monkeypatch.setattr(video_tools, "_run", _run)
+    await video_tools.probe("v.mp4")
+    await video_tools.scene_times("v.mp4", 0, 4, 60)
+    await video_tools.grab_frame("v.mp4", 1, 60)
+    await video_tools.extract_audio("v.mp4", 0, 4, 60)
+    limits = list(video_tools.INPUT_LIMITS)
+    assert len(seen) == 5
+    for args in seen:
+        before = args[: args.index("v.mp4")]
+        if args[0] == "ffmpeg":
+            assert before[-1] == "-i"
+            before = before[:-1]
+        assert before[-len(limits) :] == limits, args
+
+
+HLS_PLAYLIST = "#EXTM3U\n#EXT-X-TARGETDURATION:12\n#EXTINF:12,\nother.mp4\n#EXT-X-ENDLIST\n"
+
+
+@pytest.fixture
+def other_video(tmp_path, three_scenes):
+    """A video next to the one being looked at, as any other media file on the server."""
+    shutil.copy(three_scenes, tmp_path / "other.mp4")
+    return tmp_path
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="no ffmpeg")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name, body",
+    [
+        ("video.mp4", HLS_PLAYLIST),
+        ("video.m3u8", HLS_PLAYLIST),
+        ("video.mp4", "ffconcat version 1.0\nfile 'other.mp4'\n"),
+    ],
+)
+async def test_playlists_sent_as_videos_are_not_followed(other_video, name, body):
+    path = other_video / name
+    path.write_text(body)
+    with pytest.raises(ValueError):
+        await video_tools.probe(str(path))
+    assert await video_tools.grab_frame(str(path), 1.0, 60) is None
+    with pytest.raises(ValueError):
+        await video_tools.extract_audio(str(path), 0, 4, 60)
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="no ffmpeg")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name, encode",
+    [("anim.gif", []), ("clip.mkv", ["-c:v", "libx264", "-preset", "ultrafast"])],
+)
+async def test_real_containers_still_open(tmp_path, name, encode):
+    path = tmp_path / name
+    subprocess.run(
+        ["ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i"]
+        + ["testsrc2=size=160x120:rate=10:duration=2"]
+        + encode
+        + [str(path)],
+        check=True,
+    )
+    info = await video_tools.probe(str(path))
+    assert info.has_video and 1.5 < info.duration <= 2.1
+    shown, frame = await video_tools.grab_frame(str(path), 1.0, 60)
+    assert frame[:2] == b"\xff\xd8"
