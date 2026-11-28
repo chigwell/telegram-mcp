@@ -34,6 +34,12 @@ PACKET_SCAN_SECONDS = 15.0  # at most this long measuring a file that states no 
 MAX_STDOUT_BYTES = 64 * 1048576  # a frame is ~100 KB; audio has its own, smaller cap
 MAX_STDERR_BYTES = 16 * 1048576  # scene detection logs one showinfo line per cut
 MAX_PIXELS = 8192 * 4320  # larger frames are refused before anything is decoded
+# The file comes from a chat, so ffmpeg and ffprobe may read it only as itself, as one of the
+# containers videos come in. Without these input options a playlist or concat list sent as a
+# "video" (HLS, ffconcat, ...) makes them open other files on this machine or fetch URLs, and
+# their frames or sound would be handed back. Input options: they go before the input.
+VIDEO_FORMATS = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,gif,mpegts,mpeg,flv,ogg"
+INPUT_LIMITS = ("-protocol_whitelist", "file", "-format_whitelist", VIDEO_FORMATS)
 
 _PTS_TIME = re.compile(r"pts_time:\s*([0-9]+(?:\.[0-9]+)?)")
 
@@ -163,6 +169,7 @@ async def probe(path: str, timeout: float = STEP_TIMEOUT_SECONDS) -> VideoInfo:
             "format=duration:stream=codec_type,width,height,duration",
             "-of",
             "json",
+            *INPUT_LIMITS,
             path,
         ],
         timeout,
@@ -186,6 +193,7 @@ async def probe(path: str, timeout: float = STEP_TIMEOUT_SECONDS) -> VideoInfo:
                     "packet=pts_time,duration_time",
                     "-of",
                     "csv=p=0",
+                    *INPUT_LIMITS,
                     path,
                 ],
                 min(timeout * 0.5, PACKET_SCAN_SECONDS),
@@ -235,6 +243,7 @@ async def scene_times(path: str, start: float, end: float, timeout: float) -> Li
             f"{start:.3f}",
             "-t",
             f"{end - start:.3f}",
+            *INPUT_LIMITS,
             "-i",
             path,
             "-an",
@@ -298,6 +307,7 @@ async def grab_frame(
                 "error",
                 "-ss",
                 f"{seek:.3f}",
+                *INPUT_LIMITS,
                 "-i",
                 path,
                 "-an",
@@ -363,6 +373,7 @@ async def extract_audio(
             f"{start:.3f}",
             "-t",
             f"{end - start:.3f}",
+            *INPUT_LIMITS,
             "-i",
             path,
             "-vn",
